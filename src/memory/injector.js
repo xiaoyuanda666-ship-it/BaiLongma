@@ -1,7 +1,6 @@
 import { callLLM } from '../llm.js'
 import { setRateLimited } from '../quota.js'
 import {
-  getRecentMemories,
   searchMemories,
   getActiveConstraints,
   getTaskKnowledge,
@@ -167,14 +166,6 @@ export async function runInjector({ message, state }) {
   // 始终注入：约束
   const constraints = getActiveConstraints()
 
-  // 始终注入：近期记忆
-  let recentMemories = getRecentMemories(6)
-  if (!hasTask) {
-    recentMemories = recentMemories.filter(
-      m => !['new_task', 'task_progress'].includes(m.event_type)
-    )
-  }
-
   // 相关记忆：基于当前输入/任务关键词检索
   const searchText = [
     messageBody,
@@ -232,17 +223,16 @@ export async function runInjector({ message, state }) {
 
   // 合并记忆：工具记忆单独维护，其余按相关性合并
   // 工具记忆放最后（通常是已知背景知识，相关记忆和对话记忆更时效）
-  const nonToolMemories = deduplicateMemories([relevantMemories, senderMemories, recentMemories]).slice(0, 8)
+  const nonToolMemories = deduplicateMemories([relevantMemories, senderMemories]).slice(0, 8)
   // 工具记忆：过滤掉已在 nonToolMemories 里的，避免重复
   const nonToolIds = new Set(nonToolMemories.map(m => m.id))
   const filteredToolMemories = toolMemories.filter(m => !nonToolIds.has(m.id))
   const memories = [...nonToolMemories, ...filteredToolMemories]
 
   // ── 阶段二：LLM（仅 directions + thought + extra_tools）──────────────────
-  // memorySummary 综合近期 + 相关记忆
-  const summarySource = deduplicateMemories([relevantMemories, recentMemories]).slice(0, 6)
-  const memorySummary = summarySource.length > 0
-    ? summarySource.map(m => `[${m.event_type}] ${m.content}`).join('\n')
+  // memorySummary 综合相关记忆
+  const memorySummary = relevantMemories.length > 0
+    ? relevantMemories.map(m => `[${m.event_type}] ${m.content}`).join('\n')
     : '（暂无记忆）'
 
   const llmOut = await runDirectionLLM({
