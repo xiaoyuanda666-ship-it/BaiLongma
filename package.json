@@ -1,0 +1,16 @@
+{
+  "name": "jarvis",
+  "version": "0.1.0",
+  "description": "A continuously running digital consciousness framework",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file=.env src/index.js",
+    "dev": "node --env-file=.env --watch src/index.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "openai": "^6.34.0",
+    "ws": "^8.20.0"
+  }
+}
