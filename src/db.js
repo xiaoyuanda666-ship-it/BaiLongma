@@ -183,7 +183,35 @@ export function insertMemory(memory) {
   // 解析 parent_ref → parent_id
   const parentId = memory.parent_ref ? resolveParentRef(memory.parent_ref) : null
 
-  // 去重：同类型且 content 前40字相同则跳过
+  // 工具知识记忆去重：按 tool:标签匹配，同工具只保留最新
+  const memoryTags = memory.tags || []
+  const toolTag = Array.isArray(memoryTags) ? memoryTags.find(t => t.startsWith('tool:')) : null
+  if (toolTag && memory.event_type === 'knowledge') {
+    const toolName = toolTag.replace('tool:', '')
+    const existing = db.prepare(`
+      SELECT id FROM memories
+      WHERE event_type = 'knowledge'
+      AND tags LIKE ?
+      ORDER BY timestamp DESC LIMIT 1
+    `).get(`%tool:${toolName}%`)
+    if (existing) {
+      db.prepare(`
+        UPDATE memories SET content = ?, detail = ?, concepts = ?, tags = ?, timestamp = ?
+        WHERE id = ?
+      `).run(
+        memory.content,
+        memory.detail,
+        JSON.stringify(memory.concepts || []),
+        JSON.stringify(memory.tags || []),
+        memory.timestamp || new Date().toISOString(),
+        existing.id
+      )
+      console.log(`[DB] 更新工具记忆：${toolName}`)
+      return { id: existing.id, updated: true }
+    }
+  }
+
+  // 普通记忆去重：同类型且 content 前40字相同则跳过
   const contentPrefix = (memory.content || '').slice(0, 40)
   const dup = db.prepare(`
     SELECT id FROM memories WHERE event_type = ? AND content LIKE ? LIMIT 1
