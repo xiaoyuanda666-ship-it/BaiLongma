@@ -3,7 +3,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { nowTimestamp } from '../time.js'
-import { searchMemories, insertMemory, getKnownEntities } from '../db.js'
+import { searchMemories, insertMemory, normalizeConversationPartyId } from '../db.js'
 import { emitEvent } from '../events.js'
 import { callCapability, listCapabilities } from '../providers/registry.js'
 import { isDailyLimitReached } from '../quota.js'
@@ -50,11 +50,13 @@ function normalizeSandboxPath(filePath) {
 }
 
 // 工具执行器：根据工具名和参数执行对应操作，返回结果字符串
-export async function executeTool(name, args) {
+export async function executeTool(name, args, context = {}) {
   try {
     switch (name) {
+      case 'express':
+        return await execExpress(args, context)
       case 'send_message':
-        return await execSendMessage(args)
+        return await execSendMessage(args, context)
       case 'read_file':
         return await execReadFile(args)
       case 'list_dir':
@@ -89,34 +91,62 @@ export async function executeTool(name, args) {
   }
 }
 
+function resolveAllowedTargetId(targetId, allowedTargetIds = []) {
+  const normalizedTarget = normalizeConversationPartyId(targetId)
+  const normalizedAllowed = [...new Set((allowedTargetIds || []).map(id => normalizeConversationPartyId(id)).filter(Boolean))]
+  if (!normalizedAllowed.length) {
+    throw new Error('当前提示词未明确注入任何可发送的目标实体，禁止发送消息')
+  }
+
+  if (normalizedAllowed.includes(normalizedTarget)) {
+    return normalizedTarget
+  }
+
+  const compact = value => String(value || '').trim().toLowerCase().replace(/^id:0*/, '')
+  const targetCompact = compact(normalizedTarget)
+  const fuzzyMatches = normalizedAllowed.filter(id => compact(id) === targetCompact)
+  if (fuzzyMatches.length === 1) {
+    console.log(`[send_message] ID 严格校验通过（模糊归一）: "${targetId}" → "${fuzzyMatches[0]}"`)
+    return fuzzyMatches[0]
+  }
+
+  throw new Error(`target_id "${targetId}" 不在当前提示词明确注入的目标实体列表中：${normalizedAllowed.join(', ')}`)
+}
+
+function assertVisibleTargetId(targetId, visibleTargetIds = []) {
+  const normalizedTarget = normalizeConversationPartyId(targetId)
+  const normalizedVisible = [...new Set((visibleTargetIds || []).map(id => normalizeConversationPartyId(id)).filter(Boolean))]
+  if (!normalizedVisible.length) {
+    throw new Error('当前二层提示词未注入任何对话对象，禁止发送消息')
+  }
+
+  if (normalizedVisible.includes(normalizedTarget)) {
+    return normalizedTarget
+  }
+
+  throw new Error(`target_id "${targetId}" 未出现在当前二层注入的对话记录中：${normalizedVisible.join(', ')}`)
+}
+
+// express：表达器入口，根据 format 路由到对应输出渠道
+async function execExpress({ target_id, content, format = 'text' }, context = {}) {
+  if (!content?.trim()) return '错误：未提供表达内容'
+  if (format === 'voice') {
+    // 语音表达：先发文字消息再生成语音
+    const sendResult = await execSendMessage({ target_id, content }, context)
+    if (sendResult.startsWith('错误：') || sendResult.startsWith('执行失败：')) return sendResult
+    return await execSpeak({ text: content })
+  }
+  // 默认：文字表达
+  return await execSendMessage({ target_id, content }, context)
+}
+
 // send_message：推送到 SSE 流，所有订阅者实时收到
-async function execSendMessage({ target_id, content }) {
+async function execSendMessage({ target_id, content }, context = {}) {
   if (!target_id) return '错误：未提供 target_id'
   if (!content?.trim()) return '错误：未提供消息内容'
 
-  // 验证并修正 target_id：精确匹配优先，否则模糊匹配已知实体
-  const entities = getKnownEntities()
-  const entityIds = entities.map(e => e.id)
-  let resolvedId = target_id
-
-  if (!entityIds.includes(target_id)) {
-    // 尝试模糊匹配：去掉前缀零、忽略大小写
-    const normalize = s => s.toLowerCase().replace(/^id:0*/, '')
-    const targetNorm = normalize(target_id)
-    const match = entityIds.find(id => normalize(id) === targetNorm)
-    if (match) {
-      console.log(`[send_message] ID 自动修正: "${target_id}" → "${match}"`)
-      resolvedId = match
-    } else if (entityIds.length > 0) {
-      // 只有一个已知实体时直接用它（最常见情况）
-      if (entityIds.length === 1) {
-        console.log(`[send_message] 未知 ID "${target_id}"，使用唯一已知实体 "${entityIds[0]}"`)
-        resolvedId = entityIds[0]
-      } else {
-        console.log(`[send_message] 警告：未知 target_id "${target_id}"，已知实体：${entityIds.join(', ')}`)
-      }
-    }
-  }
+  const resolvedId = resolveAllowedTargetId(target_id, context.allowedTargetIds)
+  assertVisibleTargetId(resolvedId, context.visibleTargetIds)
 
   const timestamp = nowTimestamp()
   console.log(`\n[消息发送] → ${resolvedId}`)

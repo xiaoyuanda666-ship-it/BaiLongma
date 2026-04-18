@@ -1,5 +1,5 @@
 import { nowTimestamp } from './time.js'
-import { upsertEntity } from './db.js'
+import { normalizeConversationPartyId, upsertEntity } from './db.js'
 
 // 内存消息队列
 const queue = []
@@ -9,11 +9,12 @@ let interruptCallback = null
 export function setInterruptCallback(fn) { interruptCallback = fn }
 
 export function pushMessage(fromId, content, channel = 'TUI') {
+  const normalizedFromId = normalizeConversationPartyId(fromId)
   const timestamp = nowTimestamp()
-  upsertEntity(fromId)
+  upsertEntity(normalizedFromId)
   queue.push({
-    raw: `[${fromId}] ${timestamp} [${channel}] ${content}`,
-    fromId,
+    raw: `[${normalizedFromId}] ${timestamp} [${channel}] ${content}`,
+    fromId: normalizedFromId,
     content,
     timestamp,
     channel,

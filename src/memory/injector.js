@@ -7,7 +7,7 @@ import {
   getPersonMemory,
   getMemoriesByEntity,
   getRecentConversation,
-  getToolMemories,
+  getRecentActionLogs,
 } from '../db.js'
 import { extractJSON } from '../utils.js'
 
@@ -60,7 +60,7 @@ function extractKeywords(text) {
 }
 
 // ── 相关记忆搜索：多关键词分别搜索后合并 ──────────────────────────────────
-function searchRelevantMemories(text, limit = 6) {
+function searchRelevantMemories(text, limit = 20) {
   const keywords = extractKeywords(text)
   if (keywords.length === 0) return []
 
@@ -91,20 +91,22 @@ const DIRECTION_PROMPT = `你是思维方向生成器。根据当前输入和上
   "extra_tools": []
 }
 
-directions 规则：
+【directions 规则】
 - 一句话，模糊，像感觉或直觉，不是结论
 - 有任务时：directions 必须紧扣任务当前步骤，帮助推进，不得偏离
 - 有外部消息时：directions 聚焦于如何回应或完成请求
+- 有外部消息时，优先提醒“先接住对方”，留意对方的情绪、判断、兴趣点或潜台词，避免冷冰冰地只确认任务
+- 如果语境允许，directions 可以包含一点自然好奇，鼓励回复里点出一个具体在意的点，或轻轻追问一句
 - TICK 且无任务、无特别内容时：输出空数组 []
 - 最多 2 条，宁少勿多
 
-thought 规则：
+【thought 规则】
 - 仅在输入是 TICK 且无任务、无外部消息时才生成
 - 是一个概念词（1-4 字）+ 一句话（不超过 15 字），来自记忆的自然联想
 - 有外部消息或任务时必须输出 null
 - 示例：{"concept":"镜子","line":"看镜子的人，会不会也被镜子看见"}
 
-extra_tools 规则：
+【extra_tools 规则】
 - 只填写基础工具之外的额外工具
 - speak：仅在输入中明确提到"声音"、"朗读"、"说出来"时
 - search_memory：仅在需要主动搜索历史记忆时
@@ -154,7 +156,8 @@ function deduplicateMemories(arrays) {
 }
 
 // ── 主函数 ────────────────────────────────────────────────────────────────────
-export async function runInjector({ message, state }) {
+// hint：一层思考器的输出文本，用于扩展 L2 的记忆检索范围
+export async function runInjector({ message, state, hint = '' }) {
   const lastToolResult = state?.lastToolResult || null
   if (lastToolResult) state.lastToolResult = null
 
@@ -167,14 +170,14 @@ export async function runInjector({ message, state }) {
   const constraints = getActiveConstraints()
 
   // 相关记忆：基于当前输入/任务关键词检索
+  // 若有 hint（L1 输出），提取其关键词一并检索，让 L2 获得更丰富的记忆注入
+  const hintText = hint ? hint.replace(/<think>[\s\S]*?<\/think>/gi, '').slice(0, 400) : ''
   const searchText = [
     messageBody,
     hasTask ? state.task : '',
+    hintText,
   ].filter(Boolean).join(' ')
-  const relevantMemories = searchText ? searchRelevantMemories(searchText, 6) : []
-
-  // 工具记忆：始终注入，Agent 从记忆中知道有哪些工具及用法
-  const toolMemories = getToolMemories(20)
+  const relevantMemories = searchText ? searchRelevantMemories(searchText, hint ? 10 : 6) : []
 
   // 发送者相关
   let personMemory = null
@@ -221,13 +224,8 @@ export async function runInjector({ message, state }) {
     }
   }
 
-  // 合并记忆：工具记忆单独维护，其余按相关性合并
-  // 工具记忆放最后（通常是已知背景知识，相关记忆和对话记忆更时效）
-  const nonToolMemories = deduplicateMemories([relevantMemories, senderMemories]).slice(0, 8)
-  // 工具记忆：过滤掉已在 nonToolMemories 里的，避免重复
-  const nonToolIds = new Set(nonToolMemories.map(m => m.id))
-  const filteredToolMemories = toolMemories.filter(m => !nonToolIds.has(m.id))
-  const memories = [...nonToolMemories, ...filteredToolMemories]
+  // 合并记忆：按相关性去重，工具记忆也通过 searchRelevantMemories 按需命中
+  const memories = deduplicateMemories([relevantMemories, senderMemories]).slice(0, 10)
 
   // ── 阶段二：LLM（仅 directions + thought + extra_tools）──────────────────
   // memorySummary 综合相关记忆
@@ -255,6 +253,8 @@ export async function runInjector({ message, state }) {
   if (senderId || state?.prev_recall) baseTools.push('search_memory')
   const tools = [...new Set([...baseTools, ...(llmOut.extra_tools || [])])]
 
+  const actionLog = getRecentActionLogs(50)
+
   return {
     memories,
     recallMemories,
@@ -266,12 +266,13 @@ export async function runInjector({ message, state }) {
     taskKnowledge,
     tools,
     lastToolResult,
+    actionLog,
   }
 }
 
 // ── 格式化函数（供 index.js 调用后传入 buildSystemPrompt）────────────────────
 
-// 普通记忆：摘要行，带类型标签
+// 普通记忆：摘要行，带类型标签和 title（如有）
 // RECALL 记忆：带完整 detail（渐进式披露）
 export function formatMemoriesForPrompt(memories, recallMemories = []) {
   const parts = []
@@ -279,14 +280,16 @@ export function formatMemoriesForPrompt(memories, recallMemories = []) {
   if (memories?.length > 0) {
     parts.push(memories.map(m => {
       const typeLabel = m.event_type ? `[${m.event_type}] ` : ''
-      return `- [${m.timestamp.slice(0, 10)}] ${typeLabel}${m.content}`
+      const titlePart = m.title ? `《${m.title}》` : ''
+      return `- [${m.timestamp.slice(0, 10)}] ${typeLabel}${titlePart}${m.content}`
     }).join('\n'))
   }
 
   if (recallMemories?.length > 0) {
-    parts.push('[回忆细节]\n' + recallMemories.map(m =>
-      `- [${m.timestamp.slice(0, 10)}] ${m.content}\n  ${m.detail}`
-    ).join('\n'))
+    parts.push('[回忆细节]\n' + recallMemories.map(m => {
+      const titlePart = m.title ? `《${m.title}》` : ''
+      return `- [${m.timestamp.slice(0, 10)}] ${titlePart}${m.content}\n  ${m.detail}`
+    }).join('\n'))
   }
 
   return parts.join('\n\n')

@@ -94,6 +94,11 @@ export function shouldThrottle() {
   return getUsageRatio() > 0.95
 }
 
+export function getTickInterval(baseInterval = 300000) {
+  if (isRateLimited()) return 10 * 60 * 1000
+  return baseInterval
+}
+
 // ── 每日用量追踪 ──
 
 const DAILY_LIMITS = { tts: 4000, music: 100, lyrics: 100, image: 50 }
@@ -126,7 +131,7 @@ export function isDailyLimitReached(capability) {
 
 // ── 状态汇总 ──
 
-export function getQuotaStatus() {
+export function getQuotaStatus(baseInterval = 300000) {
   const { requests, tokens } = getWindowUsage()
   const ratio = getUsageRatio()
   const daily = {}
@@ -140,7 +145,7 @@ export function getQuotaStatus() {
     rpmUsed: `${requests}/${LIMITS.RPM}`,
     tpmUsed: `${tokens}/${LIMITS.TPM}`,
     ratio: (ratio * 100).toFixed(1) + '%',
-    tickInterval: getAdaptiveTickInterval(),
+    tickInterval: getTickInterval(baseInterval),
     daily,
   }
 }

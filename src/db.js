@@ -5,6 +5,23 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DB_PATH = path.join(__dirname, '../data/jarvis.db')
 
+const CANONICAL_USER_ID = 'ID:000001'
+const CANONICAL_AGENT_ENTITY = 'agent:jarvis'
+const CANONICAL_USER_ROOT_MEM_ID = 'person_000001'
+const CANONICAL_AGENT_ROOT_MEM_ID = 'agent_jarvis_identity'
+
+const USER_ID_ALIASES = new Set(['000001', 'id:000001', 'yuanda'])
+const AGENT_ENTITY_ALIASES = new Set(['jarvis', 'agent_jarvis', 'agent:jarvis'])
+const USER_ROOT_ALIASES = new Set([
+  'contact_000001',
+  'person_000001',
+  'person_id000001_interaction',
+  'person_yuanda_identity',
+  'user_000001',
+  'user_000001_identity',
+  'user_000001_profile',
+])
+
 let db
 
 export function getDB() {
@@ -20,6 +37,11 @@ function initSchema() {
   // 迁移：添加 parent_id 字段（已存在时跳过）
   try { db.exec(`ALTER TABLE memories ADD COLUMN parent_id INTEGER REFERENCES memories(id)`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_parent_id ON memories(parent_id)`) } catch {}
+  // 迁移：新增 title / mem_id / links 字段
+  try { db.exec(`ALTER TABLE memories ADD COLUMN title TEXT DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE memories ADD COLUMN mem_id TEXT`) } catch {}
+  try { db.exec(`ALTER TABLE memories ADD COLUMN links TEXT DEFAULT '[]'`) } catch {}
+  try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_mem_id ON memories(mem_id) WHERE mem_id IS NOT NULL`) } catch {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -84,8 +106,200 @@ function initSchema() {
     );
   `)
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS action_logs (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT    NOT NULL,
+      tool      TEXT    NOT NULL,
+      summary   TEXT    NOT NULL,
+      detail    TEXT    NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_action_logs_timestamp ON action_logs(timestamp);
+  `)
+
   // 重建 FTS 索引（覆盖已有数据，确保历史记忆也被索引）
   db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`)
+}
+
+export function normalizeConversationPartyId(id) {
+  if (!id) return id
+  const text = String(id).trim()
+  if (!text) return text
+  if (/^ID:\d+$/i.test(text)) return `ID:${text.replace(/^ID:/i, '')}`
+  if (/^\d+$/.test(text)) return `ID:${text}`
+  return text
+}
+
+function normalizeMemoryEntity(entity) {
+  if (!entity) return null
+  const normalizedParty = normalizeConversationPartyId(entity)
+  if (normalizedParty !== entity) return normalizedParty
+
+  const lower = String(entity).trim().toLowerCase()
+  if (USER_ID_ALIASES.has(lower)) return CANONICAL_USER_ID
+  if (AGENT_ENTITY_ALIASES.has(lower)) return CANONICAL_AGENT_ENTITY
+  return String(entity).trim()
+}
+
+function canonicalRootMemIdForEntity(entityId) {
+  if (entityId === CANONICAL_USER_ID) return CANONICAL_USER_ROOT_MEM_ID
+  if (entityId === CANONICAL_AGENT_ENTITY) return CANONICAL_AGENT_ROOT_MEM_ID
+  return null
+}
+
+function canonicalRootMetaForEntity(entityId) {
+  if (entityId === CANONICAL_USER_ID) {
+    return {
+      memId: CANONICAL_USER_ROOT_MEM_ID,
+      eventType: 'person',
+      title: '用户 ID:000001 身份标识',
+      content: '用户唯一身份为 ID:000001，别名 Yuanda。',
+      tags: ['identity', 'user', 'alias:Yuanda'],
+    }
+  }
+  if (entityId === CANONICAL_AGENT_ENTITY) {
+    return {
+      memId: CANONICAL_AGENT_ROOT_MEM_ID,
+      eventType: 'object',
+      title: 'Agent Jarvis 身份标识',
+      content: 'Agent Jarvis 是当前运行中的本地 AI 助手实例。',
+      tags: ['identity', 'agent', 'jarvis'],
+    }
+  }
+  return null
+}
+
+function safeJsonArray(value) {
+  if (Array.isArray(value)) return value
+  if (!value) return []
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function uniqueStrings(values) {
+  return [...new Set((values || []).filter(Boolean).map(v => String(v).trim()).filter(Boolean))]
+}
+
+function inferIdentityEntities(memory) {
+  const text = [
+    memory.mem_id,
+    memory.title,
+    memory.content,
+    memory.detail,
+    ...(memory.tags || []),
+    ...(memory.entities || []),
+  ].filter(Boolean).join(' ')
+
+  const entities = []
+  const memId = String(memory.mem_id || '').toLowerCase()
+  const title = String(memory.title || '')
+
+  if (
+    /(?:^|[^a-z0-9])(000001|yuanda)(?:[^a-z0-9]|$)|ID:\s*000001/i.test(text) ||
+    /^user_|^person_/.test(memId) ||
+    /用户/.test(title)
+  ) {
+    entities.push(CANONICAL_USER_ID)
+  }
+  if (
+    /Jarvis|Agent_Jarvis|JARVIS/i.test(text) ||
+    /jarvis|^agent_/.test(memId)
+  ) {
+    entities.push(CANONICAL_AGENT_ENTITY)
+  }
+
+  return uniqueStrings(entities)
+}
+
+function canonicalizeLinkedTarget(targetId) {
+  if (!targetId) return targetId
+  if (USER_ROOT_ALIASES.has(targetId)) return CANONICAL_USER_ROOT_MEM_ID
+  return targetId
+}
+
+function normalizeMemoryLinks(links) {
+  return safeJsonArray(links).map(link => ({
+    ...link,
+    target_id: canonicalizeLinkedTarget(link.target_id),
+  }))
+}
+
+function choosePrimaryIdentityEntity(memory) {
+  const entities = memory.entities || []
+  if (!entities.length) return null
+
+  const text = [memory.mem_id, memory.title, memory.content].filter(Boolean).join(' ')
+  const hasUser = entities.includes(CANONICAL_USER_ID)
+  const hasAgent = entities.includes(CANONICAL_AGENT_ENTITY)
+
+  if (hasUser && !hasAgent) return CANONICAL_USER_ID
+  if (hasAgent && !hasUser) return CANONICAL_AGENT_ENTITY
+  if (hasUser && hasAgent) {
+    if (/用户|ID:\s*000001|\b000001\b|\bYuanda\b/i.test(text)) return CANONICAL_USER_ID
+    return CANONICAL_AGENT_ENTITY
+  }
+  return null
+}
+
+function isCanonicalRootMemory(memory) {
+  return [CANONICAL_USER_ROOT_MEM_ID, CANONICAL_AGENT_ROOT_MEM_ID].includes(memory.mem_id)
+}
+
+function ensureCanonicalIdentityRoot(entityId) {
+  const meta = canonicalRootMetaForEntity(entityId)
+  if (!meta) return null
+
+  const db = getDB()
+  const existing = db.prepare(`
+    SELECT id, entities, tags, links, title, content
+    FROM memories
+    WHERE mem_id = ?
+    LIMIT 1
+  `).get(meta.memId)
+
+  if (existing) {
+    const entities = uniqueStrings([...safeJsonArray(existing.entities), entityId])
+    const tags = uniqueStrings([...safeJsonArray(existing.tags), ...meta.tags])
+    const links = normalizeMemoryLinks(existing.links)
+    db.prepare(`
+      UPDATE memories
+      SET event_type = ?, title = ?, content = ?, entities = ?, tags = ?, links = ?, timestamp = ?
+      WHERE id = ?
+    `).run(
+      meta.eventType,
+      existing.title || meta.title,
+      existing.content || meta.content,
+      JSON.stringify(entities),
+      JSON.stringify(tags),
+      JSON.stringify(links),
+      new Date().toISOString(),
+      existing.id
+    )
+    return existing.id
+  }
+
+  const result = db.prepare(`
+    INSERT INTO memories (event_type, content, detail, title, mem_id, entities, concepts, tags, links, source_ref, timestamp, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+  `).run(
+    meta.eventType,
+    meta.content,
+    meta.content,
+    meta.title,
+    meta.memId,
+    JSON.stringify([entityId]),
+    JSON.stringify([]),
+    JSON.stringify(meta.tags),
+    JSON.stringify([]),
+    'identity_normalizer',
+    new Date().toISOString()
+  )
+
+  return result.lastInsertRowid
 }
 
 // 读取配置
@@ -105,19 +319,32 @@ export function setConfig(key, value) {
   `).run(key, value)
 }
 
-// 解析 parent_ref 语义字符串 → 真实 memory id
+// 解析语义 mem_id 字符串 → 真实整数 id
+function resolveMemId(memId) {
+  if (!memId) return null
+  const db = getDB()
+  const row = db.prepare(`SELECT id FROM memories WHERE mem_id = ? LIMIT 1`).get(memId)
+  return row ? row.id : null
+}
+
+// 解析 parent_ref 语义字符串 → 真实 memory id（兼容旧格式 "type:identifier"）
 // 格式："person:ID:000001"  → 找该 entity 最新的 person 根节点
 //       "knowledge:X框架"   → FTS 搜索最近匹配的 knowledge 记录
 function resolveParentRef(parentRef) {
   if (!parentRef) return null
   const db = getDB()
+  const normalizedParentRef = canonicalizeLinkedTarget(parentRef)
 
-  // 找第一个冒号分割 type 和 identifier
-  const colonIdx = parentRef.indexOf(':')
+  // 优先尝试按 mem_id 查找（新格式）
+  const byMemId = db.prepare(`SELECT id FROM memories WHERE mem_id = ? LIMIT 1`).get(normalizedParentRef)
+  if (byMemId) return byMemId.id
+
+  // 旧格式：type:identifier
+  const colonIdx = normalizedParentRef.indexOf(':')
   if (colonIdx === -1) return null
 
-  const type = parentRef.slice(0, colonIdx).trim()
-  const identifier = parentRef.slice(colonIdx + 1).trim()
+  const type = normalizedParentRef.slice(0, colonIdx).trim()
+  const identifier = normalizedParentRef.slice(colonIdx + 1).trim()
   if (!type || !identifier) return null
 
   // person / object：identifier 是 entity ID，精确匹配根节点
@@ -150,43 +377,110 @@ function resolveParentRef(parentRef) {
 }
 
 // 写入一条记忆（写入前检查去重）
+// 支持旧格式（event_type/entities/detail 等）和新格式（type/id/title/links/parent_id 语义字符串）
 export function insertMemory(memory) {
   const db = getDB()
 
-  // person / object 根节点：按 entity ID upsert，避免重复根节点
-  if (['person', 'object'].includes(memory.event_type) && !memory.parent_ref) {
-    const firstEntity = (memory.entities || [])[0]
+  // 新格式适配：将 type → event_type，id → mem_id，parent_id（语义）→ parent_ref
+  const normalizedMemory = { ...memory }
+  if (memory.type && !memory.event_type) {
+    normalizedMemory.event_type = memory.type
+  }
+  if (memory.id && !memory.mem_id) {
+    normalizedMemory.mem_id = memory.id
+  }
+  // 新格式的 parent_id 是语义字符串，映射到 parent_ref 走旧解析流程
+  if (memory.parent_id && typeof memory.parent_id === 'string' && !memory.parent_ref) {
+    normalizedMemory.parent_ref = memory.parent_id
+  }
+  // 新格式无 detail 字段时，用 content 填充保持 NOT NULL 约束
+  if (!normalizedMemory.detail) {
+    normalizedMemory.detail = normalizedMemory.content || ''
+  }
+
+  normalizedMemory.entities = uniqueStrings([
+    ...safeJsonArray(normalizedMemory.entities),
+    ...inferIdentityEntities(normalizedMemory),
+  ]).map(normalizeMemoryEntity)
+
+  normalizedMemory.tags = uniqueStrings(safeJsonArray(normalizedMemory.tags))
+  normalizedMemory.links = normalizeMemoryLinks(normalizedMemory.links)
+
+  const m = normalizedMemory
+
+  if (!m.parent_ref && !isCanonicalRootMemory(m)) {
+    const primaryEntity = choosePrimaryIdentityEntity(m)
+    const rootMemId = canonicalRootMemIdForEntity(primaryEntity)
+    if (rootMemId) {
+      ensureCanonicalIdentityRoot(primaryEntity)
+      m.parent_ref = rootMemId
+
+      const existingTargets = new Set(m.links.map(link => link.target_id))
+      if (!existingTargets.has(rootMemId)) {
+        m.links.push({ target_id: rootMemId, relation: 'child_of' })
+      }
+    }
+  }
+
+  // mem_id 去重：同 mem_id 已存在时直接更新
+  if (m.mem_id) {
+    const existing = db.prepare(`SELECT id FROM memories WHERE mem_id = ? LIMIT 1`).get(m.mem_id)
+    if (existing) {
+      db.prepare(`
+        UPDATE memories SET content = ?, detail = ?, title = ?, entities = ?, tags = ?, links = ?, timestamp = ?
+        WHERE id = ?
+      `).run(
+        m.content,
+        m.detail,
+        m.title || '',
+        JSON.stringify(m.entities || []),
+        JSON.stringify(m.tags || []),
+        JSON.stringify(m.links || []),
+        m.timestamp || new Date().toISOString(),
+        existing.id
+      )
+      console.log(`[DB] 更新记忆节点：${m.mem_id}`)
+      return { id: existing.id, updated: true }
+    }
+  }
+
+  // person / object 根节点：按 entity ID upsert，避免重复根节点（旧格式兼容）
+  if (['person', 'object'].includes(m.event_type) && !m.parent_ref) {
+    const firstEntity = (m.entities || [])[0]
     if (firstEntity) {
       const existing = db.prepare(`
         SELECT id FROM memories
         WHERE event_type = ? AND entities LIKE ? AND parent_id IS NULL
         LIMIT 1
-      `).get(memory.event_type, `%${firstEntity}%`)
+      `).get(m.event_type, `%${firstEntity}%`)
       if (existing) {
         db.prepare(`
-          UPDATE memories SET content = ?, detail = ?, concepts = ?, tags = ?, timestamp = ?
+          UPDATE memories SET content = ?, detail = ?, title = ?, entities = ?, concepts = ?, tags = ?, links = ?, timestamp = ?
           WHERE id = ?
         `).run(
-          memory.content,
-          memory.detail,
-          JSON.stringify(memory.concepts || []),
-          JSON.stringify(memory.tags || []),
-          memory.timestamp || new Date().toISOString(),
+          m.content,
+          m.detail,
+          m.title || '',
+          JSON.stringify(m.entities || []),
+          JSON.stringify(m.concepts || []),
+          JSON.stringify(m.tags || []),
+          JSON.stringify(m.links || []),
+          m.timestamp || new Date().toISOString(),
           existing.id
         )
-        console.log(`[DB] 更新根节点：${memory.event_type} ${firstEntity}`)
+        console.log(`[DB] 更新根节点：${m.event_type} ${firstEntity}`)
         return { id: existing.id, updated: true }
       }
     }
   }
 
-  // 解析 parent_ref → parent_id
-  const parentId = memory.parent_ref ? resolveParentRef(memory.parent_ref) : null
+  // 解析 parent_ref → parent_id（整数）
+  const parentId = m.parent_ref ? resolveParentRef(m.parent_ref) : null
 
-  // 工具知识记忆去重：按 tool:标签匹配，同工具只保留最新
-  const memoryTags = memory.tags || []
+  // 工具知识记忆去重：按 tool:标签匹配，同工具只保留最新（旧格式兼容）
+  const memoryTags = m.tags || []
   const toolTag = Array.isArray(memoryTags) ? memoryTags.find(t => t.startsWith('tool:')) : null
-  if (toolTag && memory.event_type === 'knowledge') {
+  if (toolTag && m.event_type === 'knowledge') {
     const toolName = toolTag.replace('tool:', '')
     const existing = db.prepare(`
       SELECT id FROM memories
@@ -196,14 +490,14 @@ export function insertMemory(memory) {
     `).get(`%tool:${toolName}%`)
     if (existing) {
       db.prepare(`
-        UPDATE memories SET content = ?, detail = ?, concepts = ?, tags = ?, timestamp = ?
+        UPDATE memories SET content = ?, detail = ?, title = ?, concepts = ?, tags = ?, links = ?, timestamp = ?
         WHERE id = ?
       `).run(
-        memory.content,
-        memory.detail,
-        JSON.stringify(memory.concepts || []),
-        JSON.stringify(memory.tags || []),
-        memory.timestamp || new Date().toISOString(),
+        m.content, m.detail, m.title || '',
+        JSON.stringify(m.concepts || []),
+        JSON.stringify(m.tags || []),
+        JSON.stringify(m.links || []),
+        m.timestamp || new Date().toISOString(),
         existing.id
       )
       console.log(`[DB] 更新工具记忆：${toolName}`)
@@ -212,18 +506,17 @@ export function insertMemory(memory) {
   }
 
   // 普通记忆去重：同类型且 content 前40字相同则跳过
-  const contentPrefix = (memory.content || '').slice(0, 40)
+  const contentPrefix = (m.content || '').slice(0, 40)
   const dup = db.prepare(`
     SELECT id FROM memories WHERE event_type = ? AND content LIKE ? LIMIT 1
-  `).get(memory.event_type, `${contentPrefix}%`)
+  `).get(m.event_type, `${contentPrefix}%`)
   if (dup) {
     console.log(`[DB] 跳过重复记忆：${contentPrefix}…`)
     return null
   }
 
   // URL 去重：同 URL 当天已有记录则跳过
-  const tags = memory.tags || []
-  const urlTag = Array.isArray(tags) ? tags.find(t => t.startsWith('url:')) : null
+  const urlTag = Array.isArray(memoryTags) ? memoryTags.find(t => t.startsWith('url:')) : null
   if (urlTag) {
     const today = new Date().toISOString().slice(0, 10)
     const urlDup = db.prepare(`
@@ -236,17 +529,20 @@ export function insertMemory(memory) {
   }
 
   return db.prepare(`
-    INSERT INTO memories (event_type, content, detail, entities, concepts, tags, source_ref, timestamp, parent_id)
-    VALUES (@event_type, @content, @detail, @entities, @concepts, @tags, @source_ref, @timestamp, @parent_id)
+    INSERT INTO memories (event_type, content, detail, title, mem_id, entities, concepts, tags, links, source_ref, timestamp, parent_id)
+    VALUES (@event_type, @content, @detail, @title, @mem_id, @entities, @concepts, @tags, @links, @source_ref, @timestamp, @parent_id)
   `).run({
-    event_type: memory.event_type,
-    content:    memory.content,
-    detail:     memory.detail,
-    entities:   JSON.stringify(memory.entities || []),
-    concepts:   JSON.stringify(memory.concepts || []),
-    tags:       JSON.stringify(memory.tags || []),
-    source_ref: memory.source_ref || null,
-    timestamp:  memory.timestamp || new Date().toISOString(),
+    event_type: m.event_type,
+    content:    m.content,
+    detail:     m.detail,
+    title:      m.title || '',
+    mem_id:     m.mem_id || null,
+    entities:   JSON.stringify(m.entities || []),
+    concepts:   JSON.stringify(m.concepts || []),
+    tags:       JSON.stringify(m.tags || []),
+    links:      JSON.stringify(m.links || []),
+    source_ref: m.source_ref || null,
+    timestamp:  m.timestamp || new Date().toISOString(),
     parent_id:  parentId,
   })
 }
@@ -281,11 +577,12 @@ export function resetAll() {
 // 注册/更新一个已知实体
 export function upsertEntity(id, label = null) {
   const db = getDB()
+  const normalizedId = normalizeConversationPartyId(id)
   db.prepare(`
     INSERT INTO entities (id, label, last_seen)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET last_seen = datetime('now'), label = COALESCE(excluded.label, label)
-  `).run(id, label)
+  `).run(normalizedId, label)
 }
 
 // 获取所有已知实体
@@ -323,16 +620,19 @@ export function getImpressiveBySource(entityId, limit = 5) {
 // 写入一条对话记录
 export function insertConversation({ role, from_id, to_id = null, content, timestamp }) {
   const db = getDB()
+  const fromId = normalizeConversationPartyId(from_id)
+  const toId = normalizeConversationPartyId(to_id)
   db.prepare(`
     INSERT INTO conversations (role, from_id, to_id, content, timestamp)
     VALUES (?, ?, ?, ?, ?)
-  `).run(role, from_id, to_id, content, timestamp)
+  `).run(role, fromId, toId, content, timestamp)
 }
 
 // 获取某个对话对象的最近 N 条消息（用户消息 + Jarvis 回复，按时序）
 // anchor: 锚点消息 id，null 表示最新；offset: 向上偏移（用于窗口上移）
 export function getConversationWindow(entityId, userCount = 5, anchorId = null, offsetUp = 0) {
   const db = getDB()
+  const normalizedId = normalizeConversationPartyId(entityId)
 
   // 找到最近 userCount 条用户消息的时间范围
   let userRows
@@ -345,7 +645,7 @@ export function getConversationWindow(entityId, userCount = 5, anchorId = null, 
       AND timestamp <= ?
       ORDER BY timestamp DESC
       LIMIT ?
-    `).all(entityId, entityId, anchor.timestamp, userCount + offsetUp)
+    `).all(normalizedId, normalizedId, anchor.timestamp, userCount + offsetUp)
   } else {
     userRows = db.prepare(`
       SELECT * FROM conversations
@@ -353,7 +653,7 @@ export function getConversationWindow(entityId, userCount = 5, anchorId = null, 
       AND role = 'user'
       ORDER BY timestamp DESC
       LIMIT ?
-    `).all(entityId, entityId, userCount + offsetUp)
+    `).all(normalizedId, normalizedId, userCount + offsetUp)
   }
 
   if (!userRows.length) return []
@@ -369,19 +669,20 @@ export function getConversationWindow(entityId, userCount = 5, anchorId = null, 
     WHERE (from_id = ? OR to_id = ?)
     AND timestamp >= ? AND timestamp <= ?
     ORDER BY timestamp ASC
-  `).all(entityId, entityId, minTs, maxTs)
+  `).all(normalizedId, normalizedId, minTs, maxTs)
 }
 
 // 搜索对话记录（关键词），返回匹配行及其上下文（前后各 N 条）
 export function searchConversations(entityId, keyword, context = 5) {
   const db = getDB()
+  const normalizedId = normalizeConversationPartyId(entityId)
   const matches = db.prepare(`
     SELECT * FROM conversations
     WHERE (from_id = ? OR to_id = ?)
     AND content LIKE ?
     ORDER BY timestamp DESC
     LIMIT 10
-  `).all(entityId, entityId, `%${keyword}%`)
+  `).all(normalizedId, normalizedId, `%${keyword}%`)
 
   if (!matches.length) return []
 
@@ -393,7 +694,7 @@ export function searchConversations(entityId, keyword, context = 5) {
     AND ABS(CAST((julianday(timestamp) - julianday(?)) * 86400 AS INTEGER)) < ${context * 30}
     ORDER BY timestamp ASC
     LIMIT ?
-  `).all(entityId, entityId, anchor.timestamp, context * 2 + 1)
+  `).all(normalizedId, normalizedId, anchor.timestamp, context * 2 + 1)
 }
 
 // 获取或初始化首次启动时间（持久化，重启不丢失）
@@ -453,30 +754,41 @@ export function getToolMemories(limit = 20) {
 // 获取某实体的 person/object 根节点记忆
 export function getPersonMemory(entityId) {
   const db = getDB()
+  const normalizedId = normalizeMemoryEntity(entityId)
+  const rootMemId = canonicalRootMemIdForEntity(normalizedId)
+  if (rootMemId) ensureCanonicalIdentityRoot(normalizedId)
   return db.prepare(`
     SELECT * FROM memories
     WHERE event_type IN ('person', 'object')
     AND entities LIKE ?
     AND parent_id IS NULL
-    ORDER BY timestamp DESC LIMIT 1
-  `).get(`%${entityId}%`)
+    ORDER BY CASE WHEN mem_id = ? THEN 0 ELSE 1 END, timestamp DESC
+    LIMIT 1
+  `).get(`%${normalizedId}%`, rootMemId || '')
 }
 
 // 获取某实体相关的所有记忆（非根节点本身，按时间倒序）
 export function getMemoriesByEntity(entityId, limit = 10) {
   const db = getDB()
+  const normalizedId = normalizeMemoryEntity(entityId)
+  const root = getPersonMemory(normalizedId)
   return db.prepare(`
     SELECT * FROM memories
-    WHERE entities LIKE ?
-    AND event_type NOT IN ('person', 'object')
+    WHERE (
+      entities LIKE ?
+      OR parent_id = ?
+      OR links LIKE ?
+    )
+    AND id != ?
     ORDER BY timestamp DESC
     LIMIT ?
-  `).all(`%${entityId}%`, limit)
+  `).all(`%${normalizedId}%`, root?.id || -1, `%${root?.mem_id || ''}%`, root?.id || -1, limit)
 }
 
 // 获取与某实体的近期对话记录（最近 limit 条，不超过 maxHours 小时）
 export function getRecentConversation(entityId, limit = 20, maxHours = 24) {
   const db = getDB()
+  const normalizedId = normalizeConversationPartyId(entityId)
   const cutoff = new Date(Date.now() - maxHours * 3600 * 1000).toISOString()
   const rows = db.prepare(`
     SELECT * FROM conversations
@@ -484,8 +796,24 @@ export function getRecentConversation(entityId, limit = 20, maxHours = 24) {
     AND timestamp >= ?
     ORDER BY timestamp DESC
     LIMIT ?
-  `).all(entityId, entityId, cutoff, limit)
+  `).all(normalizedId, normalizedId, cutoff, limit)
   return rows.reverse() // 按时间正序返回
+}
+
+// 写入一条行动日志
+export function insertActionLog({ timestamp, tool, summary, detail = '' }) {
+  const db = getDB()
+  db.prepare(`
+    INSERT INTO action_logs (timestamp, tool, summary, detail) VALUES (?, ?, ?, ?)
+  `).run(timestamp, tool, summary, String(detail).slice(0, 300))
+}
+
+// 获取最近 N 条行动日志（时间正序）
+export function getRecentActionLogs(limit = 50) {
+  const db = getDB()
+  return db.prepare(`
+    SELECT * FROM action_logs ORDER BY id DESC LIMIT ?
+  `).all(limit).reverse()
 }
 
 // 按关键词搜索记忆（FTS5 全文搜索，优先相关度排序）

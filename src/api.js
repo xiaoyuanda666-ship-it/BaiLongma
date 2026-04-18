@@ -13,8 +13,9 @@ export { emitEvent }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DASHBOARD_PATH = path.join(__dirname, '../dashboard.html')
-const BRAIN_PATH = path.join(__dirname, '../brain.html')
-const SANDBOX_PATH = path.join(__dirname, '../sandbox')
+const BRAIN_PATH     = path.join(__dirname, '../brain.html')
+const BRAIN_UI_PATH  = path.join(__dirname, '../brain-ui.html')
+const SANDBOX_PATH   = path.join(__dirname, '../sandbox')
 
 function jsonResponse(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -183,6 +184,19 @@ export function startAPI(port = 3721) {
       } catch {
         res.writeHead(404)
         res.end('brain.html not found')
+      }
+      return
+    }
+
+    // GET /brain-ui — Brain UI（记忆图谱 + 思考流 + 聊天）
+    if (req.method === 'GET' && (url.pathname === '/brain-ui' || url.pathname === '/brain-ui.html')) {
+      try {
+        const html = fs.readFileSync(BRAIN_UI_PATH, 'utf-8')
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(html)
+      } catch {
+        res.writeHead(404)
+        res.end('brain-ui.html not found')
       }
       return
     }

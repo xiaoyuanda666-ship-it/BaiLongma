@@ -1,5 +1,32 @@
 // 所有工具的 schema 定义
 export const TOOL_SCHEMAS = {
+  express: {
+    type: 'function',
+    function: {
+      name: 'express',
+      description: '向指定 ID 的个体表达内容。这是行为层与外界通讯的唯一出口。可选择表达形式：text（文字）或 voice（语音）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          target_id: {
+            type: 'string',
+            description: '接收方的 ID，格式如 ID:000001'
+          },
+          content: {
+            type: 'string',
+            description: '要表达的内容'
+          },
+          format: {
+            type: 'string',
+            enum: ['text', 'voice'],
+            description: '表达形式，默认 text'
+          }
+        },
+        required: ['target_id', 'content']
+      }
+    }
+  },
+
   send_message: {
     type: 'function',
     function: {
@@ -245,6 +272,9 @@ export const TOOL_SCHEMAS = {
 // 根据名称列表获取 schema 数组
 export function getToolSchemas(toolNames) {
   return toolNames
-    .filter(name => TOOL_SCHEMAS[name])
+    // `express` remains as a backward-compatible executor alias,
+    // but we don't expose it to the model. The model should use
+    // `send_message` for outbound text messages.
+    .filter(name => name !== 'express' && TOOL_SCHEMAS[name])
     .map(name => TOOL_SCHEMAS[name])
 }

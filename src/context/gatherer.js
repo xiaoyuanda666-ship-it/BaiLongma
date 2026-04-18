@@ -24,17 +24,17 @@ const FILE_PREVIEW_CHARS = 2000  // 文件内容截断长度
 
 const CHECKER_PROMPT = `你是上下文充分性检查器。判断当前注入的知识和经验是否足以处理任务的下一步。
 
-输出规则：
+【输出规则】
 - 只输出 JSON，不输出任何其他内容
 - 如果上下文已足够，输出：{"sufficient":true}
 - 如果不够，输出：{"sufficient":false,"needs":[...]}
 
-needs 的类型：
+【needs 类型】
 - {"type":"read_file","path":"相对路径"} — 需要读取某个文件的内容
 - {"type":"search_memory","keyword":"关键词"} — 需要搜索记忆中的相关信息
 - {"type":"recall","query":"查询内容"} — 需要回忆某个具体概念或经验
 
-判断原则：
+【判断原则】
 - 任务涉及修改/调用某文件或函数，但不知道其结构 → 需要 read_file
 - 任务依赖某个之前学到的知识但当前上下文没有 → 需要 search_memory
 - 任务涉及某个具体概念/决策但不确定 → 需要 recall

@@ -132,7 +132,7 @@ const PARAM_ALIASES = {
   delete_file: { file: 'path', filename: 'path' },
   exec_command: { cmd: 'command', shell: 'command', bg: 'background' },
   fetch_url: { link: 'url', href: 'url', uri: 'url' },
-  search_memory: { q: 'query', keyword: 'query', term: 'query' },
+  search_memory: { q: 'keyword', query: 'keyword', term: 'keyword' },
 }
 
 function normalizeArgs(toolName, args) {
@@ -169,7 +169,7 @@ function parseXmlToolCalls(content) {
 
 // 主调用：agentic 循环，连续执行工具直到模型停止
 // 返回 { content: string, toolResult: { name, args, result } | null, aborted: bool }
-export async function callLLM({ systemPrompt, message, temperature = 0.7, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream }) {
+export async function callLLM({ systemPrompt, message, temperature = 0.7, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, toolContext = {} }) {
   const toolSchemas = getToolSchemas(tools)
 
   const messages = [
@@ -235,7 +235,7 @@ export async function callLLM({ systemPrompt, message, temperature = 0.7, tools 
         console.log(`[工具警告] ${tc.name} 参数为空`)
       }
       const normalizedArgs = normalizeArgs(tc.name, args)
-      const result = await executeTool(tc.name, normalizedArgs)
+      const result = await executeTool(tc.name, normalizedArgs, toolContext)
       console.log(`[工具结果] ${tc.name}: ${result.slice(0, 100)}`)
       if (onToolCall) onToolCall(tc.name, args, result)
       lastToolResult = { name: tc.name, args: normalizedArgs, result }
