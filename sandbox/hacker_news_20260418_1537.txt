@@ -1,0 +1,14 @@
+# Hacker News 头条精选 2026-04-18 15:37
+
+1. **Claude Design** (991分) - Anthropic的Claude设计相关
+2. **Measuring Claude 4.7's tokenizer costs** (592分) - Claude 4.7分词器成本分析
+3. **Isaac Asimov: The Last Question (1956)** (699分) - 阿西莫夫经典短篇重温
+4. **Smol machines – subsecond coldstart, portable VMs** (310分) - 亚秒级冷启动的可移植虚拟机
+5. **All 12 moonwalkers had "lunar hay fever"** (307分) - 12位登月者都有"月球花粉热"
+6. **Spending 3 months coding by hand** (184分) - 用手写了三个月代码
+7. **Are the costs of AI agents also rising exponentially?** (181分) - AI代理成本也在指数增长？
+8. **Hyperscalers have already outspent most famous US megaprojects** (178分) - 超大规模厂商已超美重大工程
+9. **NASA Force** (260分) - NASA相关项目
+10. **Middle schooler finds coin from Troy in Berlin** (222分) - 初中生在柏林发现特洛伊金币
+
+技术热点：Claude相关话题持续热门，AI成本讨论热烈，开发者工具和手写代码项目受关注。

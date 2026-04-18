@@ -49,6 +49,24 @@ function newSessionRef() {
   return `session_${Date.now()}_${state.sessionCounter}`
 }
 
+function buildToolContext(label, injection) {
+  const currentTargetId = label.startsWith('消息 from ')
+    ? label.slice('消息 from '.length).trim()
+    : null
+
+  const visibleTargetIds = [
+    currentTargetId,
+    ...((injection.conversationWindow || []).flatMap(item => [item.from_id, item.to_id])),
+  ]
+    .filter(id => id && id !== 'jarvis')
+
+  const uniqueVisibleTargetIds = [...new Set(visibleTargetIds)]
+  return {
+    allowedTargetIds: uniqueVisibleTargetIds,
+    visibleTargetIds: uniqueVisibleTargetIds,
+  }
+}
+
 async function process(input, label) {
   const sessionRef = newSessionRef()
   const isTick = label === 'TICK' || label.startsWith('TICK ')
@@ -150,6 +168,7 @@ async function process(input, label) {
   // 3. 调用 Jarvis LLM（可被新消息打断）
   const toolCallLog = []
   let llmResult
+  const toolContext = buildToolContext(label, injection)
   currentAbortController = new AbortController()
   try {
     llmResult = await callLLM({
@@ -158,6 +177,7 @@ async function process(input, label) {
       tools: injection.tools || ['send_message'],
       maxTokens: undefined,
       signal: currentAbortController.signal,
+      toolContext,
       onToolCall: (name, args, result) => {
         emitEvent('tool_call', { name, args, result: String(result).slice(0, 1000) })
         toolCallLog.push({ name, args, result: String(result).slice(0, 500) })

@@ -25,7 +25,12 @@ console.log(`[reset] 时间：${nowTimestamp()}`)
 
 // 清数据库
 resetAll()
-console.log('[reset] 数据库已清空')
+const db2 = getDB()
+const convCount = db2.prepare('SELECT COUNT(*) as n FROM conversations').get().n
+const logCount  = db2.prepare('SELECT COUNT(*) as n FROM action_logs').get().n
+db2.prepare('DELETE FROM conversations').run()
+db2.prepare('DELETE FROM action_logs').run()
+console.log(`[reset] 数据库已清空（含 ${convCount} 条聊天记录、${logCount} 条行为日志）`)
 
 // 清 sandbox：删除所有文件，重建种子文件
 if (fs.existsSync(SANDBOX_DIR)) {

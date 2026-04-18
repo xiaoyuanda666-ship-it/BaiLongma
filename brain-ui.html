@@ -3,385 +3,459 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jarvis Brain UI</title>
+<title>Jarvis · Cognitive Surface</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
 <style>
 :root {
-  --bg-0: #07111a;
-  --bg-1: #0d1c28;
-  --bg-2: rgba(9, 19, 29, 0.78);
-  --panel: rgba(7, 14, 22, 0.72);
-  --line: rgba(169, 186, 210, 0.587);
-  --line-strong: rgba(125, 211, 252, 0.28);
-  --text: #dbe7f3;
-  --muted: #8ea2b7;
-  --l1: #69d2ff;
-  --l2: #9f8cff;
-  --accent: #ff9b5e;
-  --success: #63e6a5;
-  --shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
-  --radius-lg: 24px;
-  --radius-md: 18px;
-  --radius-sm: 12px;
-  --font-ui: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+  --bg0: #0a1118;
+  --bg1: #0f1822;
+  --bg-deep: #060a10;
+  --ink: #d7e2ee;
+  --ink2: #9aabbe;
+  --dim: #5d6d80;
+  --line: rgba(138, 168, 200, 0.10);
+  --line-strong: rgba(138, 168, 200, 0.22);
+  --panel: rgba(11, 18, 26, 0.56);
+  --console-bg: rgba(15, 24, 34, 0.42);
+  --cool: #8fb6d8;
+  --warm: #d39872;
+  --node-low: #3a556e;
+  --node-high: #cfe3f5;
+  --glow-halo: rgba(143, 182, 216, 0.10);
+  --glow-tint1: rgba(138, 158, 200, 0.08);
+  --glow-tint2: rgba(211, 152, 114, 0.06);
+  --link-stroke: rgba(143, 182, 216, 0.18);
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+[data-theme="phosphor"] {
+  --bg0: #050806; --bg1: #0a120c; --bg-deep: #020403;
+  --ink: #c8f0c8; --ink2: #8fb48a; --dim: #4a6b4e;
+  --line: rgba(140, 220, 140, 0.08); --line-strong: rgba(140, 220, 140, 0.22);
+  --panel: rgba(6, 12, 8, 0.58); --console-bg: rgba(10, 20, 12, 0.42);
+  --cool: #9fe09a; --warm: #f0c866;
+  --node-low: #2d5a36; --node-high: #d4ffce;
+  --glow-halo: rgba(140, 220, 140, 0.10);
+  --glow-tint1: rgba(140, 220, 140, 0.08);
+  --glow-tint2: rgba(240, 200, 102, 0.05);
+  --link-stroke: rgba(140, 220, 140, 0.18);
 }
 
-html, body {
-  width: 100%;
-  height: 100%;
+[data-theme="violet"] {
+  --bg0: #0d0a1a; --bg1: #161128; --bg-deep: #070512;
+  --ink: #e4deff; --ink2: #a89fd4; --dim: #645b8a;
+  --line: rgba(170, 140, 240, 0.10); --line-strong: rgba(170, 140, 240, 0.22);
+  --panel: rgba(14, 10, 26, 0.56); --console-bg: rgba(22, 17, 40, 0.42);
+  --cool: #b098f0; --warm: #78e0c8;
+  --node-low: #4a3a6e; --node-high: #e0d4ff;
+  --glow-halo: rgba(170, 140, 240, 0.12);
+  --glow-tint1: rgba(170, 140, 240, 0.09);
+  --glow-tint2: rgba(120, 224, 200, 0.06);
+  --link-stroke: rgba(170, 140, 240, 0.20);
 }
+
+[data-theme="rose"] {
+  --bg0: #1a0f16; --bg1: #24151f; --bg-deep: #10080d;
+  --ink: #f4e0e4; --ink2: #c9a8ae; --dim: #7a5a61;
+  --line: rgba(230, 160, 170, 0.10); --line-strong: rgba(230, 160, 170, 0.22);
+  --panel: rgba(26, 15, 22, 0.56); --console-bg: rgba(36, 21, 31, 0.42);
+  --cool: #e89aa8; --warm: #f2c27a;
+  --node-low: #5a3a44; --node-high: #fad8de;
+  --glow-halo: rgba(230, 160, 170, 0.10);
+  --glow-tint1: rgba(230, 160, 170, 0.08);
+  --glow-tint2: rgba(242, 194, 122, 0.06);
+  --link-stroke: rgba(230, 160, 170, 0.20);
+}
+
+[data-theme="arctic"] {
+  --bg0: #f5f7f9; --bg1: #eaeef2; --bg-deep: #dfe4ea;
+  --ink: #1a2330; --ink2: #4a5a6e; --dim: #8a98a8;
+  --line: rgba(40, 60, 85, 0.08); --line-strong: rgba(40, 60, 85, 0.18);
+  --panel: rgba(255, 255, 255, 0.54); --console-bg: rgba(255, 255, 255, 0.46);
+  --cool: #3a6a8f; --warm: #b85a3a;
+  --node-low: #c0ccd8; --node-high: #2a3e58;
+  --glow-halo: rgba(58, 106, 143, 0.06);
+  --glow-tint1: rgba(58, 106, 143, 0.05);
+  --glow-tint2: rgba(184, 90, 58, 0.04);
+  --link-stroke: rgba(40, 60, 85, 0.18);
+}
+
+[data-theme="sand"] {
+  --bg0: #f2ede3; --bg1: #eae2d2; --bg-deep: #ddd2bc;
+  --ink: #2a231a; --ink2: #6a5c48; --dim: #9e917c;
+  --line: rgba(70, 55, 35, 0.08); --line-strong: rgba(70, 55, 35, 0.20);
+  --panel: rgba(250, 246, 238, 0.54); --console-bg: rgba(250, 246, 238, 0.46);
+  --cool: #7a5a2c; --warm: #c8502e;
+  --node-low: #cdbfa6; --node-high: #3a2a16;
+  --glow-halo: rgba(122, 90, 44, 0.06);
+  --glow-tint1: rgba(122, 90, 44, 0.06);
+  --glow-tint2: rgba(200, 80, 46, 0.05);
+  --link-stroke: rgba(70, 55, 35, 0.18);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; }
 
 body {
   overflow: hidden;
+  color: var(--ink);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
   background:
-    radial-gradient(circle at 20% 18%, rgba(80, 168, 255, 0.22), transparent 28%),
-    radial-gradient(circle at 82% 12%, rgba(163, 130, 255, 0.18), transparent 26%),
-    radial-gradient(circle at 50% 78%, rgba(66, 214, 173, 0.1), transparent 30%),
-    linear-gradient(145deg, var(--bg-0), var(--bg-1) 58%, #04090f 100%);
-  color: var(--text);
-  font-family: var(--font-ui);
+    radial-gradient(circle at 22% 18%, var(--glow-tint1), transparent 35%),
+    radial-gradient(circle at 80% 82%, var(--glow-tint2), transparent 38%),
+    linear-gradient(160deg, var(--bg0), var(--bg1) 60%, var(--bg-deep) 100%);
   user-select: none;
+  transition: background 0.6s ease, color 0.6s ease;
 }
 
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-  background-size: 32px 32px;
-  opacity: 0.28;
-  pointer-events: none;
+.grid-overlay {
+  display: none;
 }
 
 #graph {
   position: fixed;
   inset: 0;
-  z-index: 0;
-  cursor: grab;
+  z-index: 1;
 }
 
-#graph:active {
-  cursor: grabbing;
+@keyframes neb-blink {
+  0%, 92%, 100% { opacity: 1; }
+  96% { opacity: 0.35; }
 }
 
-.topbar {
-  position: fixed;
-  top: 18px;
-  left: 18px;
-  right: 18px;
-  z-index: 25;
-  display: flex;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 16px;
-  pointer-events: none;
+@keyframes neb-cursor {
+  0%, 50%, 100% { opacity: 1; }
+  25%, 75% { opacity: 0.2; }
 }
 
-.brand,
-.statusbar {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(6, 12, 19, 0.62);
-  backdrop-filter: blur(18px);
-  box-shadow: var(--shadow);
+@keyframes neb-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(0.78); }
 }
 
-.brand {
-  min-width: 240px;
-}
-
-.brand-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 35% 35%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 28%),
-    conic-gradient(from 180deg, #5ae0ff, #6ba8ff, #7b6cff, #5ae0ff);
-  box-shadow: 0 0 24px rgba(105, 210, 255, 0.35);
-}
-
-.brand-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.eyebrow {
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.brand h1 {
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.statusbar {
-  gap: 20px;
-}
-
-.status-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.status-item span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.status-item strong {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.status-live strong::before {
-  content: "";
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 8px;
-  border-radius: 50%;
-  background: var(--success);
-  box-shadow: 0 0 12px rgba(99, 230, 165, 0.95);
-  animation: pulse 1.8s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(0.7); opacity: 0.55; }
+@keyframes neb-node-use {
+  0% { opacity: 0.88; }
+  28% { opacity: 1; }
+  58% { opacity: 0.9; }
+  100% { opacity: 1; }
 }
 
 .panel {
   position: fixed;
-  top: 92px;
-  bottom: 112px;
-  width: 320px;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  padding: 0 18px 0;
-  pointer-events: none;
-}
-
-#panel-l1 { left: 0; }
-#panel-l2 { right: 0; }
-
-.panel-shell {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(180deg, rgba(9, 17, 27, 0.78), rgba(6, 11, 18, 0.68));
+  top: 20px;
+  bottom: 20px;
+  width: 362px;
+  z-index: 3;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
   backdrop-filter: blur(18px);
-  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  transition: background 0.6s ease, border-color 0.6s ease;
 }
 
-.panel-header {
+#panel-l1 { left: 20px; }
+#panel-l2 { right: 20px; }
+
+.panel-identity {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
-.panel-title {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, var(--ink), var(--cool) 45%, var(--bg0));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--cool) 33%, transparent);
+  animation: neb-blink 2.6s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
-.panel-title strong {
+.brand-copy { display: flex; flex-direction: column; gap: 2px; }
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.brand-title {
   font-size: 14px;
   font-weight: 600;
+  color: var(--ink);
 }
 
-.panel-title span {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+.panel-stats {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
-.badge {
-  padding: 6px 10px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+.stat { display: flex; flex-direction: column; gap: 2px; }
+
+.stat-label {
+  font-size: 9px;
+  color: var(--dim);
+  letter-spacing: 0.15em;
   text-transform: uppercase;
-  opacity: 0.92;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
-#panel-l1 .badge,
-#panel-l1 .stream-tool,
-#panel-l1 .panel-title strong {
-  color: var(--l1);
+.stat-value {
+  font-size: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-weight: 500;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-#panel-l2 .badge,
-#panel-l2 .stream-tool,
-#panel-l2 .panel-title strong {
-  color: var(--l2);
+.stat-value.live { color: var(--warm); }
+
+.stat-value .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warm);
+  box-shadow: 0 0 8px var(--warm);
+  animation: neb-blink 1.4s ease-in-out infinite;
+}
+
+.stream-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.stream-title-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stream-subtitle {
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+.pill {
+  font-size: 9px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  padding: 3px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.12em;
+  color: var(--cool);
+  border: 1px solid color-mix(in srgb, var(--cool) 33%, transparent);
+}
+
+.pill-warm {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 33%, transparent);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.legend-item { display: flex; align-items: center; gap: 6px; }
+
+.legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+.legend-name {
+  font-size: 10px;
+  color: var(--ink2);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.legend-count {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .stream {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  mask-image: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.25) 15%, black 38%);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.25) 15%, black 38%);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%, black 100%);
+  mask-image: linear-gradient(to bottom, transparent, black 12%, black 100%);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 .stream-inner {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  flex-direction: column-reverse;
 }
 
-.stream-block {
-  padding: 12px 12px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.08);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.025);
-  transition: opacity 0.5s ease, transform 0.35s ease;
+.stream::-webkit-scrollbar,
+.panel::-webkit-scrollbar { width: 6px; }
+
+.stream::-webkit-scrollbar-thumb,
+.panel::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 999px;
 }
 
-.stream-block.fading {
-  opacity: 0.1;
-  transform: translateY(-8px);
+.stream-line {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  transition: opacity 0.5s ease;
 }
 
-.stream-text {
-  line-height: 1.65;
+.stream-line.fading { opacity: 0.2; }
+
+.line-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.line-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.line-type {
+  font-size: 9px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.line-time {
+  font-size: 9px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  margin-left: auto;
+}
+
+.line-text {
   font-size: 12px;
-  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--ink);
+  padding-left: 13px;
   word-break: break-word;
-  color: #d8e4f2;
+  white-space: pre-wrap;
 }
 
-.stream-tool {
-  margin-top: 8px;
-  font-family: var(--font-mono);
+.line-tool {
   font-size: 10px;
-  opacity: 0.7;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  opacity: 0.85;
+  padding-left: 13px;
+  margin-top: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.stream-tool::before {
-  content: ">";
-  margin-right: 6px;
+.cursor {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  background: var(--warm);
+  margin-left: 13px;
+  margin-top: 2px;
+  animation: neb-cursor 1s steps(2) infinite;
+  vertical-align: middle;
 }
 
-#chat-area {
+.console {
   position: fixed;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(920px, calc(100vw - 72px));
-  z-index: 20;
-  pointer-events: auto;
-}
-
-#chat-shell {
+  left: 402px;
+  right: 402px;
+  bottom: 24px;
+  z-index: 4;
+  border-radius: 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 28px;
-  background: rgba(18, 28, 40, 0.28);
-  backdrop-filter: blur(34px) saturate(145%);
-  -webkit-backdrop-filter: blur(34px) saturate(145%);
-  box-shadow:
-    0 24px 70px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  overflow: hidden;
+  background: var(--console-bg);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
 }
 
 #chat-history {
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: max-height 0.62s cubic-bezier(1, 0, 0.2, 1);
 }
 
-#chat-history.open {
-  max-height: 580px;
-}
+#chat-history.open { max-height: 800px; }
 
 #chat-messages {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 580px;
+  gap: 8px;
+  max-height: 500px;
   overflow-y: auto;
-  padding: 16px 18px 10px;
+  padding: 14px 18px 6px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(125, 211, 252, 0.24) transparent;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
-#chat-messages::-webkit-scrollbar {
-  width: 8px;
-}
-
-#chat-messages::-webkit-scrollbar-thumb {
-  background: rgba(125, 211, 252, 0.22);
-  border-radius: 999px;
-}
+#chat-messages::-webkit-scrollbar { width: 6px; }
+#chat-messages::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; }
 
 .msg {
-  max-width: min(80%, 640px);
-  padding: 10px 12px;
-  border-radius: 16px;
-  line-height: 1.65;
-  font-size: 13px;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.55;
   word-break: break-word;
+  border: 1px solid var(--line);
 }
 
 .msg-user {
   align-self: flex-end;
-  background: rgba(255, 155, 94, 0.13);
-  border: 1px solid rgba(255, 155, 94, 0.18);
-  color: #ffd3bd;
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 25%, transparent);
 }
 
 .msg-jarvis {
   align-self: flex-start;
-  background: rgba(99, 230, 165, 0.1);
-  border: 1px solid rgba(99, 230, 165, 0.18);
-  color: #d9ffe8;
+  color: var(--cool);
+  border-color: color-mix(in srgb, var(--cool) 25%, transparent);
 }
 
 .msg-label {
   display: block;
-  margin-bottom: 4px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  margin-bottom: 3px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   opacity: 0.65;
 }
@@ -389,67 +463,47 @@ body::before {
 #input-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px;
+  gap: 14px;
+  padding: 14px 18px;
+}
+
+.prompt-mark {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--warm);
+  animation: neb-blink 1.6s ease-in-out infinite;
 }
 
 #msg-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font: 500 14px/1.4 var(--font-ui);
-  padding: 14px 16px;
-  outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-}
-
-#msg-input:focus {
-  border-color: rgba(105, 210, 255, 0.4);
-  box-shadow: 0 0 0 4px rgba(105, 210, 255, 0.08);
-  background: rgba(255, 255, 255, 0.055);
-}
-
-#msg-input::placeholder {
-  color: rgba(142, 162, 183, 0.74);
-}
-
-#send-btn,
-#reset-view-btn {
+  background: transparent;
   border: 0;
-  border-radius: 16px;
-  padding: 13px 16px;
-  font: 600 12px/1 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: transform 0.18s ease, opacity 0.18s ease, box-shadow 0.18s ease;
+  outline: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-family: inherit;
+  padding: 4px 0;
 }
+
+#msg-input::placeholder { color: var(--dim); }
 
 #send-btn {
-  background: linear-gradient(135deg, #4bd5ff, #8f75ff);
-  color: #04111a;
-  box-shadow: 0 10px 30px rgba(99, 150, 255, 0.26);
+  padding: 8px 18px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--warm);
+  color: var(--bg0);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease;
 }
 
-#reset-view-btn {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--muted);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-#send-btn:hover,
-#reset-view-btn:hover {
-  transform: translateY(-1px);
-}
-
-#send-btn:active,
-#reset-view-btn:active {
-  transform: translateY(0);
-  opacity: 0.85;
-}
+#send-btn:hover { transform: translateY(-1px); }
+#send-btn:active { transform: translateY(0); opacity: 0.85; }
 
 #tip {
   position: fixed;
@@ -457,12 +511,11 @@ body::before {
   display: none;
   max-width: 260px;
   padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background: rgba(6, 12, 18, 0.9);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
   backdrop-filter: blur(16px);
-  box-shadow: var(--shadow);
-  color: var(--text);
+  color: var(--ink);
   font-size: 12px;
   line-height: 1.55;
   word-break: break-word;
@@ -472,284 +525,489 @@ body::before {
 .tip-type {
   display: inline-block;
   margin-bottom: 4px;
-  color: var(--muted);
-  font-family: var(--font-mono);
+  color: var(--dim);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.theme-switcher {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  gap: 6px;
+  z-index: 50;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.theme-switcher.visible { opacity: 1; transform: translateY(0); }
+
+.theme-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.theme-dot:hover { transform: scale(1.15); }
+.theme-dot.active { box-shadow: 0 0 0 2px var(--ink); }
+
+.theme-dot[data-t="midnight"] { background: linear-gradient(135deg, #0f1822, #d39872); }
+.theme-dot[data-t="phosphor"] { background: linear-gradient(135deg, #0a120c, #9fe09a); }
+.theme-dot[data-t="violet"] { background: linear-gradient(135deg, #161128, #b098f0); }
+.theme-dot[data-t="rose"] { background: linear-gradient(135deg, #24151f, #f2c27a); }
+.theme-dot[data-t="arctic"] { background: linear-gradient(135deg, #eaeef2, #b85a3a); }
+.theme-dot[data-t="sand"] { background: linear-gradient(135deg, #eae2d2, #c8502e); }
+
+.reset-view {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  z-index: 50;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  color: var(--dim);
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s ease, transform 0.3s ease, color 0.18s ease;
+}
+
+.reset-view.visible { opacity: 1; transform: translateY(0); }
+.reset-view:hover { color: var(--ink); }
+
+.physics-control {
+  position: fixed;
+  left: 24px;
+  bottom: 70px;
+  z-index: 52;
+  width: 220px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s ease, transform 0.3s ease, background 0.6s ease, border-color 0.6s ease;
+}
+
+.physics-control.visible { opacity: 1; transform: translateY(0); }
+
+.physics-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.physics-toggle-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.physics-toggle-icon {
+  color: var(--dim);
+  font-size: 12px;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.physics-control.open .physics-toggle-icon {
+  transform: rotate(180deg);
+  color: var(--ink);
+}
+
+.physics-panel {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.28s ease;
+}
+
+.physics-control.open .physics-panel {
+  max-height: 240px;
+}
+
+.physics-panel-inner {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.physics-field {
+  padding-top: 12px;
+}
+
+.physics-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  gap: 12px;
+}
+
+.physics-field-label,
+.physics-field-value {
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.physics-field-label {
+  color: var(--ink2);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+.physics-field-value {
+  color: var(--warm);
+}
+
+.physics-slider {
+  width: 100%;
+  accent-color: var(--warm);
+  cursor: pointer;
+  background: transparent;
+}
+
 @media (max-width: 1180px) {
-  .panel {
-    width: 272px;
-  }
-
-  #chat-area {
-    width: min(860px, calc(100vw - 44px));
-  }
+  .panel { width: 300px; }
+  #panel-l2 { right: 20px; }
+  .console { left: 340px; right: 340px; }
 }
 
-@media (max-width: 980px) {
-  .topbar {
-    top: 14px;
-    left: 14px;
-    right: 14px;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .statusbar {
-    justify-content: space-between;
-  }
-
-  .panel {
-    top: auto;
-    bottom: 140px;
-    width: calc(50vw - 22px);
-    height: 210px;
-  }
-
-  .panel-shell {
-    padding: 14px;
-  }
-
-  #panel-l1 { left: 14px; }
-  #panel-l2 { right: 14px; }
-
-  #chat-area {
-    bottom: 14px;
-    width: calc(100vw - 28px);
-  }
-}
-
-@media (max-width: 720px) {
-  body {
-    overflow: auto;
-  }
-
-  .brand,
-  .statusbar {
-    border-radius: 24px;
-  }
-
-  .statusbar {
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .panel {
-    position: fixed;
-    width: calc(100vw - 28px);
-    left: 14px;
-    right: 14px;
-    height: 144px;
-  }
-
-  #panel-l1 {
-    bottom: 314px;
-  }
-
-  #panel-l2 {
-    bottom: 156px;
-  }
-
-  .panel-shell {
-    gap: 10px;
-    border-radius: 20px;
-  }
-
-  .panel-header {
-    align-items: flex-start;
-  }
-
-  .panel-title span,
-  .badge {
-    font-size: 10px;
-  }
-
-  #chat-history.open {
-    max-height: 480px;
-  }
-
-  #chat-messages {
-    max-height: 480px;
-  }
-
-  #input-row {
-    flex-wrap: wrap;
-  }
-
-  #msg-input {
-    width: 100%;
-  }
-
-  #send-btn,
-  #reset-view-btn {
-    flex: 1;
-  }
+@media (max-width: 900px) {
+  .panel { width: 260px; }
+  .console { left: 300px; right: 300px; }
 }
 </style>
 </head>
-<body>
+<body data-theme="midnight">
 
+<div class="grid-overlay"></div>
 <svg id="graph" aria-label="Jarvis memory graph"></svg>
 
-<header class="topbar">
-  <div class="brand">
-    <div class="brand-mark" aria-hidden="true"></div>
+<aside id="panel-l1" class="panel">
+  <header class="panel-identity">
+    <div class="brand-mark"></div>
     <div class="brand-copy">
       <div class="eyebrow">Cognitive Surface</div>
-      <h1>Jarvis Brain Interface</h1>
+      <div class="brand-title">Jarvis Brain Interface</div>
     </div>
-  </div>
-  <div class="statusbar">
-    <div class="status-item status-live">
-      <span>状态</span>
-      <strong id="conn-state">Connected</strong>
-    </div>
-    <div class="status-item">
-      <span>节点</span>
-      <strong id="node-count">0</strong>
-    </div>
-    <div class="status-item">
-      <span>链路</span>
-      <strong id="link-count">0</strong>
-    </div>
-  </div>
-</header>
+  </header>
 
-<aside id="panel-l1" class="panel">
-  <div class="panel-shell">
-    <div class="panel-header">
-      <div class="panel-title">
-        <strong>L1 感知流</strong>
-        <span>快速感知、匹配记忆、工具输入</span>
-      </div>
-      <div class="badge">Perception</div>
+  <div class="stream-meta">
+    <div>
+      <div class="stream-title-text">L1 · Perception</div>
+      <div class="stream-subtitle">input · recall · match</div>
     </div>
-    <div class="stream">
-      <div class="stream-inner" id="si-l1"></div>
-    </div>
+    <span class="pill" id="pill-l1">LIVE</span>
+  </div>
+
+  <div class="legend" id="legend"></div>
+
+  <div class="stream">
+    <div class="stream-inner" id="si-l1"></div>
   </div>
 </aside>
 
 <aside id="panel-l2" class="panel">
-  <div class="panel-shell">
-    <div class="panel-header">
-      <div class="panel-title">
-        <strong>L2 推理流</strong>
-        <span>深层思考、工具调用、输出组织</span>
-      </div>
-      <div class="badge">Reasoning</div>
+  <header class="panel-stats">
+    <div class="stat">
+      <span class="stat-label">state</span>
+      <div class="stat-value live" id="conn-state"><span class="live-dot"></span>streaming</div>
     </div>
-    <div class="stream">
-      <div class="stream-inner" id="si-l2"></div>
+    <div class="stat">
+      <span class="stat-label">nodes</span>
+      <div class="stat-value" id="node-count">0</div>
     </div>
+    <div class="stat">
+      <span class="stat-label">links</span>
+      <div class="stat-value" id="link-count">0</div>
+    </div>
+    <div class="stat">
+      <span class="stat-label">tok/s</span>
+      <div class="stat-value" id="tok-rate">—</div>
+    </div>
+  </header>
+
+  <div class="stream-meta">
+    <div>
+      <div class="stream-title-text">L2 · Reasoning</div>
+      <div class="stream-subtitle">plan · think · tool · stream</div>
+    </div>
+    <span class="pill pill-warm" id="pill-l2">STREAMING</span>
+  </div>
+
+  <div class="stream">
+    <div class="stream-inner" id="si-l2"></div>
   </div>
 </aside>
 
-<section id="chat-area">
-  <div id="chat-shell">
-    <div id="chat-history">
-      <div id="chat-messages"></div>
-    </div>
-    <div id="input-row">
-      <input id="msg-input" type="text" placeholder="向 Jarvis 发送消息..." autocomplete="off">
-      <button id="reset-view-btn" type="button">Reset View</button>
-      <button id="send-btn" type="button">Send</button>
+<section class="console" id="chat-area">
+  <div id="chat-history">
+    <div id="chat-messages"></div>
+  </div>
+  <div id="input-row">
+    <span class="prompt-mark">▸</span>
+    <input id="msg-input" type="text" placeholder="向 Jarvis 发送消息…" autocomplete="off">
+    <button id="send-btn" type="button">SEND</button>
+  </div>
+</section>
+
+<button class="reset-view" id="reset-view-btn" type="button">Reset View</button>
+
+<section class="physics-control" id="physics-control">
+  <button class="physics-toggle" id="physics-toggle" type="button" aria-expanded="false">
+    <span class="physics-toggle-label">Graph Tuning</span>
+    <span class="physics-toggle-icon">▾</span>
+  </button>
+  <div class="physics-panel" id="physics-panel">
+    <div class="physics-panel-inner">
+      <div class="physics-field">
+        <div class="physics-field-head">
+          <label class="physics-field-label" for="gravity-slider">Gravity</label>
+          <span class="physics-field-value" id="gravity-value">1.00x</span>
+        </div>
+        <input class="physics-slider" id="gravity-slider" type="range" min="0.6" max="1.6" step="0.02" value="1">
+      </div>
+      <div class="physics-field">
+        <div class="physics-field-head">
+          <label class="physics-field-label" for="repulsion-slider">Repulsion</label>
+          <span class="physics-field-value" id="repulsion-value">1.00x</span>
+        </div>
+        <input class="physics-slider" id="repulsion-slider" type="range" min="0.6" max="1.6" step="0.02" value="1">
+      </div>
+      <div class="physics-field">
+        <div class="physics-field-head">
+          <label class="physics-field-label" for="node-size-slider">Node Size</label>
+          <span class="physics-field-value" id="node-size-value">1.00x</span>
+        </div>
+        <input class="physics-slider" id="node-size-slider" type="range" min="0.75" max="1.8" step="0.02" value="1">
+      </div>
     </div>
   </div>
 </section>
+
+<div class="theme-switcher" id="theme-switcher">
+  <div class="theme-dot active" data-t="midnight" title="Midnight Steel"></div>
+  <div class="theme-dot" data-t="phosphor" title="Phosphor CRT"></div>
+  <div class="theme-dot" data-t="violet" title="Violet Lab"></div>
+  <div class="theme-dot" data-t="rose" title="Rose Dusk"></div>
+  <div class="theme-dot" data-t="arctic" title="Arctic"></div>
+  <div class="theme-dot" data-t="sand" title="Warm Sand"></div>
+</div>
 
 <div id="tip"></div>
 
 <script>
 const API = "http://localhost:3721";
+const THEME_KEY = "jarvis-brain-ui-theme";
+const CHAT_STORAGE_KEY = "jarvis-brain-ui-chat-history";
+const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
+const MAX_CHAT_HISTORY = 60;
+
+const themeSwitcher = document.getElementById("theme-switcher");
+const resetViewBtn = document.getElementById("reset-view-btn");
+const physicsControl = document.getElementById("physics-control");
+const physicsToggle = document.getElementById("physics-toggle");
+const gravitySlider = document.getElementById("gravity-slider");
+const repulsionSlider = document.getElementById("repulsion-slider");
+const nodeSizeSlider = document.getElementById("node-size-slider");
+const gravityValue = document.getElementById("gravity-value");
+const repulsionValue = document.getElementById("repulsion-value");
+const nodeSizeValue = document.getElementById("node-size-value");
+
+const physicsSettings = {
+  gravity: 1,
+  repulsion: 1,
+  nodeSize: 1,
+};
+
+requestAnimationFrame(() => {
+  themeSwitcher.classList.add("visible");
+  resetViewBtn.classList.add("visible");
+  physicsControl.classList.add("visible");
+});
+
+function readCSSVar(name) {
+  return getComputedStyle(document.body).getPropertyValue(name).trim();
+}
+
+function readPhysicsSettings() {
+  try {
+    const raw = localStorage.getItem(PHYSICS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      if (typeof parsed.gravity === "number") physicsSettings.gravity = parsed.gravity;
+      if (typeof parsed.repulsion === "number") physicsSettings.repulsion = parsed.repulsion;
+      if (typeof parsed.nodeSize === "number") physicsSettings.nodeSize = parsed.nodeSize;
+    }
+  } catch {}
+}
+
+function savePhysicsSettings() {
+  try {
+    localStorage.setItem(PHYSICS_STORAGE_KEY, JSON.stringify(physicsSettings));
+  } catch {}
+}
+
+function updatePhysicsReadout() {
+  gravitySlider.value = String(physicsSettings.gravity);
+  repulsionSlider.value = String(physicsSettings.repulsion);
+  nodeSizeSlider.value = String(physicsSettings.nodeSize);
+  gravityValue.textContent = `${physicsSettings.gravity.toFixed(2)}x`;
+  repulsionValue.textContent = `${physicsSettings.repulsion.toFixed(2)}x`;
+  nodeSizeValue.textContent = `${physicsSettings.nodeSize.toFixed(2)}x`;
+}
+
+let themeColors = {};
+function refreshThemeColors() {
+  themeColors = {
+    cool: readCSSVar("--cool"),
+    warm: readCSSVar("--warm"),
+    nodeLow: readCSSVar("--node-low"),
+    nodeHigh: readCSSVar("--node-high"),
+    dim: readCSSVar("--dim"),
+    ink2: readCSSVar("--ink2"),
+    linkStroke: readCSSVar("--link-stroke"),
+    bg0: readCSSVar("--bg0"),
+  };
+}
+
+function applyTheme(theme) {
+  document.body.dataset.theme = theme;
+  try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  document.querySelectorAll(".theme-dot").forEach(el => {
+    el.classList.toggle("active", el.dataset.t === theme);
+  });
+  setTimeout(() => {
+    refreshThemeColors();
+    renderLegend();
+    if (nodeSel && !nodeSel.empty()) {
+      refreshNodeVisuals();
+      linkSel.attr("stroke", themeColors.linkStroke);
+    }
+  }, 20);
+}
+
+(function initTheme() {
+  let saved = "midnight";
+  try { saved = localStorage.getItem(THEME_KEY) || "midnight"; } catch {}
+  applyTheme(saved);
+})();
+
+themeSwitcher.querySelectorAll(".theme-dot").forEach(el => {
+  el.addEventListener("click", () => applyTheme(el.dataset.t));
+});
+
+physicsToggle.addEventListener("click", () => {
+  const nextOpen = !physicsControl.classList.contains("open");
+  physicsControl.classList.toggle("open", nextOpen);
+  physicsToggle.setAttribute("aria-expanded", String(nextOpen));
+});
+
+gravitySlider.addEventListener("input", () => {
+  physicsSettings.gravity = Number(gravitySlider.value);
+  applyPhysicsSettings();
+});
+
+repulsionSlider.addEventListener("input", () => {
+  physicsSettings.repulsion = Number(repulsionSlider.value);
+  applyPhysicsSettings();
+});
+
+nodeSizeSlider.addEventListener("input", () => {
+  physicsSettings.nodeSize = Number(nodeSizeSlider.value);
+  applyPhysicsSettings();
+});
 
 let W = window.innerWidth;
 let H = window.innerHeight;
 
 const svg = d3.select("#graph").attr("width", W).attr("height", H);
 const tip = d3.select("#tip");
-const connStateEl = document.getElementById("conn-state");
-const nodeCountEl = document.getElementById("node-count");
-const linkCountEl = document.getElementById("link-count");
 
-svg.append("defs").html(`
-  <filter id="glow" x="-70%" y="-70%" width="240%" height="240%">
-    <feGaussianBlur in="SourceGraphic" stdDeviation="3.4" result="blur"/>
+const defs = svg.append("defs");
+defs.html(`
+  <filter id="neb-glow" x="-70%" y="-70%" width="240%" height="240%">
+    <feGaussianBlur stdDeviation="3.2" result="blur"/>
     <feMerge>
       <feMergeNode in="blur"/>
       <feMergeNode in="SourceGraphic"/>
     </feMerge>
-  </filter>`);
+  </filter>
+`);
 
-const g = svg.append("g");
-const gLink = g.append("g");
-const gNode = g.append("g");
+const world = svg.append("g");
+const gLink = world.append("g").attr("stroke-linecap", "round");
+const gNode = world.append("g");
 
 const zoom = d3.zoom()
-  .scaleExtent([0.08, 5])
-  .on("zoom", event => g.attr("transform", event.transform));
+  .scaleExtent([0.1, 5])
+  .filter(event => event.type === "wheel")
+  .on("zoom", event => world.attr("transform", event.transform));
 
 svg.call(zoom);
 svg.on("wheel.zoom", null);
 svg.on("dblclick.zoom", null);
-svg.on("mousedown.zoom", null);
-svg.on("mousemove.zoom", null);
-svg.on("touchstart.zoom", null);
-svg.on("touchmove.zoom", null);
-svg.on("touchend.zoom", null);
 
 svg.node().addEventListener("wheel", event => {
   event.preventDefault();
-
   const current = d3.zoomTransform(svg.node());
-  const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
-  const nextScale = Math.max(0.08, Math.min(5, current.k * zoomFactor));
-  const centerX = W / 2;
-  const centerY = H / 2;
-
-  const graphCenterX = (centerX - current.x) / current.k;
-  const graphCenterY = (centerY - current.y) / current.k;
-
-  const nextX = centerX - graphCenterX * nextScale;
-  const nextY = centerY - graphCenterY * nextScale;
-
-  svg.call(
-    zoom.transform,
-    d3.zoomIdentity.translate(nextX, nextY).scale(nextScale)
-  );
+  const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const nextScale = Math.max(0.1, Math.min(5, current.k * factor));
+  const k = nextScale / current.k;
+  const px = W / 2, py = H / 2;
+  const nextX = px - (px - current.x) * k;
+  const nextY = py - (py - current.y) * k;
+  svg.call(zoom.transform, d3.zoomIdentity.translate(nextX, nextY).scale(nextScale));
 }, { passive: false });
 
 function resetZoom() {
-  const scale = window.innerWidth < 720 ? 0.82 : 1.0;
-  svg.call(
+  svg.transition().duration(420).call(
     zoom.transform,
     d3.zoomIdentity
-      .translate((W - W * scale) / 2, (H - H * scale) / 2)
-      .scale(scale)
   );
 }
 
-const TYPE_COLOR = {
-  knowledge: "#69d2ff",
-  self_constraint: "#ff9b5e",
-  fact: "#51e6d7",
-  rule: "#ffd166",
-  person: "#7fe9a6",
-  object: "#ffdc7a",
-  error: "#ff7d7d",
-  task_knowledge: "#9580ff"
-};
-
 const glowSet = new Map();
-
+const usePulseSet = new Map();
 let linkData = [];
 let nodeData = [];
 let linkSel = gLink.selectAll("line");
 let nodeSel = gNode.selectAll("circle");
-let heartbeatPhase = 0;
+
+const nodeCountEl = document.getElementById("node-count");
+const linkCountEl = document.getElementById("link-count");
+const connStateEl = document.getElementById("conn-state");
 
 function updateStats() {
   nodeCountEl.textContent = String(nodeData.length);
@@ -757,68 +1015,178 @@ function updateStats() {
 }
 
 function setConnectionState(text, live = true) {
-  connStateEl.textContent = text;
-  connStateEl.parentElement.classList.toggle("status-live", live);
+  connStateEl.innerHTML = live
+    ? `<span class="live-dot"></span>${text}`
+    : text;
+  connStateEl.classList.toggle("live", live);
 }
 
 function isGlowing(nid) {
   const expiry = glowSet.get(nid);
   if (!expiry) return false;
-  if (Date.now() > expiry) {
-    glowSet.delete(nid);
-    return false;
-  }
+  if (Date.now() > expiry) { glowSet.delete(nid); return false; }
   return true;
 }
 
 function highlightNodes(nids, duration = 2400) {
-  if (!nids.length) return;
-  const expiry = Date.now() + duration;
-  nids.forEach(nid => glowSet.set(nid, expiry));
-  sim.alpha(Math.max(sim.alpha(), 0.07)).restart();
+  if (!nids || !nids.length) return;
+  const now = Date.now();
+  const expiry = now + duration;
+  nids.forEach(nid => {
+    const key = String(nid);
+    glowSet.set(key, expiry);
+    usePulseSet.set(key, { start: now, end: expiry });
+  });
+  refreshNodeVisuals();
+  sim.alpha(Math.max(sim.alpha(), 0.3)).restart();
   setTimeout(() => {
-    nids.forEach(nid => glowSet.delete(nid));
-    sim.alpha(Math.max(sim.alpha(), 0.05)).restart();
+    nids.forEach(nid => {
+      const key = String(nid);
+      glowSet.delete(key);
+      usePulseSet.delete(key);
+    });
+    refreshNodeVisuals();
   }, duration + 80);
 }
 
-function nodeColor(d) {
-  const base = TYPE_COLOR[d.event_type] || "#5b7085";
-  if (isGlowing(d._nid)) {
-    const c = d3.color(base);
-    if (c) {
-      c.opacity = 1;
-      return c.brighter(1.05) + "";
-    }
-    return base;
+function nodeUseProgress(nid) {
+  const key = String(nid);
+  const pulse = usePulseSet.get(key);
+  if (!pulse) return 0;
+  const now = Date.now();
+  if (now >= pulse.end) {
+    usePulseSet.delete(key);
+    return 0;
   }
+  const total = Math.max(1, pulse.end - pulse.start);
+  return 1 - ((now - pulse.start) / total);
+}
 
-  const ageSec = (Date.now() - (d._ts || Date.now())) / 1000;
-  const c = d3.color(base);
-  if (!c) return base;
-  c.opacity = 1;
-  const dim = Math.max(0.78, 1 - ageSec / 240);
-  c.r = Math.round(c.r * dim);
-  c.g = Math.round(c.g * dim);
-  c.b = Math.round(c.b * dim);
-  return c + "";
+function nodeStrength(d) {
+  if (typeof d._strength !== "number") {
+    const deg = Math.min(1, (d._deg || 0) / 12);
+    d._strength = 0.35 + deg * 0.55;
+  }
+  return d._strength;
+}
+
+function nodeColor(d) {
+  if (d._core) return themeColors.warm || "#d39872";
+  const age = (Date.now() - (d._ts || Date.now())) / 18000;
+  const fade = Math.max(0.25, 1 - age);
+  const t = 0.18 + nodeStrength(d) * 0.5 * fade;
+  const interp = d3.interpolateRgb(themeColors.nodeLow || "#3a556e", themeColors.nodeHigh || "#cfe3f5");
+  let color = interp(Math.min(1, t));
+  const base = d3.color(color);
+  if (base) color = base.darker(0.55) + "";
+  const useBoost = nodeUseProgress(d._nid);
+  if (isGlowing(d._nid) || useBoost > 0) {
+    const c = d3.color(color);
+    if (c) return c.brighter(0.35 + useBoost * 0.6) + "";
+  }
+  return color;
 }
 
 function nodeRadius(d) {
-  const minRadius = 4.8;
-  const maxRadius = minRadius * 2.6;
-  const emphasis = Math.min(1, (d._deg || 0) / 16);
-  const base = minRadius + (maxRadius - minRadius) * emphasis;
-  return isGlowing(d._nid) ? Math.min(maxRadius, base * 1.08) : base;
+  const base = d._core ? 9 : 3.4 + Math.min((d._deg || 0) * 0.9, 5.4);
+  const childScale = 1 + Math.min(1.5, (d._childCount || 0) * 0.18);
+  const useBoost = nodeUseProgress(d._nid);
+  const glowScale = isGlowing(d._nid) ? 1.08 : 1;
+  const pulseScale = 1 + (Math.sin((1 - useBoost) * Math.PI * 3) * 0.04 + useBoost * 0.12);
+  const scaledBase = base * physicsSettings.nodeSize;
+  return Math.min(scaledBase * 2.5, scaledBase * childScale * glowScale * Math.max(1, pulseScale));
 }
 
 const sim = d3.forceSimulation()
-  .force("link", d3.forceLink().id(d => d._nid).distance(78).strength(0.5))
-  .force("charge", d3.forceManyBody().strength(d => -48 - (d._deg || 0) * 14))
-  .force("center", d3.forceCenter(W / 2, H / 2))
-  .force("radial", d3.forceRadial(150, W / 2, H / 2).strength(0.085))
-  .force("collision", d3.forceCollide().radius(d => nodeRadius(d) + 2.4))
+  .force("link", d3.forceLink().id(d => d._nid))
+  .force("charge", d3.forceManyBody())
+  .force("center", d3.forceCenter(W / 2, H / 2 - 10))
+  .force("x", d3.forceX(W / 2))
+  .force("y", d3.forceY(H / 2 - 10))
+  .force("radial", d3.forceRadial(180, W / 2, H / 2 - 10))
+  .force("collision", d3.forceCollide())
+  .alphaDecay(0.015)
+  .velocityDecay(0.22)
   .on("tick", tick);
+
+function linkDistance(link) {
+  const countFactor = Math.min(34, Math.sqrt(Math.max(1, nodeData.length)) * 4.2);
+  if (link._kind === "visual_parent") return 82 + countFactor * 0.45;
+  if (link._kind === "visual_random") return 108 + countFactor;
+  return 76 + countFactor * 0.55;
+}
+
+function linkStrength(link) {
+  if (link._kind === "visual_parent") return 0.2;
+  if (link._kind === "visual_random") return 0.035;
+  return 0.16;
+}
+
+function chargeStrength(node) {
+  const countBoost = Math.min(76, Math.sqrt(Math.max(1, nodeData.length)) * 3.5);
+  const baseCharge = -72 - countBoost * 0.32 - (node._deg || 0) * 2 - (node._childCount || 0) * 1;
+  return baseCharge * physicsSettings.repulsion;
+}
+
+function radialStrength() {
+  const baseSpread = nodeData.length > 36 ? 0.01 : 0.016;
+  return baseSpread * physicsSettings.gravity;
+}
+
+function centerPullStrength() {
+  const basePull = nodeData.length > 36 ? 0.06 : 0.085;
+  return basePull * physicsSettings.gravity;
+}
+
+function collisionRadius(node) {
+  const countPadding = nodeData.length > 36 ? 6 : 4;
+  return nodeRadius(node) + countPadding;
+}
+
+function updateSimulationForces() {
+  sim.force("link")
+    .distance(linkDistance)
+    .strength(linkStrength);
+
+  sim.force("charge")
+    .strength(chargeStrength);
+
+  sim.force("x")
+    .x(W / 2)
+    .strength(centerPullStrength());
+
+  sim.force("y")
+    .y(H / 2 - 10)
+    .strength(centerPullStrength());
+
+  sim.force("radial")
+    .radius(Math.min(Math.max(24, Math.sqrt(Math.max(1, nodeData.length)) * 6), 64))
+    .x(W / 2)
+    .y(H / 2 - 10)
+    .strength(radialStrength());
+
+  sim.force("collision")
+    .radius(collisionRadius)
+    .strength(0.82)
+    .iterations(nodeData.length > 40 ? 2 : 1);
+}
+
+function applyPhysicsSettings(restartAlpha = 0.3) {
+  updatePhysicsReadout();
+  updateSimulationForces();
+  refreshNodeVisuals();
+  sim.alpha(Math.max(sim.alpha(), restartAlpha)).restart();
+  savePhysicsSettings();
+}
+
+function refreshNodeVisuals() {
+  if (!nodeSel || nodeSel.empty()) return;
+  nodeSel
+    .attr("r", nodeRadius)
+    .attr("fill", nodeColor)
+    .attr("filter", d => (d._core || isGlowing(d._nid) || nodeUseProgress(d._nid) > 0) ? "url(#neb-glow)" : null)
+    .style("animation", d => nodeUseProgress(d._nid) > 0 ? "neb-node-use 10s ease-out" : null);
+}
 
 function tick() {
   linkSel
@@ -829,56 +1197,115 @@ function tick() {
 
   nodeSel
     .attr("cx", d => d.x)
-    .attr("cy", d => d.y)
-    .attr("r", nodeRadius)
-    .attr("fill", nodeColor)
-    .attr("filter", d => isGlowing(d._nid) ? "url(#glow)" : null);
+    .attr("cy", d => d.y);
+
+  refreshNodeVisuals();
 }
 
 function computeDegrees() {
-  const nodeById = new Map(nodeData.map(node => [node._nid, node]));
-  nodeData.forEach(node => {
-    node._deg = 0;
-    node._childCount = 0;
+  const nodeById = new Map(nodeData.map(n => [n._nid, n]));
+  nodeData.forEach(n => {
+    n._deg = 0;
+    n._childCount = 0;
   });
-  linkData.forEach(link => {
-    const source = typeof link.source === "object"
-      ? link.source
-      : nodeById.get(String(link.source));
-    const target = typeof link.target === "object"
-      ? link.target
-      : nodeById.get(String(link.target));
-    if (source) source._deg = (source._deg || 0) + 1;
-    if (target) target._deg = (target._deg || 0) + 1;
-    if (link._kind === "parent" && target) {
-      target._childCount = (target._childCount || 0) + 1;
+  linkData.forEach(l => {
+    const s = typeof l.source === "object" ? l.source : nodeById.get(String(l.source));
+    const t = typeof l.target === "object" ? l.target : nodeById.get(String(l.target));
+    if (s) s._deg = (s._deg || 0) + 1;
+    if (t) t._deg = (t._deg || 0) + 1;
+  });
+
+  nodeData.forEach(node => {
+    const childTargets = semanticChildTargets(node);
+    if (childTargets.size) {
+      node._childCount = childTargets.size;
+      return;
     }
+
+    const selfId = String(node._nid || "");
+    node._childCount = nodeData.reduce((count, candidate) => (
+      candidate.parent_id != null && String(candidate.parent_id) === selfId ? count + 1 : count
+    ), 0);
   });
 }
 
 function showTip(event, d) {
-  const label = d.title || (d.content || "").slice(0, 88) || d._nid;
+  const label = d.title || (d.content || "").slice(0, 120) || d._nid;
+  const type = d._core ? "self" : (d.event_type || "memory");
   tip
     .style("display", "block")
     .style("left", `${event.clientX + 14}px`)
     .style("top", `${event.clientY + 12}px`)
-    .html(`<span class="tip-type">${d.event_type || "memory"}</span><div>${label}</div>`);
+    .html(`<span class="tip-type">${type}</span><div>${label}</div>`);
 }
 
-function renderGraph() {
+function parseEntities(raw) {
+  try {
+    const p = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
+    return Array.isArray(p) ? p : [];
+  } catch { return []; }
+}
+
+function parseLinks(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function semanticChildTargets(node) {
+  const targets = new Set();
+  parseLinks(node.links).forEach(link => {
+    if (!link || typeof link !== "object") return;
+    const relation = String(link.relation || "").toLowerCase();
+    const targetId = String(link.target_id || link.targetId || "").trim();
+    if (relation === "parent_of" && targetId) targets.add(targetId);
+  });
+  return targets;
+}
+
+function markCore() {
+  nodeData.forEach(n => { n._core = false; });
+  const core = nodeData.find(n => parseEntities(n.entities).includes("agent:jarvis"))
+    || nodeData[0];
+  if (core) core._core = true;
+}
+
+function renderLegend() {
+  const el = document.getElementById("legend");
+  if (!el) return;
+  const total = nodeData.length;
+  const active = nodeData.filter(n => (Date.now() - (n._ts || 0)) < 15000).length;
+  const known = Math.max(0, total - active - 1);
+  const decayed = nodeData.filter(n => (Date.now() - (n._ts || 0)) > 60000).length;
+
+  const items = [
+    { name: "self", count: 1, color: themeColors.warm },
+    { name: "active", count: active, color: themeColors.nodeHigh },
+    { name: "known", count: known, color: themeColors.cool },
+    { name: "decayed", count: decayed, color: themeColors.dim },
+  ];
+
+  el.innerHTML = items.map(i =>
+    `<div class="legend-item">
+      <span class="legend-dot" style="background:${i.color}"></span>
+      <span class="legend-name">${i.name}</span>
+      <span class="legend-count">${i.count}</span>
+    </div>`
+  ).join("");
+}
+
+function renderGraph(restartAlpha = 1.2) {
   computeDegrees();
+  markCore();
   updateStats();
+  renderLegend();
 
   linkSel = linkSel.data(linkData, d => d._lid);
   linkSel.exit().remove();
   linkSel = linkSel.enter().append("line")
-    .attr("stroke", d => {
-      if (d._kind === "visual_random") return "rgba(91, 112, 133, 0.5)";
-      if (d._kind === "agent_visual") return "rgba(98, 90, 132, 0.5)";
-      return "rgba(113, 146, 183, 0.32)";
-    })
-    .attr("stroke-width", d => d._kind === "visual_random" ? 0.38 : (d._kind === "agent_visual" ? 0.5 : 0.9))
-    .attr("stroke-dasharray", null)
+    .attr("stroke", themeColors.linkStroke || "rgba(143,182,216,0.18)")
+    .attr("stroke-width", 0.6)
     .merge(linkSel);
 
   nodeSel = nodeSel.data(nodeData, d => d._nid);
@@ -891,30 +1318,25 @@ function renderGraph() {
     .call(d3.drag()
       .on("start", (event, d) => {
         if (!event.active) sim.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
+        d.fx = d.x; d.fy = d.y;
       })
       .on("drag", (event, d) => {
-        d.fx = event.x;
-        d.fy = event.y;
+        d.fx = event.x; d.fy = event.y;
       })
       .on("end", (event, d) => {
         if (!event.active) sim.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
+        d.fx = null; d.fy = null;
       }))
     .on("mouseover", showTip)
     .on("mousemove", event => {
-      tip
-        .style("left", `${event.clientX + 14}px`)
-        .style("top", `${event.clientY + 12}px`);
+      tip.style("left", `${event.clientX + 14}px`)
+         .style("top", `${event.clientY + 12}px`);
     })
     .on("mouseout", () => tip.style("display", "none"))
     .on("click", (event, d) => {
       d._ts = Date.now();
-      d3.select(event.currentTarget)
-        .transition().duration(120).attr("r", nodeRadius(d) + 8)
-        .transition().duration(220).attr("r", nodeRadius(d));
+      d._strength = Math.min(1, (d._strength || 0.5) + 0.25);
+      highlightNodes([d._nid], 900);
     });
 
   enter.transition().duration(360).attr("r", nodeRadius);
@@ -922,47 +1344,9 @@ function renderGraph() {
 
   sim.nodes(nodeData);
   sim.force("link").links(linkData);
-  sim.alpha(2).restart();
-}
-
-function makeLinkId(source, target) {
-  return `${source}=>${target}`;
-}
-
-function parseEntities(raw) {
-  try {
-    const parsed = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function addAgentVisualLinks(nodeMap, linkSet) {
-  const agentNodes = nodeData.filter(node => parseEntities(node.entities).includes("agent:jarvis"));
-  if (agentNodes.length < 3) return;
-
-  const ordered = [...agentNodes].sort((a, b) => String(a._nid).localeCompare(String(b._nid)));
-
-  ordered.forEach((node, index) => {
-    const targetA = ordered[(index + 2) % ordered.length];
-    const targetB = ordered[(index * 2 + 3) % ordered.length];
-
-    [targetA, targetB].forEach(target => {
-      if (!target || target._nid === node._nid) return;
-      const lid = `visual:${node._nid}=>${target._nid}`;
-      const reverse = `visual:${target._nid}=>${node._nid}`;
-      if (linkSet.has(lid) || linkSet.has(reverse)) return;
-
-      linkSet.add(lid);
-      linkData.push({
-        source: node._nid,
-        target: target._nid,
-        _lid: lid,
-        _kind: "agent_visual",
-      });
-    });
-  });
+  updateSimulationForces();
+  sim.alpha(restartAlpha).restart();
+  refreshNodeVisuals();
 }
 
 function deterministicIndex(seed, mod) {
@@ -975,33 +1359,83 @@ function deterministicIndex(seed, mod) {
   return Math.abs(hash >>> 0) % mod;
 }
 
-function addRandomVisualLinks(linkSet) {
-  if (nodeData.length < 4) return;
+function shuffleArray(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 
-  const ordered = [...nodeData].sort((a, b) => String(a._nid).localeCompare(String(b._nid)));
+function createVisualOrder(nodes) {
+  const coreNode = nodes.find(n => n._core || parseEntities(n.entities).includes("agent:jarvis")) || null;
+  const rest = shuffleArray(nodes.filter(n => !coreNode || n._nid !== coreNode._nid));
+  return coreNode ? [coreNode, ...rest] : rest;
+}
 
-  ordered.forEach((source, sourceIndex) => {
-    const linksPerNode = 1 + deterministicIndex(`count:${source._nid}`, 3);
-    for (let j = 0; j < linksPerNode; j++) {
-      const offsetBase = 2 + j * 2;
-      const offsetJitter = deterministicIndex(`${source._nid}:${j}`, Math.max(3, ordered.length - 1));
-      const offset = (offsetBase + offsetJitter) % ordered.length;
-      const target = ordered[(sourceIndex + offset) % ordered.length];
-      if (!source || !target || source._nid === target._nid) continue;
-
-      const lid = `visual:${source._nid}=>${target._nid}`;
-      const reverse = `visual:${target._nid}=>${source._nid}`;
-      if (linkSet.has(lid) || linkSet.has(reverse)) continue;
-
-      linkSet.add(lid);
-      linkData.push({
-        source: source._nid,
-        target: target._nid,
-        _lid: lid,
-        _kind: "visual_random",
-      });
+function chooseVisualParent(child, candidates, childCounts) {
+  if (!candidates.length) return null;
+  const weighted = [];
+  candidates.forEach(candidate => {
+    const currentChildren = childCounts.get(candidate._nid) || 0;
+    const recencyBias = Math.max(0, 400000 - Math.abs((child._ts || 0) - (candidate._ts || 0))) / 100000;
+    const coreBias = candidate._core ? 1.4 : 0;
+    const strengthBias = (candidate._strength || 0.4) * 0.8;
+    const capacityBias = currentChildren === 0 ? 1.2 : 0.35;
+    const entryCount = 1 + Math.max(0, Math.round((recencyBias + coreBias + strengthBias + capacityBias) * 2));
+    for (let w = 0; w < entryCount; w++) {
+      weighted.push(candidate);
     }
   });
+  if (!weighted.length) return candidates[Math.floor(Math.random() * candidates.length)] || null;
+  return weighted[Math.floor(Math.random() * weighted.length)] || null;
+}
+
+function getCurrentVisualChildCounts(nodes) {
+  const counts = new Map(nodes.map(n => [n._nid, 0]));
+  linkData.forEach(link => {
+    if (link._kind !== "visual_parent") return;
+    const parentId = typeof link.target === "object" ? String(link.target._nid) : String(link.target);
+    counts.set(parentId, (counts.get(parentId) || 0) + 1);
+  });
+  return counts;
+}
+
+function addRandomVisualLinks(linkSet) {
+  if (nodeData.length < 2) return;
+
+  const ordered = createVisualOrder(nodeData);
+  const childCounts = new Map(ordered.map(n => [n._nid, 0]));
+
+  for (let i = 1; i < ordered.length; i++) {
+    const child = ordered[i];
+    const candidates = ordered
+      .slice(0, i)
+      .filter(node => (childCounts.get(node._nid) || 0) < 2);
+
+    const parent = chooseVisualParent(child, candidates, childCounts);
+    if (!parent || parent._nid === child._nid) continue;
+
+    const lid = `visual:${child._nid}=>${parent._nid}`;
+    const rev = `visual:${parent._nid}=>${child._nid}`;
+    if (linkSet.has(lid) || linkSet.has(rev)) continue;
+
+    linkSet.add(lid);
+    linkData.push({ source: child._nid, target: parent._nid, _lid: lid, _kind: "visual_parent" });
+    childCounts.set(parent._nid, (childCounts.get(parent._nid) || 0) + 1);
+  }
+}
+
+function findAnchorNode(memory, nodeMap) {
+  const nodes = Array.from(nodeMap.values());
+  const childCounts = getCurrentVisualChildCounts(nodes);
+  const candidates = createVisualOrder(nodes)
+    .filter(node => (childCounts.get(node._nid) || 0) < 2);
+  return chooseVisualParent(memory, candidates, childCounts)
+    || nodeData.find(n => n._core)
+    || nodeData[0]
+    || null;
 }
 
 async function loadMemories() {
@@ -1009,11 +1443,9 @@ async function loadMemories() {
     const rows = await fetch(`${API}/memories?limit=120`).then(r => r.json());
     if (!Array.isArray(rows)) return;
 
-    const nodeMap = new Map();
-    const prevPositions = new Map(nodeData.map(node => [
-      node._nid,
-      { x: node.x, y: node.y, vx: node.vx, vy: node.vy }
-    ]));
+    const prevPositions = new Map(nodeData.map(n => [n._nid, {
+      x: n.x, y: n.y, vx: n.vx, vy: n.vy, fx: n.fx, fy: n.fy,
+    }]));
 
     nodeData = rows.map(row => {
       const nid = row.mem_id || String(row.id);
@@ -1025,130 +1457,161 @@ async function loadMemories() {
         x: prev ? prev.x : W / 2 + (Math.random() - 0.5) * 120,
         y: prev ? prev.y : H / 2 + (Math.random() - 0.5) * 120,
         vx: prev ? prev.vx : 0,
-        vy: prev ? prev.vy : 0
+        vy: prev ? prev.vy : 0,
+        fx: prev ? prev.fx : null,
+        fy: prev ? prev.fy : null,
       };
-    });
-
-    nodeData.forEach(node => {
-      nodeMap.set(node._nid, node);
-      nodeMap.set(String(node.id), node);
     });
 
     const linkSet = new Set();
     linkData = [];
-
-    addAgentVisualLinks(nodeMap, linkSet);
     addRandomVisualLinks(linkSet);
 
-    renderGraph();
+    renderGraph(1.1);
   } catch (error) {
     console.warn("[graph] load failed:", error.message);
+    setConnectionState("Offline", false);
   }
 }
 
 function addNewNodes(memories) {
-  const nodeMap = new Map(nodeData.map(node => [node._nid, node]));
+  const nodeMap = new Map(nodeData.map(n => [n._nid, n]));
   const newNids = [];
-
   memories.forEach(memory => {
     const nid = memory.id || memory.mem_id;
     if (!nid || nodeMap.has(String(nid))) return;
-
+    const anchor = findAnchorNode(memory, nodeMap);
+    const anchorX = anchor?.x ?? W / 2;
+    const anchorY = anchor?.y ?? (H / 2 - 10);
     const node = {
       ...memory,
       _nid: String(nid),
       mem_id: String(nid),
       event_type: memory.event_type || memory.type || "fact",
       _ts: Date.now(),
-      x: W / 2 + (Math.random() - 0.5) * 80,
-      y: H / 2 + (Math.random() - 0.5) * 80,
-      vx: 0,
-      vy: 0
+      _strength: 0.85,
+      x: anchorX + (Math.random() - 0.5) * 44,
+      y: anchorY + (Math.random() - 0.5) * 44,
+      vx: 0, vy: 0,
     };
-
     nodeData.push(node);
     nodeMap.set(node._nid, node);
     newNids.push(node._nid);
   });
-
   if (!newNids.length) return;
 
-  const linkSet = new Set(linkData.map(link => link._lid));
-  addAgentVisualLinks(nodeMap, linkSet);
+  const linkSet = new Set();
+  linkData = [];
   addRandomVisualLinks(linkSet);
-
-  renderGraph();
+  renderGraph(0.55);
   highlightNodes(newNids, 3500);
 }
 
+setInterval(() => sim.alpha(2).restart(), 3000);
+setInterval(() => { nodeData.forEach(n => { if (n._strength) n._strength *= 0.97; }); }, 2500);
+
 class ThoughtStream {
-  constructor(innerId) {
+  constructor(innerId, color) {
     this.el = document.getElementById(innerId);
-    this.curBlock = null;
+    this.color = color;
+    this.MAX = 8;
+    this.startedAt = Date.now();
+    this.curLine = null;
     this.curText = null;
-    this.MAX = 6;
+  }
+
+  tStamp() {
+    const sec = (Date.now() - this.startedAt) / 1000;
+    return sec.toFixed(3).padStart(6, "0");
   }
 
   trim() {
     while (this.el.children.length > this.MAX) {
-      const old = this.el.firstChild;
+      const old = this.el.lastChild;
       old.classList.add("fading");
       setTimeout(() => old.remove(), 520);
       break;
     }
   }
 
-  newBlock() {
-    this.trim();
-    this.curBlock = document.createElement("div");
-    this.curBlock.className = "stream-block";
+  newLine(type = "stream") {
+    this.curLine = document.createElement("div");
+    this.curLine.className = "stream-line";
+
+    const color = readCSSVar(`--${this.color}`);
+
+    const header = document.createElement("div");
+    header.className = "line-header";
+    header.innerHTML = `
+      <span class="line-dot" style="background:${color}"></span>
+      <span class="line-type" style="color:${color}">${type}</span>
+      <span class="line-time">${this.tStamp()}</span>
+    `;
+    this.curLine.appendChild(header);
 
     this.curText = document.createElement("div");
-    this.curText.className = "stream-text";
+    this.curText.className = "line-text";
+    this.curLine.appendChild(this.curText);
 
-    this.curBlock.appendChild(this.curText);
-    this.el.appendChild(this.curBlock);
+    this.el.insertBefore(this.curLine, this.el.firstChild);
+    this.trim();
   }
 
   append(text) {
-    if (!this.curText) this.newBlock();
+    if (!this.curText) this.newLine("stream");
     this.curText.textContent += text;
   }
 
   tool(name, args) {
-    const line = document.createElement("div");
-    line.className = "stream-tool";
+    if (!this.curLine) this.newLine("tool");
     const summary = Object.entries(args || {})
       .slice(0, 2)
       .map(([k, v]) => `${k}=${String(v).slice(0, 28)}`)
       .join(" ");
-    line.textContent = `${name}(${summary})`;
-    (this.curBlock || this.el).appendChild(line);
+    const toolEl = document.createElement("div");
+    toolEl.className = "line-tool";
+    toolEl.style.color = readCSSVar(`--${this.color}`);
+    toolEl.textContent = `→ ${name}(${summary})`;
+    this.curLine.appendChild(toolEl);
   }
 
   end() {
-    this.curBlock = null;
+    this.curLine = null;
     this.curText = null;
   }
 }
 
-const L1 = new ThoughtStream("si-l1");
-const L2 = new ThoughtStream("si-l2");
+const L1 = new ThoughtStream("si-l1", "cool");
+const L2 = new ThoughtStream("si-l2", "warm");
+
+let tokenAccum = 0;
+let tokenWindow = Date.now();
+const tokRateEl = document.getElementById("tok-rate");
+
+function bumpTokens(text) {
+  tokenAccum += (text || "").length / 3.4;
+  const now = Date.now();
+  if (now - tokenWindow > 700) {
+    const rate = tokenAccum / ((now - tokenWindow) / 1000);
+    tokRateEl.textContent = rate.toFixed(1);
+    tokenAccum = 0;
+    tokenWindow = now;
+    setTimeout(() => { if (tokRateEl.textContent !== "—" && tokenAccum === 0) tokRateEl.textContent = "—"; }, 4000);
+  }
+}
 
 function connectSSE() {
-  setConnectionState("Connected", true);
+  setConnectionState("connecting", true);
   const es = new EventSource(`${API}/events`);
 
-  es.onopen = () => setConnectionState("Streaming", true);
+  es.onopen = () => setConnectionState("streaming", true);
 
   es.onmessage = event => {
-    try {
-      handle(JSON.parse(event.data));
-    } catch (_) {}
+    try { handle(JSON.parse(event.data)); } catch (_) {}
   };
 
   es.onerror = () => {
-    setConnectionState("Reconnecting", false);
+    setConnectionState("reconnect", false);
     es.close();
     setTimeout(connectSSE, 3000);
   };
@@ -1156,17 +1619,18 @@ function connectSSE() {
 
 function extractNids(memList) {
   return (memList || [])
-    .map(memory => memory.mem_id || (memory.id != null ? String(memory.id) : null))
+    .map(m => m.mem_id || (m.id != null ? String(m.id) : null))
     .filter(Boolean);
 }
 
 function handle({ type, data = {} }) {
   switch (type) {
     case "layer1_start":
-      L1.newBlock();
+      L1.newLine("perceive");
       break;
     case "layer1_chunk":
       L1.append(data.text || "");
+      bumpTokens(data.text);
       break;
     case "layer1_stream_end":
       L1.end();
@@ -1176,14 +1640,15 @@ function handle({ type, data = {} }) {
       break;
     case "layer1_injector_result": {
       const nids = extractNids(data.matchedMemories);
-      if (nids.length) highlightNodes(nids, 1800);
+      if (nids.length) highlightNodes(nids, 30000);
       break;
     }
     case "layer2_start":
-      L2.newBlock();
+      L2.newLine("think");
       break;
     case "stream_chunk":
       L2.append(data.text || "");
+      bumpTokens(data.text);
       break;
     case "stream_end":
       L2.end();
@@ -1192,11 +1657,8 @@ function handle({ type, data = {} }) {
       L2.tool(data.name, data.args);
       break;
     case "injector_result": {
-      const nids = [
-        ...extractNids(data.matchedMemories),
-        ...extractNids(data.recallMemories)
-      ];
-      if (nids.length) highlightNodes(nids, 2200);
+      const nids = [...extractNids(data.matchedMemories), ...extractNids(data.recallMemories)];
+      if (nids.length) highlightNodes(nids, 30000);
       break;
     }
     case "memories_written":
@@ -1220,14 +1682,11 @@ const chatMessages = document.getElementById("chat-messages");
 const msgInput = document.getElementById("msg-input");
 const chatArea = document.getElementById("chat-area");
 const sendBtn = document.getElementById("send-btn");
-const resetViewBtn = document.getElementById("reset-view-btn");
 
 let closeTimer = null;
 let hasPendingJarvisMessage = false;
 let pendingMessageDismissed = false;
 let audioCtx = null;
-const CHAT_STORAGE_KEY = "jarvis-brain-ui-chat-history";
-const MAX_CHAT_HISTORY = 60;
 
 function ensureAudioContext() {
   if (!audioCtx) {
@@ -1241,14 +1700,7 @@ function ensureAudioContext() {
 async function playJarvisAlert() {
   const ctx = ensureAudioContext();
   if (!ctx) return;
-
-  try {
-    if (ctx.state === "suspended") await ctx.resume();
-  } catch (error) {
-    console.warn("[audio]", error.message);
-    return;
-  }
-
+  try { if (ctx.state === "suspended") await ctx.resume(); } catch { return; }
   const now = ctx.currentTime;
   const master = ctx.createGain();
   master.gain.setValueAtTime(0.0001, now);
@@ -1268,10 +1720,8 @@ async function playJarvisAlert() {
   oscB.frequency.exponentialRampToValueAtTime(1320, now + 0.34);
   oscB.connect(master);
 
-  oscA.start(now);
-  oscA.stop(now + 0.22);
-  oscB.start(now + 0.12);
-  oscB.stop(now + 0.36);
+  oscA.start(now); oscA.stop(now + 0.22);
+  oscB.start(now + 0.12); oscB.stop(now + 0.36);
 
   oscA.addEventListener("ended", () => oscA.disconnect(), { once: true });
   oscB.addEventListener("ended", () => oscB.disconnect(), { once: true });
@@ -1288,38 +1738,28 @@ function loadStoredChatHistory() {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(item =>
-      item &&
-      (item.role === "user" || item.role === "jarvis") &&
-      typeof item.text === "string"
+    return parsed.filter(i =>
+      i && (i.role === "user" || i.role === "jarvis") && typeof i.text === "string"
     ).slice(-MAX_CHAT_HISTORY);
-  } catch (error) {
-    console.warn("[chat-storage]", error.message);
-    return [];
-  }
+  } catch { return []; }
 }
 
 function saveStoredChatHistory() {
   try {
-    const history = Array.from(chatMessages.children).map(node => ({
-      role: node.classList.contains("msg-user") ? "user" : "jarvis",
-      text: Array.from(node.childNodes)
-        .filter(child => child.nodeType === Node.TEXT_NODE)
-        .map(child => child.textContent || "")
-        .join("")
+    const history = Array.from(chatMessages.children).map(n => ({
+      role: n.classList.contains("msg-user") ? "user" : "jarvis",
+      text: Array.from(n.childNodes)
+        .filter(c => c.nodeType === Node.TEXT_NODE)
+        .map(c => c.textContent || "")
+        .join(""),
     })).slice(-MAX_CHAT_HISTORY);
     localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(history));
-  } catch (error) {
-    console.warn("[chat-storage]", error.message);
-  }
+  } catch {}
 }
 
 function openChat(autoClose = false) {
   chatHistory.classList.add("open");
-  if (closeTimer) {
-    clearTimeout(closeTimer);
-    closeTimer = null;
-  }
+  if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
   if (autoClose && (!hasPendingJarvisMessage || pendingMessageDismissed) && !isTyping()) scheduleClose(4500);
 }
 
@@ -1335,31 +1775,18 @@ function scheduleClose(ms = 2400) {
 }
 
 chatArea.addEventListener("mouseenter", () => {
-  if (closeTimer) {
-    clearTimeout(closeTimer);
-    closeTimer = null;
-  }
+  if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
   openChat();
 });
-
 chatArea.addEventListener("mouseleave", () => scheduleClose());
 msgInput.addEventListener("focus", () => openChat());
-msgInput.addEventListener("blur", () => {
-  if (!isTyping()) scheduleClose();
-});
+msgInput.addEventListener("blur", () => { if (!isTyping()) scheduleClose(); });
 msgInput.addEventListener("input", () => {
-  if (isTyping()) {
-    openChat();
-  } else if (!hasPendingJarvisMessage || pendingMessageDismissed) {
-    scheduleClose();
-  }
+  if (isTyping()) openChat();
+  else if (!hasPendingJarvisMessage || pendingMessageDismissed) scheduleClose();
 });
 
-function addMsg(role, text) {
-  addMsgWithOptions(role, text);
-}
-
-function addMsgWithOptions(role, text, options = {}) {
+function addMsg(role, text, options = {}) {
   const { persist = true, alert = role === "jarvis", pending = true } = options;
   const div = document.createElement("div");
   div.className = `msg msg-${role}`;
@@ -1387,12 +1814,7 @@ function addMsgWithOptions(role, text, options = {}) {
 
 function restoreChatHistory() {
   const history = loadStoredChatHistory();
-  history.forEach(item => addMsgWithOptions(item.role, item.text, {
-    persist: false,
-    alert: false,
-    pending: false
-  }));
-
+  history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false }));
   if (history.length) {
     pendingMessageDismissed = true;
     chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -1402,7 +1824,6 @@ function restoreChatHistory() {
 async function send() {
   const text = msgInput.value.trim();
   if (!text) return;
-
   msgInput.value = "";
   addMsg("user", text);
   openChat();
@@ -1412,7 +1833,7 @@ async function send() {
     await fetch(`${API}/message`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text, from_id: "ID:000001" })
+      body: JSON.stringify({ content: text, from_id: "ID:000001" }),
     });
   } catch (error) {
     console.warn("[send]", error.message);
@@ -1430,26 +1851,54 @@ msgInput.addEventListener("keydown", event => {
   }
 });
 
+document.querySelectorAll(".panel, .console, .theme-switcher, .reset-view").forEach(el => {
+  el.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
+});
+
+physicsControl.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
+
 document.addEventListener("pointerdown", event => {
-  if (!hasPendingJarvisMessage || isTyping()) return;
   if (chatArea.contains(event.target)) return;
-  pendingMessageDismissed = true;
-  closeChat();
+  if (hasPendingJarvisMessage && !isTyping()) {
+    pendingMessageDismissed = true;
+    closeChat();
+    return;
+  }
+  if (!isTyping()) {
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+    chatHistory.classList.remove("open");
+  }
 });
 
 window.addEventListener("resize", () => {
   W = window.innerWidth;
   H = window.innerHeight;
   svg.attr("width", W).attr("height", H);
-  sim.force("center", d3.forceCenter(W / 2, H / 2))
-    .force("radial", d3.forceRadial(150, W / 2, H / 2).strength(0.085));
+  sim.force("center", d3.forceCenter(W / 2, H / 2 - 10))
+     .force("x", d3.forceX(W / 2))
+     .force("y", d3.forceY(H / 2 - 10))
+     .force("radial", d3.forceRadial(180, W / 2, H / 2 - 10));
+  updateSimulationForces();
   sim.alpha(0.4).restart();
 });
 
+d3.timer(() => {
+  if (glowSet.size === 0 && usePulseSet.size === 0) return;
+  refreshNodeVisuals();
+});
+
+readPhysicsSettings();
+updatePhysicsReadout();
+refreshThemeColors();
 loadMemories();
+setInterval(() => {
+  loadMemories();
+}, 5 * 60 * 1000);
 connectSSE();
 restoreChatHistory();
-resetZoom();
 </script>
 </body>
 </html>

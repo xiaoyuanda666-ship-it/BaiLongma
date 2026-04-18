@@ -1,0 +1,20 @@
+TechCrunch 科技新闻 2026-04-18 15:32
+
+【AI领域】
+- Cursor洽谈以$500亿估值融资$20亿+，企业增长迅猛
+- Kevin Weil和Bill Peebles离开OpenAI，公司继续裁撤"副项目"
+- Anthropic推出Claude Design，用于快速创建可视化
+- "Tokenmaxxing"正在让开发者生产力下降
+
+【人物动态】
+- Sam Altman的World项目准备扩展人类验证帝国，第一站是Tinder
+- Zoom与World合作，在会议中验证人类身份
+
+【 Fintech】
+- Stripe和Airwallex从收购传闻变成正面竞争
+
+【安全】
+- 黑客正在利用未修补的Windows安全漏洞入侵组织
+
+【 Robotics】
+- Chef Robotics从"机器人烹饪墓地"中逃脱，称业务蓬勃发展
