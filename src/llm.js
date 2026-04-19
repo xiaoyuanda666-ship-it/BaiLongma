@@ -20,7 +20,12 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   }
 
   if (typeof topP === 'number' && topP > 0) requestParams.top_p = topP
-  if (!thinking) requestParams.thinking = { type: 'disabled' }
+  // thinking 控制：MiniMax 用 thinking 参数；DeepSeek 通过模型 id 切换
+  if (config.provider === 'deepseek') {
+    requestParams.model = thinking ? 'deepseek-reasoner' : 'deepseek-chat'
+  } else {
+    if (!thinking) requestParams.thinking = { type: 'disabled' }
+  }
   if (maxTokens) requestParams.max_tokens = maxTokens
   if (toolSchemas.length > 0) {
     requestParams.tools = toolSchemas
@@ -65,9 +70,28 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       continue
     }
 
+    // DeepSeek reasoner 思考内容（独立字段，不在 content 里）
+    const reasoningText = delta?.reasoning_content
+    if (reasoningText) {
+      if (!thinkDone) {
+        inThink = true
+        if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
+        onStream?.({ event: 'chunk', text: reasoningText })
+      }
+      continue
+    }
+
     // 文本增量
     const text = delta?.content
     if (!text) continue
+
+    // DeepSeek：思考流结束、进入正式回答时，先关闭 think 流
+    if (inThink && !thinkDone) {
+      inThink = false
+      thinkDone = true
+      if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false }
+    }
+
     fullContent += text
 
     // 解析 <think> 标签流式推送

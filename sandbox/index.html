@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>天气 · 2026-04-19</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  min-height: 100vh;
+  color: #fff;
+  padding: 40px 20px;
+}
+.container { max-width: 600px; margin: 0 auto; }
+
+.header {
+  text-align: center;
+  margin-bottom: 40px;
+}
+.header h1 { font-size: 14px; font-weight: 400; opacity: 0.6; letter-spacing: 2px; }
+
+.main-card {
+  background: rgba(255,255,255,0.1);
+  backdrop-filter: blur(20px);
+  border-radius: 24px;
+  padding: 40px;
+  text-align: center;
+  margin-bottom: 24px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.location { font-size: 18px; opacity: 0.8; margin-bottom: 8px; }
+.date { font-size: 13px; opacity: 0.5; margin-bottom: 30px; }
+.weather-icon { font-size: 80px; margin-bottom: 20px; }
+.temp { font-size: 96px; font-weight: 200; line-height: 1; }
+.temp span { font-size: 40px; opacity: 0.7; }
+.desc { font-size: 24px; margin-top: 10px; opacity: 0.9; }
+
+.details {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.detail-card {
+  background: rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.detail-card .label { font-size: 11px; opacity: 0.5; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.detail-card .value { font-size: 24px; font-weight: 500; }
+
+.hourly-title { font-size: 14px; opacity: 0.6; margin-bottom: 16px; padding-left: 4px; }
+.hourly {
+  display: flex;
+  overflow-x: auto;
+  gap: 12px;
+  padding-bottom: 10px;
+}
+.hourly::-webkit-scrollbar { height: 4px; }
+.hourly::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
+.hour-card {
+  background: rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 16px;
+  min-width: 70px;
+  text-align: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.hour-card .time { font-size: 11px; opacity: 0.5; margin-bottom: 8px; }
+.hour-card .icon { font-size: 28px; margin-bottom: 8px; }
+.hour-card .temp { font-size: 18px; font-weight: 500; }
+
+.sun-times {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 30px;
+  padding-top: 30px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+}
+.sun-item { text-align: center; }
+.sun-item .emoji { font-size: 32px; margin-bottom: 8px; }
+.sun-item .time { font-size: 20px; font-weight: 500; }
+.sun-item .label { font-size: 11px; opacity: 0.5; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header"><h1>天 气</h1></div>
+  
+  <div class="main-card">
+    <div class="location">📍 Elk Grove Village, Illinois</div>
+    <div class="date">2026年4月19日 · 周日</div>
+    <div class="weather-icon">☀️</div>
+    <div class="temp">3<span>°C</span></div>
+    <div class="desc">晴朗</div>
+    
+    <div class="sun-times">
+      <div class="sun-item">
+        <div class="emoji">🌅</div>
+        <div class="time">06:05</div>
+        <div class="label">日出</div>
+      </div>
+      <div class="sun-item">
+        <div class="emoji">🌇</div>
+        <div class="time">19:38</div>
+        <div class="label">日落</div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="details">
+    <div class="detail-card">
+      <div class="label">体感温度</div>
+      <div class="value">0°C</div>
+    </div>
+    <div class="detail-card">
+      <div class="label">湿度</div>
+      <div class="value">67%</div>
+    </div>
+    <div class="detail-card">
+      <div class="label">风速</div>
+      <div class="value">10km/h</div>
+    </div>
+    <div class="detail-card">
+      <div class="label">气压</div>
+      <div class="value">1019</div>
+    </div>
+    <div class="detail-card">
+      <div class="label">能见度</div>
+      <div class="value">16km</div>
+    </div>
+    <div class="detail-card">
+      <div class="label">紫外线</div>
+      <div class="value">0</div>
+    </div>
+  </div>
+  
+  <div class="hourly-title">今日预报</div>
+  <div class="hourly">
+    <div class="hour-card"><div class="time">00:00</div><div class="icon">☀️</div><div class="temp">4°</div></div>
+    <div class="hour-card"><div class="time">03:00</div><div class="icon">☀️</div><div class="temp">2°</div></div>
+    <div class="hour-card"><div class="time">06:00</div><div class="icon">🌅</div><div class="temp">1°</div></div>
+    <div class="hour-card"><div class="time">09:00</div><div class="icon">☀️</div><div class="temp">8°</div></div>
+    <div class="hour-card"><div class="time">12:00</div><div class="icon">☀️</div><div class="temp">14°</div></div>
+    <div class="hour-card"><div class="time">15:00</div><div class="icon">☀️</div><div class="temp">16°</div></div>
+    <div class="hour-card"><div class="time">18:00</div><div class="icon">🌇</div><div class="temp">13°</div></div>
+    <div class="hour-card"><div class="time">21:00</div><div class="icon">☀️</div><div class="temp">8°</div></div>
+  </div>
+</div>
+</body>
+</html>

@@ -30,10 +30,14 @@ if (persistedTask) {
   console.log(`[系统] 恢复进行中的任务：${persistedTask.slice(0, 80)}`)
 }
 
-// 注册 Provider
-if (config.apiKey) {
-  registerProvider(new MinimaxProvider({ apiKey: config.apiKey }))
+// 注册 Provider（多媒体能力用 MiniMax，独立于 LLM 选择）
+// 注意：本文件第 102 行有 `function process(...)` 声明会遮蔽全局 process，
+// 所以用 globalThis.process 访问环境变量。
+const MINIMAX_API_KEY_ENV = globalThis.process.env.MINIMAX_API_KEY
+if (MINIMAX_API_KEY_ENV) {
+  registerProvider(new MinimaxProvider({ apiKey: MINIMAX_API_KEY_ENV }))
 }
+console.log(`[LLM] 使用 ${config.provider}（模型: ${config.model}）`)
 
 // 运行状态
 const state = {
@@ -44,7 +48,6 @@ const state = {
   sessionCounter: 0,
   recentActions: [], // 最近几轮的行动摘要，格式：{ ts, summary }
   thoughtStack: [],  // 念头栈，最多保留 3 个，格式：{ concept, line }
-  interruptedSnapshot: null, // 被打断时保存的状态快照（方案A）：{ phase, label, partialContent, toolCallLog, task, ts }
 }
 
 function newSessionRef() {
@@ -101,33 +104,11 @@ function handleLLMFailure(err, label, msg) {
 async function process(input, label, msg = null) {
   const sessionRef = newSessionRef()
   const isTick = label === 'TICK' || label.startsWith('TICK ')
-  const isFirstAttempt = !msg || !msg.retryCount
 
   console.log(`\n── ${label} ──`)
   emitEvent(isTick ? 'tick' : 'message_received', { label, input: input.slice(0, 300) })
 
-  // 消费上一轮被打断的快照：作为一条念头注入，让 L1/L2 知道"刚才做了一半的事"
-  if (state.interruptedSnapshot) {
-    const snap = state.interruptedSnapshot
-    const actions = snap.toolCallLog?.length
-      ? snap.toolCallLog.map(t => t.name).join(',')
-      : '无'
-    const partial = snap.partialContent ? `，已说出：${snap.partialContent.slice(0, 60)}` : ''
-    state.thoughtStack.push({
-      concept: '被打断',
-      line: `刚在${snap.phase}处理「${snap.label}」被打断（已动作:${actions}${partial}）`,
-    })
-    if (state.thoughtStack.length > 3) state.thoughtStack.shift()
-    emitEvent('interrupt_resumed', { phase: snap.phase, label: snap.label, actions, partial: partial.slice(0, 120) })
-    state.interruptedSnapshot = null
-  }
-
-  // 记录用户消息（非 TICK，且是第一次处理；重试时不重复写入会话记录）
-  if (!isTick && isFirstAttempt) {
-    const fromMatch = label.match(/消息 from (.+)/)
-    const fromId = fromMatch ? fromMatch[1] : 'unknown'
-    insertConversation({ role: 'user', from_id: fromId, content: input, timestamp: nowTimestamp() })
-  }
+  // 用户消息已在 pushMessage 阶段写入 conversations（到达即入聊天记录），此处不再重复写。
 
   // ── L1 预思考：收到他者消息时先过一层思考器，能直接回就短回复，不然交给 L2 ──
   currentAbortController = new AbortController()
@@ -162,19 +143,9 @@ async function process(input, label, msg = null) {
     }
 
     if (l1.aborted) {
-      console.log('[系统] L1 被打断')
-      state.interruptedSnapshot = {
-        phase: 'L1',
-        label,
-        partialContent: l1.content || '',
-        toolCallLog: l1.toolCallLog || [],
-        task: state.task,
-        ts: nowTimestamp(),
-      }
-      await runRecognizer({
-        userMessage: input, jarvisThink: '', jarvisResponse: l1.content || '',
-        toolCallLog: l1.toolCallLog || [], task: state.task, sessionRef,
-      })
+      // 微信式打断：丢弃本次半成品（不存 snapshot、不跑 recognizer），
+      // 下轮处理最新消息时，本条消息已在 conversationWindow 里作为上下文可见。
+      console.log('[系统] L1 被新消息打断，丢弃半成品')
       currentAbortController = null
       return
     }
@@ -277,6 +248,7 @@ async function process(input, label, msg = null) {
     thoughtStack: state.thoughtStack,
     entities,
     recentActions: state.recentActions,
+    actionLog: injection.actionLog || [],
     hasActiveTask,
     task: state.task || null,
     taskKnowledge: taskKnowledgeText,
@@ -324,7 +296,6 @@ async function process(input, label, msg = null) {
   } catch (err) {
     if (err.name === 'AbortError') {
       console.log('[系统] LLM 处理被打断（新消息到达）')
-      // 仍需运行识别器，将部分结果存入记忆
       llmResult = { content: '', toolResult: null, aborted: true }
     } else {
       currentAbortController = null
@@ -336,24 +307,8 @@ async function process(input, label, msg = null) {
   }
 
   if (llmResult.aborted) {
-    console.log('[系统] 已打断，跳过本轮响应处理，直接进入识别器')
-    state.interruptedSnapshot = {
-      phase: 'L2',
-      label,
-      partialContent: llmResult.content || '',
-      toolCallLog: [...toolCallLog],
-      task: state.task,
-      ts: nowTimestamp(),
-    }
-    // 仅运行识别器（保存已发生的工具调用记录），然后退出
-    await runRecognizer({
-      userMessage: input,
-      jarvisThink: '',
-      jarvisResponse: llmResult.content || '',
-      toolCallLog,
-      task: state.task,
-      sessionRef,
-    })
+    // 微信式打断：丢弃半成品，下轮处理最新消息时从 conversationWindow 自然读到本条上下文。
+    console.log('[系统] L2 被新消息打断，丢弃半成品')
     return
   }
 

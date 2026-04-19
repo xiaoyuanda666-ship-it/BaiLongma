@@ -1,4 +1,4 @@
-﻿export function buildSystemPrompt({ persona = '', memories = '', directions = '', constraints = [], conversationWindow = [], personMemory = null, thoughtStack = [], entities = [], recentActions = [], hasActiveTask = false, task = null, taskKnowledge = '', extraContext = '', lastToolResult = null, existenceDesc = '刚刚苏醒' } = {}) {
+﻿export function buildSystemPrompt({ persona = '', memories = '', directions = '', constraints = [], conversationWindow = [], personMemory = null, thoughtStack = [], entities = [], recentActions = [], actionLog = [], hasActiveTask = false, task = null, taskKnowledge = '', extraContext = '', lastToolResult = null, existenceDesc = '刚刚苏醒' } = {}) {
   const fixed = `正在运行。**必须全程使用中文思考与表达，包括 <think> 块内容。** 以第一人称"我"指称自己。
 
 ${existenceDesc}。
@@ -22,12 +22,12 @@ ${existenceDesc}。
     ? `\n\n## 当前状态\n无进行中的任务。感知此刻，你按需行动。若你决定开始做某件事，写下 [SET_TASK: 描述]。`
     : `\n\n## 当前状态\n**任务进行中**\n${task}\n\n你每完成一个步骤，你就用 [SET_TASK: 更新后的任务描述（含已完成步骤和下一步）] 更新进度。全部完成后写下 [CLEAR_TASK]。`
 
-  const dynamic = buildDynamicSection({ persona, memories, directions, constraints, conversationWindow, personMemory, thoughtStack, entities, recentActions, taskKnowledge, extraContext, lastToolResult })
+  const dynamic = buildDynamicSection({ persona, memories, directions, constraints, conversationWindow, personMemory, thoughtStack, entities, recentActions, actionLog, taskKnowledge, extraContext, lastToolResult })
 
   return `${fixed}${idleConstraint}\n\n${dynamic}`.trim()
 }
 
-function buildDynamicSection({ persona, memories, directions, constraints, conversationWindow, personMemory, thoughtStack, entities, recentActions, taskKnowledge, extraContext, lastToolResult }) {
+function buildDynamicSection({ persona, memories, directions, constraints, conversationWindow, personMemory, thoughtStack, entities, recentActions, actionLog, taskKnowledge, extraContext, lastToolResult }) {
   const parts = []
 
   if (constraints?.length > 0) {
@@ -54,7 +54,7 @@ function buildDynamicSection({ persona, memories, directions, constraints, conve
   }
 
   if (persona) {
-    parts.push(`## 关于自己\n${persona}`)
+    parts.push(`## 你自己的信息\n${persona}`)
   }
 
   if (entities?.length > 0) {
@@ -65,6 +65,11 @@ function buildDynamicSection({ persona, memories, directions, constraints, conve
   if (recentActions?.length > 0) {
     const list = recentActions.map(a => `- ${a.ts.slice(11, 16)} ${a.summary}`).join('\n')
     parts.push(`## 最近行动\n${list}\n\n↑ 这些事刚做过，不要重复。`)
+  }
+
+  if (actionLog?.length > 0) {
+    const lines = actionLog.slice(-20).map(a => `- ${a.timestamp?.slice(11, 16) || ''} ${a.tool || ''} · ${a.summary || ''}`).join('\n')
+    parts.push(`## 行动日志\n${lines}`)
   }
 
   if (lastToolResult) {
@@ -83,15 +88,15 @@ function buildDynamicSection({ persona, memories, directions, constraints, conve
   }
 
   if (memories) {
-    parts.push(`## 记忆\n${memories}`)
+    parts.push(`## 你的记忆\n${memories}`)
   }
 
   if (directions) {
-    parts.push(`## 当下方向\n${directions}`)
+    parts.push(`## 你当下方向\n${directions}`)
   }
 
   if (parts.length === 0) {
-    parts.push('## 记忆\n空白。这是起点。')
+    parts.push('## 记忆\n空白。这是你的起点。')
   }
 
   return parts.join('\n\n')
@@ -147,7 +152,7 @@ export function buildLayer1Prompt({ identity = '', memories = '', directions = '
   }
 
   if (actionLog?.length > 0) {
-    const lines = actionLog.slice(-10).map(a => `- ${a.ts?.slice(11, 16) || ''} ${a.summary || ''}`).join('\n')
+    const lines = actionLog.slice(-10).map(a => `- ${a.timestamp?.slice(11, 16) || ''} ${a.tool || ''} · ${a.summary || ''}`).join('\n')
     parts.push(`## 行动日志\n${lines}`)
   }
 

@@ -10,7 +10,7 @@ import { nowTimestamp } from './time.js'
 const IDENTITY_MEM_ID = 'my_definition'
 
 // 一层思考器：信息收集 + 直接回复（与 L2 统一通过 send_message 工具发消息）
-const L1_TOOLS = ['read_file', 'list_dir', 'fetch_url', 'search_memory', 'send_message']
+const L1_TOOLS = ['read_file', 'list_dir', 'fetch_url', 'search_memory', 'send_message', 'exec_command']
 
 // 解析 L1 输出：是否调用了 send_message 决定走 l1_reply 还是 next_thinker
 function parseL1Output(rawOutput, sentMessages) {
