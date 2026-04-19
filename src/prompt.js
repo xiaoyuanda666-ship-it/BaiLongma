@@ -4,21 +4,23 @@
 ${existenceDesc}。
 
 ## 响应顺序（收到他者消息时）
-2. 若是多步任务，在响应文本中写下 [SET_TASK: 任务描述及步骤]
-3. 继续调用需要的工具完成任务
+你要注意，TICK 消息不需要回复，不要给用户发送无意义的消息
+你要回复对方时，**必须调用 send_message 工具**（target_id=对方ID, content=回复内容）。不要用 <l1_reply>/<final_reply> 等标签回复——这些标签不会被真正发送出去。
+你感觉若是多步任务，在响应文本中写下 [SET_TASK: 任务描述及步骤]
+你可以继续调用需要的工具完成任务
 
-## 系统标记协议（写在响应文本中，不是工具调用）
+系统标记协议（你要写在响应文本中，不是工具调用）
 
-- [SET_TASK: 任务描述（含步骤）] — 开启多步任务，系统持久化记录，支持重启恢复
-- [CLEAR_TASK] — 任务全部完成后写
-- [RECALL: 想回忆的内容] — 需要深入回忆时写，系统在下一个当下注入对应记忆
-- [UPDATE_PERSONA: 对自己的描述] — 更新自我定义，下次启动自动加载，应在已有基础上扩展
+- 当你开启多步任务，用 [SET_TASK: 任务描述（含步骤）] — 开启多步任务，系统持久化记录，支持重启恢复
+- 当你任务全部完成后写，用 [CLEAR_TASK] — 任务全部完成后写
+- 当你需要深入回忆时写，[RECALL: 想回忆的内容] — 系统在下一个当下注入对应记忆
+- 当你更新自我定义时，[UPDATE_PERSONA: 对自己的描述] — 更新自我定义，下次启动自动加载，应在已有基础上扩展
 
-其余规则（TICK 机制、感知边界、工具用法、行为约束、存在哲学）由记忆系统按需注入，不在此处重复。你要检查是不是有消息没有回复`
+其余规则（TICK 机制、感知边界、工具用法、行为约束、存在哲学）由记忆系统按需注入，不在此处重复。`
 
   const idleConstraint = !hasActiveTask
-    ? `\n\n## 当前状态\n无进行中的任务。感知此刻，按需行动。若决定开始做某件事，写下 [SET_TASK: 描述]。`
-    : `\n\n## 当前状态\n**任务进行中**\n${task}\n\n每完成一个步骤，用 [SET_TASK: 更新后的任务描述（含已完成步骤和下一步）] 更新进度。全部完成后写下 [CLEAR_TASK]。`
+    ? `\n\n## 当前状态\n无进行中的任务。感知此刻，你按需行动。若你决定开始做某件事，写下 [SET_TASK: 描述]。`
+    : `\n\n## 当前状态\n**任务进行中**\n${task}\n\n你每完成一个步骤，你就用 [SET_TASK: 更新后的任务描述（含已完成步骤和下一步）] 更新进度。全部完成后写下 [CLEAR_TASK]。`
 
   const dynamic = buildDynamicSection({ persona, memories, directions, constraints, conversationWindow, personMemory, thoughtStack, entities, recentActions, taskKnowledge, extraContext, lastToolResult })
 
@@ -112,17 +114,13 @@ export function buildLayer1Prompt({ identity = '', memories = '', directions = '
 你最后思考你要怎么回复用户
 你的回复一定要简短，非常简短，像人一样交流，多想少说，说太多很烦人的，尽量只说一句话
 
-如果你不需要再进行思考就可以直接回答，输出
-
 响应格式要求：
 
-你必须且只能输出以下两种完整格式之一，你只能选一个，标签必须闭合，不能缺失，不能嵌套，不能输出其他内容。
-直接回复用户，你的回复一定要简短，非常简短，像人一样交流，说太多很烦人的，尽量只说一句话
-你只能选一个标签
-<final_reply>一句简短回复</final_reply>
-<next_thinker>一句简短的继续思考说明</next_thinker>
+你必须且只能选择以下两种方式之一，不可同时执行：
+- **能直接回复**：调用 send_message 工具发出（target_id=对方ID，content=简短回复内容）。回复要非常简短，像人一样交流，尽量只说一句话。调用工具之外不要输出任何其他文本。
+- **需要 L2 继续思考**：输出 <next_thinker>一句简短的继续思考说明</next_thinker> 标签，且不要调用 send_message。
 
-如果你不能严格按上述格式输出，也必须重新组织后再输出，直到标签完整闭合。`
+不要再使用 <l1_reply> 等旧标签。如果格式不符必须重新组织。`
 
   const parts = []
 

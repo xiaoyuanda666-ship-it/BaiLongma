@@ -3,35 +3,45 @@ import { buildLayer1Prompt } from './prompt.js'
 import { runInjector, formatMemoriesForPrompt } from './memory/injector.js'
 import { emitEvent } from './events.js'
 import { setRateLimited } from './quota.js'
-import { getMemoryByMemId } from './db.js'
+import { getMemoryByMemId, insertConversation } from './db.js'
+import { nowTimestamp } from './time.js'
 
 // 身份记忆的语义 ID（与 seed-memories.js 中 my_definition 对齐）
 const IDENTITY_MEM_ID = 'my_definition'
 
-// 一层思考器只允许使用信息收集类工具
-const L1_TOOLS = ['read_file', 'list_dir', 'fetch_url', 'search_memory']
+// 一层思考器：信息收集 + 直接回复（与 L2 统一通过 send_message 工具发消息）
+const L1_TOOLS = ['read_file', 'list_dir', 'fetch_url', 'search_memory', 'send_message']
 
-// 解析 L1 输出：提取 <final_reply> 或 <next_thinker> 标签
-function parseL1Output(output) {
-  const finalMatch = output.match(/<final_reply>([\s\S]*?)<\/final_reply>/i)
-  if (finalMatch) {
-    return { mode: 'final_reply', content: finalMatch[1].trim() }
+// 解析 L1 输出：是否调用了 send_message 决定走 l1_reply 还是 next_thinker
+function parseL1Output(rawOutput, sentMessages) {
+  if (sentMessages.length > 0) {
+    return { mode: 'l1_reply', content: sentMessages.map(m => m.content).join('\n') }
   }
-  const nextMatch = output.match(/<next_thinker>([\s\S]*?)<\/next_thinker>/i)
+  const nextMatch = rawOutput.match(/<next_thinker>([\s\S]*?)<\/next_thinker>/i)
   if (nextMatch) {
     return { mode: 'next_thinker', content: nextMatch[1].trim() }
   }
-  // 格式不合规：降级为 next_thinker，把原始输出当作 hint 传下去
+  // 兜底：未调工具也未给出 next_thinker —— 把原文（去 think 块）截短作为 hint
   console.warn('[L1] 输出格式不合规，降级为 next_thinker')
-  return { mode: 'next_thinker', content: output.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().slice(0, 200) }
+  return {
+    mode: 'next_thinker',
+    content: rawOutput.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().slice(0, 200),
+  }
 }
 
-export async function runLayer1({ input, state, sessionRef, signal }) {
+export async function runLayer1({ input, state, sessionRef, signal, toolContext = {} }) {
   emitEvent('layer1_start', { input: input.slice(0, 200) })
 
   // 1. 注入器：为一层思考器准备记忆和方向
   // 注意：念头栈的更新由调用方（process）负责，避免 L1+L2 双推
   const injection = await runInjector({ message: input, state })
+
+  // 用 injection 的 conversationWindow 扩展 toolContext 的可见目标列表
+  const conversationIds = (injection.conversationWindow || [])
+    .flatMap(m => [m.from_id, m.to_id])
+    .filter(id => id && id !== 'jarvis')
+  const enrichedIds = [...new Set([...(toolContext.allowedTargetIds || []), ...conversationIds])]
+  const enrichedToolContext = { allowedTargetIds: enrichedIds, visibleTargetIds: enrichedIds }
   const memoriesText = formatMemoriesForPrompt(injection.memories, injection.recallMemories)
   const directionsText = injection.directions.join('\n')
 
@@ -73,8 +83,9 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
 
   emitEvent('layer1_prompt', { content: systemPrompt })
 
-  // 3. 调用 LLM（仅信息收集工具）
+  // 3. 调用 LLM（信息收集工具 + send_message）
   const toolCallLog = []
+  const sentMessages = []
   let result
 
   try {
@@ -84,9 +95,22 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
       tools: L1_TOOLS,
       temperature: 0,
       signal,
+      toolContext: enrichedToolContext,
       onToolCall: (name, args, res) => {
-        emitEvent('layer1_tool', { name, args, result: String(res).slice(0, 500) })
-        toolCallLog.push({ name, args, result: String(res).slice(0, 500) })
+        const resStr = String(res)
+        emitEvent('layer1_tool', { name, args, result: resStr.slice(0, 500) })
+        toolCallLog.push({ name, args, result: resStr.slice(0, 500) })
+        if (name === 'send_message' && args?.target_id && args?.content && resStr.startsWith('消息已发送')) {
+          const ts = nowTimestamp()
+          insertConversation({
+            role: 'jarvis',
+            from_id: 'jarvis',
+            to_id: args.target_id,
+            content: args.content,
+            timestamp: ts,
+          })
+          sentMessages.push({ targetId: args.target_id, content: args.content, ts })
+        }
       },
       onStream: ({ event, text }) => {
         if (event === 'start') emitEvent('layer1_stream_start', {})
@@ -96,7 +120,7 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
     })
   } catch (err) {
     if (err.name === 'AbortError') {
-      return { mode: 'next_thinker', content: '', toolCallLog, injection, rawOutput: '', aborted: true }
+      return { mode: 'next_thinker', content: '', toolCallLog, injection, rawOutput: '', sentMessages, aborted: true }
     }
     if (err.message?.includes('429') || err.status === 429) setRateLimited()
     throw err
@@ -105,8 +129,8 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
   const rawOutput = result.content
   emitEvent('layer1_done', { content: rawOutput.slice(0, 1000) })
 
-  // 4. 解析输出模式
-  const parsed = parseL1Output(rawOutput)
+  // 4. 解析输出模式（基于是否调用了 send_message）
+  const parsed = parseL1Output(rawOutput, sentMessages)
   console.log(`[L1] 模式：${parsed.mode} | 内容：${parsed.content.slice(0, 80)}`)
   emitEvent('layer1_result', { mode: parsed.mode, content: parsed.content })
 
@@ -118,11 +142,12 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
   }
 
   return {
-    mode: parsed.mode,       // 'final_reply' | 'next_thinker'
+    mode: parsed.mode,       // 'l1_reply' | 'next_thinker'
     content: parsed.content, // 回复内容 或 传给 L2 的 hint
     rawOutput,
     toolCallLog,
     injection,
+    sentMessages,
     aborted: false,
   }
 }

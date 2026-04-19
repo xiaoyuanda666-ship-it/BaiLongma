@@ -52,28 +52,30 @@ function newSessionRef() {
   return `session_${Date.now()}_${state.sessionCounter}`
 }
 
-function buildToolContext(label, injection) {
-  const currentTargetId = label.startsWith('消息 from ')
-    ? label.slice('消息 from '.length).trim()
-    : null
-
+export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
   const visibleTargetIds = [
     currentTargetId,
-    ...((injection.conversationWindow || []).flatMap(item => [item.from_id, item.to_id])),
-  ]
-    .filter(id => id && id !== 'jarvis')
+    ...conversationWindow.flatMap(item => [item.from_id, item.to_id]),
+  ].filter(id => id && id !== 'jarvis')
 
-  // TICK 场景下没有当前发送者，也没有窗口：补充"最近 24h 有过双向对话的熟人"
-  // 让意识体可主动联系已建立过连接的对象，但仍不能发给从未接触过的陌生 ID
-  if (!currentTargetId) {
+  // TICK 场景：补充"最近 24h 有过双向对话的熟人"，让意识体可主动联系已建立连接的对象
+  if (includeRecentPartners && !currentTargetId) {
     visibleTargetIds.push(...getRecentConversationPartners(24, 20))
   }
 
-  const uniqueVisibleTargetIds = [...new Set(visibleTargetIds.filter(Boolean))]
-  return {
-    allowedTargetIds: uniqueVisibleTargetIds,
-    visibleTargetIds: uniqueVisibleTargetIds,
-  }
+  const unique = [...new Set(visibleTargetIds.filter(Boolean))]
+  return { allowedTargetIds: unique, visibleTargetIds: unique }
+}
+
+function buildToolContextFromLabel(label, injection) {
+  const currentTargetId = label.startsWith('消息 from ')
+    ? label.slice('消息 from '.length).trim()
+    : null
+  return buildToolContext({
+    currentTargetId,
+    conversationWindow: injection.conversationWindow || [],
+    includeRecentPartners: true,
+  })
 }
 
 const MAX_MESSAGE_RETRIES = 3
@@ -132,9 +134,20 @@ async function process(input, label, msg = null) {
   let l1ThoughtPushed = false
 
   if (!isTick && msg && msg.fromId && msg.fromId !== 'jarvis') {
+    // L1 也通过 send_message 真发消息，需要带上 toolContext 校验目标 ID
+    const l1ToolContext = buildToolContext({
+      currentTargetId: msg.fromId,
+      conversationWindow: [],
+    })
     let l1
     try {
-      l1 = await runLayer1({ input, state, sessionRef, signal: currentAbortController.signal })
+      l1 = await runLayer1({
+        input,
+        state,
+        sessionRef,
+        signal: currentAbortController.signal,
+        toolContext: l1ToolContext,
+      })
     } catch (err) {
       handleLLMFailure(err, `L1 ${label}`, msg)
       currentAbortController = null
@@ -165,26 +178,22 @@ async function process(input, label, msg = null) {
       return
     }
 
-    if (l1.mode === 'final_reply' && l1.content.trim()) {
-      const targetId = msg.fromId
-      const content = l1.content.trim()
-      const timestamp = nowTimestamp()
+    if (l1.mode === 'l1_reply' && l1.sentMessages?.length > 0) {
+      // L1 通过 send_message 工具已经真正发出消息（emit + insertConversation 在 layer1 onToolCall 中完成）
+      const responseContent = l1.sentMessages.map(m => m.content).join('\n')
+      emitEvent('response', { sessionRef, label, content: responseContent })
+      console.log(`\nJarvis (L1): ${responseContent}`)
 
-      insertConversation({ role: 'jarvis', from_id: 'jarvis', to_id: targetId, content, timestamp })
-      emitEvent('message', { from: 'consciousness', to: targetId, content, timestamp })
-      emitEvent('response', { sessionRef, label, content })
-      console.log(`\nJarvis (L1): ${content}`)
+      for (const sm of l1.sentMessages) {
+        state.recentActions.push({ ts: sm.ts, summary: `send_message → ${sm.targetId}` })
+      }
+      if (state.recentActions.length > 5) {
+        state.recentActions = state.recentActions.slice(-5)
+      }
 
-      state.recentActions.push({ ts: timestamp, summary: `send_message → ${targetId}` })
-      if (state.recentActions.length > 5) state.recentActions.shift()
-
-      const toolCallLog = [
-        ...(l1.toolCallLog || []),
-        { name: 'send_message', args: { target_id: targetId, content }, result: `消息已发送至 ${targetId}` },
-      ]
       const memories = await runRecognizer({
-        userMessage: input, jarvisThink: '', jarvisResponse: content,
-        toolCallLog, task: state.task, sessionRef,
+        userMessage: input, jarvisThink: '', jarvisResponse: responseContent,
+        toolCallLog: l1.toolCallLog || [], task: state.task, sessionRef,
       })
       emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
       currentAbortController = null
@@ -280,7 +289,7 @@ async function process(input, label, msg = null) {
   // 3. 调用 Jarvis LLM（可被新消息打断；controller 在 L1 阶段或此处已初始化）
   const toolCallLog = []
   let llmResult
-  const toolContext = buildToolContext(label, injection)
+  const toolContext = buildToolContextFromLabel(label, injection)
   if (!currentAbortController) currentAbortController = new AbortController()
   try {
     llmResult = await callLLM({
@@ -354,16 +363,17 @@ async function process(input, label, msg = null) {
   console.log('\nJarvis:', response)
   emitEvent('response', { sessionRef, label, content: response })
 
-  // L2 救援：模型在 L2 输出 <final_reply> 文本但未调 send_message —— 视作要回复的他者消息
+  // L2 救援：模型在 L2 输出 <l1_reply>/<final_reply> 文本但未调 send_message —— 视作要回复的他者消息
   if (msg && msg.fromId && !isTick && !toolCallLog.some(t => t.name === 'send_message')) {
-    const finalReplyMatch = response.match(/<final_reply>([\s\S]*?)<\/final_reply>/i)
-    const rescued = finalReplyMatch?.[1]?.trim()
+    const tagMatch = response.match(/<l1_reply>([\s\S]*?)<\/l1_reply>/i)
+      || response.match(/<final_reply>([\s\S]*?)<\/final_reply>/i)
+    const rescued = tagMatch?.[1]?.trim()
     if (rescued) {
       const targetId = msg.fromId
       const timestamp = nowTimestamp()
       insertConversation({ role: 'jarvis', from_id: 'jarvis', to_id: targetId, content: rescued, timestamp })
       emitEvent('message', { from: 'consciousness', to: targetId, content: rescued, timestamp })
-      toolCallLog.push({ name: 'send_message', args: { target_id: targetId, content: rescued }, result: `消息已发送至 ${targetId}（L2 final_reply 救援）` })
+      toolCallLog.push({ name: 'send_message', args: { target_id: targetId, content: rescued }, result: `消息已发送至 ${targetId}（L2 标签救援）` })
       state.recentActions.push({ ts: timestamp, summary: `send_message → ${targetId}` })
       if (state.recentActions.length > 5) state.recentActions.shift()
       console.log(`[L2 救援] Jarvis → ${targetId}: ${rescued}`)

@@ -34,7 +34,7 @@ const STOP_WORDS = new Set([
   '帮我','请','好的','明白','告诉','说','做','去','来','把','让','被',
 ])
 
-function extractKeywords(text) {
+function extractKeywords(text, maxKeywords = 8) {
   if (!text) return []
   // 去掉标点、数字、英文（保留中文词和有意义的英文词）
   const cleaned = text
@@ -42,33 +42,43 @@ function extractKeywords(text) {
     .replace(/\s+/g, ' ')
     .trim()
 
-  const words = []
-  // 中文：按2-4字切片
+  // 用 Map 记录词频，相同词的命中次数即权重
+  const freq = new Map()
+  const bump = (w) => {
+    if (!w || w.length < 2 || STOP_WORDS.has(w)) return
+    freq.set(w, (freq.get(w) || 0) + 1)
+  }
+
+  // 中文：按2-4字切片，长词优先（4>3>2），频次累加
   const chinese = cleaned.replace(/[a-zA-Z]+/g, ' ')
   for (let i = 0; i < chinese.length - 1; i++) {
     for (let len = 2; len <= 4 && i + len <= chinese.length; len++) {
-      const w = chinese.slice(i, i + len).trim()
-      if (w.length >= 2 && !STOP_WORDS.has(w)) words.push(w)
+      bump(chinese.slice(i, i + len).trim())
     }
   }
   // 英文：按空格分词，保留长度 >= 3 的
   const english = text.match(/[a-zA-Z]{3,}/g) || []
-  words.push(...english.filter(w => !STOP_WORDS.has(w.toLowerCase())))
+  for (const w of english) {
+    if (!STOP_WORDS.has(w.toLowerCase())) bump(w)
+  }
 
-  // 去重，取前 8 个
-  return [...new Set(words)].slice(0, 8)
+  // 排序：先按词长（长词信息量大），再按频次
+  return [...freq.entries()]
+    .sort((a, b) => (b[0].length - a[0].length) || (b[1] - a[1]))
+    .slice(0, maxKeywords)
+    .map(([w]) => w)
 }
 
 // ── 相关记忆搜索：多关键词分别搜索后合并 ──────────────────────────────────
-function searchRelevantMemories(text, limit = 20) {
-  const keywords = extractKeywords(text)
+function searchRelevantMemories(text, limit = 20, maxKeywords = 8, perKeyword = 3) {
+  const keywords = extractKeywords(text, maxKeywords)
   if (keywords.length === 0) return []
 
   const seen = new Set()
   const results = []
 
   for (const kw of keywords) {
-    const hits = searchMemories(kw, 3)
+    const hits = searchMemories(kw, perKeyword)
     for (const m of hits) {
       if (!seen.has(m.id)) {
         seen.add(m.id)
@@ -169,17 +179,7 @@ export async function runInjector({ message, state, hint = '' }) {
   // 始终注入：约束
   const constraints = getActiveConstraints()
 
-  // 相关记忆：基于当前输入/任务关键词检索
-  // 若有 hint（L1 输出），提取其关键词一并检索，让 L2 获得更丰富的记忆注入
-  const hintText = hint ? hint.replace(/<think>[\s\S]*?<\/think>/gi, '').slice(0, 400) : ''
-  const searchText = [
-    messageBody,
-    hasTask ? state.task : '',
-    hintText,
-  ].filter(Boolean).join(' ')
-  const relevantMemories = searchText ? searchRelevantMemories(searchText, hint ? 10 : 6) : []
-
-  // 发送者相关
+  // 发送者相关：先取，方便后面把对话内容纳入关键词检索
   let personMemory = null
   let conversationWindow = []
   let senderMemories = []
@@ -187,8 +187,29 @@ export async function runInjector({ message, state, hint = '' }) {
   if (senderId) {
     personMemory = getPersonMemory(senderId)
     conversationWindow = getRecentConversation(senderId, 20, 24)
-    senderMemories = getMemoriesByEntity(senderId, 6)
+    senderMemories = getMemoriesByEntity(senderId, 10)
   }
+
+  // 相关记忆：基于当前输入/任务/最近 20 回合对话/L1 hint 综合检索
+  const hintText = hint ? hint.replace(/<think>[\s\S]*?<\/think>/gi, '').slice(0, 400) : ''
+  const conversationText = conversationWindow
+    .map(m => m.content || '')
+    .filter(Boolean)
+    .join(' ')
+    .slice(0, 4000)
+  const searchText = [
+    messageBody,
+    hasTask ? state.task : '',
+    hintText,
+    conversationText,
+  ].filter(Boolean).join(' ')
+  // 对话历史进入后，关键词与召回上限一并放开
+  const hasHistory = !!conversationText
+  const memoryLimit = hasHistory ? 25 : (hint ? 12 : 8)
+  const keywordLimit = hasHistory ? 24 : 10
+  const relevantMemories = searchText
+    ? searchRelevantMemories(searchText, memoryLimit, keywordLimit, 3)
+    : []
 
   // 任务相关
   const taskKnowledge = hasTask ? getTaskKnowledge(20) : []
@@ -225,7 +246,8 @@ export async function runInjector({ message, state, hint = '' }) {
   }
 
   // 合并记忆：按相关性去重，工具记忆也通过 searchRelevantMemories 按需命中
-  const memories = deduplicateMemories([relevantMemories, senderMemories]).slice(0, 10)
+  const mergeCap = hasHistory ? 30 : 12
+  const memories = deduplicateMemories([relevantMemories, senderMemories]).slice(0, mergeCap)
 
   // ── 阶段二：LLM（仅 directions + thought + extra_tools）──────────────────
   // memorySummary 综合相关记忆

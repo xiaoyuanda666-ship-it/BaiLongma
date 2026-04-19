@@ -1684,11 +1684,18 @@ class ThoughtStream {
 
     this.el.insertBefore(this.curLine, this.el.firstChild);
     this.trim();
+    this.scrollToLatest();
+  }
+
+  scrollToLatest() {
+    if (!this.curLine) return;
+    this.curLine.scrollIntoView({ block: "end", inline: "nearest" });
   }
 
   append(text) {
     if (!this.curText) this.newLine("stream");
     this.curText.textContent += text;
+    this.scrollToLatest();
   }
 
   tool(name, args) {
@@ -1702,6 +1709,7 @@ class ThoughtStream {
     toolEl.style.color = readCSSVar(`--${this.color}`);
     toolEl.textContent = `→ ${name}(${summary})`;
     this.curLine.appendChild(toolEl);
+    this.scrollToLatest();
   }
 
   end() {
