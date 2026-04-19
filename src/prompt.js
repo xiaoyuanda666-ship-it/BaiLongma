@@ -152,7 +152,7 @@ export function buildLayer1Prompt({ identity = '', memories = '', directions = '
 
   if (actionLog?.length > 0) {
     const lines = actionLog.slice(-10).map(a => `- ${a.timestamp?.slice(11, 16) || ''} ${a.tool || ''} · ${a.summary || ''}`).join('\n')
-    parts.push(`## 行动日志\n${lines}`)
+    parts.push(`## 行动日志\n${lines}\n\n↑ 这些事刚做过，优先复用结果，不要重复读文件、重复搜、重复抓取。`)
   }
 
   if (memories) {

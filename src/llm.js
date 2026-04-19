@@ -3,6 +3,7 @@ import { config } from './config.js'
 import { executeTool } from './capabilities/executor.js'
 import { getToolSchemas } from './capabilities/schemas.js'
 import { recordUsage, shouldThrottle } from './quota.js'
+import { insertActionLog } from './db.js'
 
 const client = new OpenAI({
   apiKey: config.apiKey,
@@ -238,6 +239,48 @@ function parseXmlToolCalls(content) {
   return calls
 }
 
+function formatToolArgPreview(args = {}) {
+  return Object.entries(args)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .slice(0, 3)
+    .map(([key, value]) => `${key}=${String(value).slice(0, 80)}`)
+    .join(', ')
+}
+
+function summarizeToolCall(name, args = {}) {
+  switch (name) {
+    case 'send_message':
+      return `send_message -> ${args.target_id || '(unknown)'}`
+    case 'read_file':
+      return `read_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'list_dir':
+      return `list_dir(${args.path || args.dir || args.directory || '.'})`
+    case 'fetch_url':
+      return `fetch_url(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
+    case 'search_memory':
+      return `search_memory(${String(args.keyword || args.query || args.q || '?').slice(0, 60)})`
+    case 'write_file':
+      return `write_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'delete_file':
+      return `delete_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'make_dir':
+      return `make_dir(${args.path || args.dir || args.directory || '?'})`
+    case 'exec_command':
+      return `exec_command(${String(args.command || args.cmd || '?').slice(0, 80)})`
+    default: {
+      const preview = formatToolArgPreview(args)
+      return preview ? `${name}(${preview})` : name
+    }
+  }
+}
+
+function buildToolLogDetail(args = {}, result = '') {
+  const argPreview = formatToolArgPreview(args)
+  const resultPreview = String(result || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+  if (argPreview && resultPreview) return `${argPreview} | ${resultPreview}`
+  return argPreview || resultPreview
+}
+
 // 主调用：agentic 循环，连续执行工具直到模型停止
 // 返回 { content: string, toolResult: { name, args, result } | null, aborted: bool }
 export async function callLLM({ systemPrompt, message, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, toolContext = {} }) {
@@ -308,6 +351,12 @@ export async function callLLM({ systemPrompt, message, temperature = 0.5, topP =
       }
       const normalizedArgs = normalizeArgs(tc.name, args)
       const result = await executeTool(tc.name, normalizedArgs, toolContext)
+      insertActionLog({
+        timestamp: new Date().toISOString(),
+        tool: tc.name,
+        summary: summarizeToolCall(tc.name, normalizedArgs),
+        detail: buildToolLogDetail(normalizedArgs, result),
+      })
       console.log(`[工具结果] ${tc.name}: ${result.slice(0, 100)}`)
       if (onToolCall) onToolCall(tc.name, args, result)
       lastToolResult = { name: tc.name, args: normalizedArgs, result }
