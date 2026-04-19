@@ -163,11 +163,15 @@ async function process(input, label, msg = null) {
         state.recentActions = state.recentActions.slice(-5)
       }
 
-      const memories = await runRecognizer({
+      // 识别器后台运行，不阻塞下一轮消息/TICK 处理
+      runRecognizer({
         userMessage: input, jarvisThink: '', jarvisResponse: responseContent,
         toolCallLog: l1.toolCallLog || [], task: state.task, sessionRef,
+      }).then(memories => {
+        emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
+      }).catch(err => {
+        console.error('[识别器] 后台运行失败:', err)
       })
-      emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
       currentAbortController = null
       return
     }
@@ -396,18 +400,22 @@ async function process(input, label, msg = null) {
   }
 
   // 6. 识别器：分离 think 块和正文，传入完整经历
+  //    后台运行，不阻塞下一轮消息/TICK 处理
   const thinkMatch = response.match(/<think>([\s\S]*?)<\/think>/i)
   const jarvisThink = thinkMatch ? thinkMatch[1].trim() : ''
   const jarvisText = response.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
-  const memories = await runRecognizer({
+  runRecognizer({
     userMessage: input,
     jarvisThink,
     jarvisResponse: jarvisText,
     toolCallLog,
     task: state.task,
     sessionRef,
+  }).then(memories => {
+    emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
+  }).catch(err => {
+    console.error('[识别器] 后台运行失败:', err)
   })
-  emitEvent('memories_written', { count: memories?.length || 0, memories: memories || [] })
 }
 
 let processing = false
