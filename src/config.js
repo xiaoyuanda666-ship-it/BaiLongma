@@ -37,8 +37,8 @@ if (!current.apiKey) {
 }
 
 export const config = {
-  // Tick 间隔（毫秒）- 二层思考器系统 TICK 固定 5 分钟
-  tickInterval: 5 * 60 * 1000,
+  // Tick 间隔（毫秒）- 默认空闲 TICK 10 分钟
+  tickInterval: 10 * 60 * 1000,
 
   // LLM 配置（根据 LLM_PROVIDER 选择）
   provider,

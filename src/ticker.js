@@ -2,13 +2,13 @@
 //
 // 设计：
 // - L2 通过 set_tick_interval 工具指定 { seconds, ttl }
-// - seconds ∈ [2, 3600]，ttl ∈ [1, 50]，越界 clamp
+// - seconds ∈ [10, 3600]，ttl ∈ [1, 50]，越界 clamp
 // - 每次 onTick 执行后 ttl--，到 0 自动回归默认节奏
-// - 优先级低于"有消息(0)"和"429 限流"，高于"有任务(2s)"和"空闲默认"
+// - 优先级低于"有消息(0)"和"429 限流"，高于"有任务(30s)"和"空闲默认"
 
 import { emitEvent } from './events.js'
 
-const MIN_SECONDS = 2
+const MIN_SECONDS = 10
 const MAX_SECONDS = 3600
 const MIN_TTL = 1
 const MAX_TTL = 50

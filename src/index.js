@@ -444,7 +444,7 @@ async function onTick() {
 //   1. 有消息待处理 → 0
 //   2. 429 rate-limited → quota 的 10 分钟
 //   3. L2 自定义节奏（ttl > 0）→ L2 指定值
-//   4. 有任务 → 2s
+//   4. 有任务 → 30s
 //   5. 空闲 → config.tickInterval
 function scheduleNextTick() {
   if (!isRunning()) return
@@ -468,8 +468,8 @@ function scheduleNextTick() {
     interval = customMs
     label = `L2 自定义 ${interval / 1000}s（剩 ${ticker.ttl} 轮${ticker.reason ? ' · ' + ticker.reason : ''}）`
   } else if (taskActive) {
-    interval = 2000
-    label = '任务模式 2s'
+    interval = 30000
+    label = '任务模式 30s'
   } else {
     interval = config.tickInterval
     label = `${interval / 1000}s`

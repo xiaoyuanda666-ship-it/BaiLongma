@@ -2001,7 +2001,7 @@ function closeChat() {
   chatHistory.classList.remove("open");
 }
 
-function scheduleClose(ms = 2400) {
+function scheduleClose(ms = 100) {
   if ((hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping()) return;
   if (closeTimer) clearTimeout(closeTimer);
   closeTimer = setTimeout(closeChat, ms);
