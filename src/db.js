@@ -806,6 +806,27 @@ export function getRecentConversation(entityId, limit = 20, maxHours = 24) {
   return rows.reverse() // 按时间正序返回
 }
 
+// 获取最近 N 小时内有过双向对话的所有他者 ID（按最近对话时间倒序）
+// 用于 TICK 场景给 send_message 提供"熟人"白名单，让意识体可主动联系已建立过连接的对象
+export function getRecentConversationPartners(maxHours = 24, limit = 20) {
+  const db = getDB()
+  const cutoff = new Date(Date.now() - maxHours * 3600 * 1000).toISOString()
+  const rows = db.prepare(`
+    SELECT party, MAX(timestamp) AS last_ts FROM (
+      SELECT from_id AS party, timestamp FROM conversations
+        WHERE timestamp >= ? AND from_id IS NOT NULL AND from_id <> 'jarvis'
+      UNION ALL
+      SELECT to_id AS party, timestamp FROM conversations
+        WHERE timestamp >= ? AND to_id   IS NOT NULL AND to_id   <> 'jarvis'
+    )
+    WHERE party IS NOT NULL AND party <> ''
+    GROUP BY party
+    ORDER BY last_ts DESC
+    LIMIT ?
+  `).all(cutoff, cutoff, limit)
+  return rows.map(r => normalizeConversationPartyId(r.party)).filter(Boolean)
+}
+
 // 写入一条行动日志
 export function insertActionLog({ timestamp, tool, summary, detail = '' }) {
   const db = getDB()

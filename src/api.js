@@ -46,7 +46,9 @@ export function startAPI(port = 3721) {
           const body = Buffer.concat(chunks).toString('utf-8')
           const { from_id = 'ID:000001', content, channel = 'API' } = JSON.parse(body)
           if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
-          pushMessage(from_id, content.trim(), channel)
+          const trimmed = content.trim()
+          pushMessage(from_id, trimmed, channel)
+          emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString() })
           jsonResponse(res, 200, { ok: true })
         } catch (e) {
           jsonResponse(res, 400, { error: e.message })
@@ -124,6 +126,13 @@ export function startAPI(port = 3721) {
     // GET /quota
     if (req.method === 'GET' && url.pathname === '/quota') {
       jsonResponse(res, 200, getQuotaStatus())
+      return
+    }
+
+    // GET /favicon.ico ? silence the browser's automatic favicon request
+    if (req.method === 'GET' && url.pathname === '/favicon.ico') {
+      res.writeHead(204)
+      res.end()
       return
     }
 

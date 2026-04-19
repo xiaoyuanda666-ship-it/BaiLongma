@@ -402,7 +402,7 @@ body {
   border-radius: 14px;
   border: 1px solid var(--line-strong);
   background: var(--console-bg);
-  backdrop-filter: blur(28px);
+  backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(28px);
 }
 
@@ -448,6 +448,13 @@ body {
   align-self: flex-start;
   color: var(--cool);
   border-color: color-mix(in srgb, var(--cool) 25%, transparent);
+}
+
+.msg-external {
+  align-self: center;
+  color: var(--ink2);
+  border-color: var(--line-strong);
+  max-width: 78%;
 }
 
 .msg-label {
@@ -1081,7 +1088,7 @@ function nodeColor(d) {
   const useBoost = nodeUseProgress(d._nid);
   if (isGlowing(d._nid) || useBoost > 0) {
     const c = d3.color(color);
-    if (c) return c.brighter(0.35 + useBoost * 0.6) + "";
+    if (c) return c.brighter(2 + useBoost * 2) + "";
   }
   return color;
 }
@@ -1785,6 +1792,12 @@ function handle({ type, data = {} }) {
         openChat(true);
       }
       break;
+    case "message_in":
+      if (data.from_id && data.from_id !== "ID:000001") {
+        addMsg("external", data.content, { label: data.from_id, alert: false });
+        openChat(true);
+      }
+      break;
     default:
       break;
   }
@@ -1853,7 +1866,12 @@ async function fetchChatHistory() {
     if (!Array.isArray(rows)) return [];
     return rows
       .filter(r => r && (r.role === "user" || r.role === "jarvis") && typeof r.content === "string")
-      .map(r => ({ role: r.role, text: r.content }));
+      .map(r => {
+        if (r.role === "user" && r.from_id && r.from_id !== "ID:000001") {
+          return { role: "external", text: r.content, label: r.from_id };
+        }
+        return { role: r.role, text: r.content };
+      });
   } catch { return []; }
 }
 
@@ -1887,10 +1905,15 @@ msgInput.addEventListener("input", () => {
 });
 
 function addMsg(role, text, options = {}) {
-  const { alert = role === "jarvis", pending = true } = options;
+  const { alert = role === "jarvis", pending = true, label } = options;
+  const defaultLabel = role === "user" ? "You" : role === "jarvis" ? "Jarvis" : "Peer";
+  const labelText = label || defaultLabel;
   const div = document.createElement("div");
   div.className = `msg msg-${role}`;
-  div.innerHTML = `<span class="msg-label">${role === "user" ? "You" : "Jarvis"}</span>`;
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "msg-label";
+  labelSpan.textContent = labelText;
+  div.appendChild(labelSpan);
   div.appendChild(document.createTextNode(text));
   chatMessages.appendChild(div);
 
@@ -1913,7 +1936,7 @@ function addMsg(role, text, options = {}) {
 
 async function restoreChatHistory() {
   const history = await fetchChatHistory();
-  history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false }));
+  history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false, label: i.label }));
   if (history.length) {
     pendingMessageDismissed = true;
     chatMessages.scrollTop = chatMessages.scrollHeight;

@@ -104,7 +104,7 @@ ${memories || '（空）'}${extraSection}
     const result = await callLLM({
       systemPrompt: CHECKER_PROMPT,
       message: input,
-      temperature: 0.1,
+      temperature: 0,
     })
     raw = result.content
   } catch (err) {

@@ -5,16 +5,17 @@ import { buildSystemPrompt } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
 import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge } from './memory/injector.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
-import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory } from './db.js'
+import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners } from './db.js'
 import { popMessage, hasMessages, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
 import { emitEvent } from './events.js'
 import { formatTick, nowTimestamp, describeExistence } from './time.js'
-import { getAdaptiveTickInterval, getQuotaStatus, setRateLimited } from './quota.js'
+import { getAdaptiveTickInterval, getQuotaStatus, setRateLimited, isRateLimited, getTickInterval } from './quota.js'
 import { registerProvider } from './providers/registry.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { isRunning, setScheduler } from './control.js'
+import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 
 // 当前 LLM 处理的 AbortController（主循环打断用）
 let currentAbortController = null
@@ -43,6 +44,7 @@ const state = {
   sessionCounter: 0,
   recentActions: [], // 最近几轮的行动摘要，格式：{ ts, summary }
   thoughtStack: [],  // 念头栈，最多保留 3 个，格式：{ concept, line }
+  interruptedSnapshot: null, // 被打断时保存的状态快照（方案A）：{ phase, label, partialContent, toolCallLog, task, ts }
 }
 
 function newSessionRef() {
@@ -61,7 +63,13 @@ function buildToolContext(label, injection) {
   ]
     .filter(id => id && id !== 'jarvis')
 
-  const uniqueVisibleTargetIds = [...new Set(visibleTargetIds)]
+  // TICK 场景下没有当前发送者，也没有窗口：补充"最近 24h 有过双向对话的熟人"
+  // 让意识体可主动联系已建立过连接的对象，但仍不能发给从未接触过的陌生 ID
+  if (!currentTargetId) {
+    visibleTargetIds.push(...getRecentConversationPartners(24, 20))
+  }
+
+  const uniqueVisibleTargetIds = [...new Set(visibleTargetIds.filter(Boolean))]
   return {
     allowedTargetIds: uniqueVisibleTargetIds,
     visibleTargetIds: uniqueVisibleTargetIds,
@@ -96,6 +104,22 @@ async function process(input, label, msg = null) {
   console.log(`\n── ${label} ──`)
   emitEvent(isTick ? 'tick' : 'message_received', { label, input: input.slice(0, 300) })
 
+  // 消费上一轮被打断的快照：作为一条念头注入，让 L1/L2 知道"刚才做了一半的事"
+  if (state.interruptedSnapshot) {
+    const snap = state.interruptedSnapshot
+    const actions = snap.toolCallLog?.length
+      ? snap.toolCallLog.map(t => t.name).join(',')
+      : '无'
+    const partial = snap.partialContent ? `，已说出：${snap.partialContent.slice(0, 60)}` : ''
+    state.thoughtStack.push({
+      concept: '被打断',
+      line: `刚在${snap.phase}处理「${snap.label}」被打断（已动作:${actions}${partial}）`,
+    })
+    if (state.thoughtStack.length > 3) state.thoughtStack.shift()
+    emitEvent('interrupt_resumed', { phase: snap.phase, label: snap.label, actions, partial: partial.slice(0, 120) })
+    state.interruptedSnapshot = null
+  }
+
   // 记录用户消息（非 TICK，且是第一次处理；重试时不重复写入会话记录）
   if (!isTick && isFirstAttempt) {
     const fromMatch = label.match(/消息 from (.+)/)
@@ -125,6 +149,14 @@ async function process(input, label, msg = null) {
 
     if (l1.aborted) {
       console.log('[系统] L1 被打断')
+      state.interruptedSnapshot = {
+        phase: 'L1',
+        label,
+        partialContent: l1.content || '',
+        toolCallLog: l1.toolCallLog || [],
+        task: state.task,
+        ts: nowTimestamp(),
+      }
       await runRecognizer({
         userMessage: input, jarvisThink: '', jarvisResponse: l1.content || '',
         toolCallLog: l1.toolCallLog || [], task: state.task, sessionRef,
@@ -294,6 +326,14 @@ async function process(input, label, msg = null) {
 
   if (llmResult.aborted) {
     console.log('[系统] 已打断，跳过本轮响应处理，直接进入识别器')
+    state.interruptedSnapshot = {
+      phase: 'L2',
+      label,
+      partialContent: llmResult.content || '',
+      toolCallLog: [...toolCallLog],
+      task: state.task,
+      ts: nowTimestamp(),
+    }
     // 仅运行识别器（保存已发生的工具调用记录），然后退出
     await runRecognizer({
       userMessage: input,
@@ -313,6 +353,22 @@ async function process(input, label, msg = null) {
 
   console.log('\nJarvis:', response)
   emitEvent('response', { sessionRef, label, content: response })
+
+  // L2 救援：模型在 L2 输出 <final_reply> 文本但未调 send_message —— 视作要回复的他者消息
+  if (msg && msg.fromId && !isTick && !toolCallLog.some(t => t.name === 'send_message')) {
+    const finalReplyMatch = response.match(/<final_reply>([\s\S]*?)<\/final_reply>/i)
+    const rescued = finalReplyMatch?.[1]?.trim()
+    if (rescued) {
+      const targetId = msg.fromId
+      const timestamp = nowTimestamp()
+      insertConversation({ role: 'jarvis', from_id: 'jarvis', to_id: targetId, content: rescued, timestamp })
+      emitEvent('message', { from: 'consciousness', to: targetId, content: rescued, timestamp })
+      toolCallLog.push({ name: 'send_message', args: { target_id: targetId, content: rescued }, result: `消息已发送至 ${targetId}（L2 final_reply 救援）` })
+      state.recentActions.push({ ts: timestamp, summary: `send_message → ${targetId}` })
+      if (state.recentActions.length > 5) state.recentActions.shift()
+      console.log(`[L2 救援] Jarvis → ${targetId}: ${rescued}`)
+    }
+  }
 
   // 4. 检测 [RECALL: ...]
   const recallMatch = response.match(/\[RECALL:\s*(.+?)\]/)
@@ -388,6 +444,7 @@ async function process(input, label, msg = null) {
 }
 
 let processing = false
+let currentTimer = null  // 当前 pending 的下一轮 timer，pushMessage 时可清掉以立即执行
 
 async function onTick() {
   if (processing) return
@@ -403,23 +460,67 @@ async function onTick() {
     }
   } finally {
     processing = false
+    // 消耗一轮自定义节奏 TTL（到期自动回归默认）
+    consumeTickerTick()
   }
 }
 
-// 自适应调度：有消息时立即处理，有任务时 2s，其他按配额自适应
+// 调度优先级（从高到低）：
+//   1. 有消息待处理 → 0
+//   2. 429 rate-limited → quota 的 10 分钟
+//   3. L2 自定义节奏（ttl > 0）→ L2 指定值
+//   4. 有任务 → 2s
+//   5. 空闲 → config.tickInterval
 function scheduleNextTick() {
   if (!isRunning()) return
+  if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
+
   const hasPending = hasMessages()
+  const rateLimited = isRateLimited()
+  const customMs = getCustomIntervalMs()
   const taskActive = !!state.task
-  const interval = hasPending ? 0 : (taskActive ? 2000 : config.tickInterval)
+
+  let interval
+  let label
+  if (hasPending) {
+    interval = 0
+    label = '立即（消息待处理）'
+  } else if (rateLimited) {
+    interval = getTickInterval(config.tickInterval)
+    label = `限流中（${interval / 1000}s）`
+  } else if (customMs !== null) {
+    const ticker = getTickerStatus()
+    interval = customMs
+    label = `L2 自定义 ${interval / 1000}s（剩 ${ticker.ttl} 轮${ticker.reason ? ' · ' + ticker.reason : ''}）`
+  } else if (taskActive) {
+    interval = 2000
+    label = '任务模式 2s'
+  } else {
+    interval = config.tickInterval
+    label = `${interval / 1000}s`
+  }
+
   const quota = getQuotaStatus()
-  const label = hasPending ? '立即（消息待处理）' : (taskActive ? `任务模式 2s` : `${interval / 1000}s`)
   console.log(`[配额] ${quota.rpmUsed} RPM | ${quota.tpmUsed} TPM | 占用 ${quota.ratio} | 下次 Tick ${label}`)
-  emitEvent('quota', { ...quota, nextTickMs: interval })
-  setTimeout(async () => {
+  emitEvent('quota', { ...quota, nextTickMs: interval, ticker: getTickerStatus() })
+  currentTimer = setTimeout(async () => {
+    currentTimer = null
     await onTick()
     scheduleNextTick()
   }, interval)
+}
+
+// 新消息到达时调用：清掉当前 pending timer，立即跑下一轮
+// 如果当前正在 processing，则依赖 abort 机制让它快速结束，finally 后 scheduleNextTick 会用 interval=0 立即续跑
+function triggerImmediateTick() {
+  if (processing) return  // 由 abort + 结束后的 scheduleNextTick 接力
+  if (!isRunning()) return
+  if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
+  // 异步启动一轮，不等结果
+  ;(async () => {
+    await onTick()
+    scheduleNextTick()
+  })()
 }
 
 async function main() {
@@ -443,12 +544,13 @@ async function main() {
   // 注册调度函数，供控制层（stop/start）唤起
   setScheduler(scheduleNextTick)
 
-  // 注册打断回调：新消息到达时打断当前 LLM 处理
+  // 注册打断回调：新消息到达时打断当前 LLM 处理 + 立即触发下一轮（不等定时器）
   setInterruptCallback(() => {
     if (currentAbortController) {
       console.log('[系统] 新消息到达，打断当前处理')
       currentAbortController.abort()
     }
+    triggerImmediateTick()
   })
 
   // 首次立即运行，之后自适应调度

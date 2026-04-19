@@ -10,7 +10,7 @@ const client = new OpenAI({
 })
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, maxTokens, thinking = true, signal, onStream }) {
+async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream }) {
   const requestParams = {
     model: config.model,
     temperature,
@@ -19,6 +19,7 @@ async function streamOnce({ messages, toolSchemas, temperature, maxTokens, think
     stream_options: { include_usage: true },
   }
 
+  if (typeof topP === 'number' && topP > 0) requestParams.top_p = topP
   if (!thinking) requestParams.thinking = { type: 'disabled' }
   if (maxTokens) requestParams.max_tokens = maxTokens
   if (toolSchemas.length > 0) {
@@ -215,7 +216,7 @@ function parseXmlToolCalls(content) {
 
 // 主调用：agentic 循环，连续执行工具直到模型停止
 // 返回 { content: string, toolResult: { name, args, result } | null, aborted: bool }
-export async function callLLM({ systemPrompt, message, temperature = 0.7, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, toolContext = {} }) {
+export async function callLLM({ systemPrompt, message, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, toolContext = {} }) {
   const toolSchemas = getToolSchemas(tools)
 
   const messages = [
@@ -239,6 +240,7 @@ export async function callLLM({ systemPrompt, message, temperature = 0.7, tools 
       messages,
       toolSchemas,
       temperature,
+      topP,
       maxTokens,
       thinking,
       signal,

@@ -82,7 +82,7 @@ export async function runLayer1({ input, state, sessionRef, signal }) {
       systemPrompt,
       message: input,
       tools: L1_TOOLS,
-      temperature: 0.1,
+      temperature: 0,
       signal,
       onToolCall: (name, args, res) => {
         emitEvent('layer1_tool', { name, args, result: String(res).slice(0, 500) })

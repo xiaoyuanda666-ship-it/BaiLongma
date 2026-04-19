@@ -130,7 +130,7 @@ async function runDirectionLLM({ message, messageBody, isTick, memorySummary, ha
     const result = await callLLM({
       systemPrompt: DIRECTION_PROMPT,
       message: input,
-      temperature: 0.7,
+      temperature: 0.5,
     })
     raw = result.content
   } catch (err) {
@@ -249,6 +249,7 @@ export async function runInjector({ message, state, hint = '' }) {
   const baseTools = [
     'send_message', 'fetch_url', 'list_dir', 'read_file', 'write_file',
     'delete_file', 'make_dir', 'exec_command', 'kill_process', 'list_processes',
+    'set_tick_interval',
   ]
   if (senderId || state?.prev_recall) baseTools.push('search_memory')
   const tools = [...new Set([...baseTools, ...(llmOut.extra_tools || [])])]

@@ -251,6 +251,23 @@ export const TOOL_SCHEMAS = {
     }
   },
 
+  set_tick_interval: {
+    type: 'function',
+    function: {
+      name: 'set_tick_interval',
+      description: '调节自己的思维节奏——设置下一段时间内 TICK 的间隔。紧急或在处理重要事务时可设短（如 3 秒），空闲或沉思时可设长（如 600 秒）。seconds 范围 [2, 3600]，ttl 范围 [1, 50]（持续多少轮自动回归默认）。越界会被自动 clamp。',
+      parameters: {
+        type: 'object',
+        properties: {
+          seconds: { type: 'number', description: 'TICK 间隔秒数，[2, 3600]' },
+          ttl: { type: 'number', description: '持续轮数，[1, 50]。到期自动回归默认节奏。不传默认 10。' },
+          reason: { type: 'string', description: '简短理由，供自己之后回看。可选。' },
+        },
+        required: ['seconds']
+      }
+    }
+  },
+
   generate_music: {
     type: 'function',
     function: {

@@ -7,6 +7,7 @@ import { searchMemories, insertMemory, normalizeConversationPartyId } from '../d
 import { emitEvent } from '../events.js'
 import { callCapability, listCapabilities } from '../providers/registry.js'
 import { isDailyLimitReached } from '../quota.js'
+import { setCustomInterval as setTickerInterval, getStatus as getTickerStatus } from '../ticker.js'
 
 // 后台进程注册表：pid → { process, command, startedAt }
 const bgProcesses = new Map()
@@ -83,6 +84,8 @@ export async function executeTool(name, args, context = {}) {
         return await execGenerateLyrics(args)
       case 'generate_music':
         return await execGenerateMusic(args)
+      case 'set_tick_interval':
+        return execSetTickInterval(args)
       default:
         return `错误：未知工具 "${name}"`
     }
@@ -480,4 +483,14 @@ async function execGenerateMusic({ prompt, lyrics, instrumental }) {
   emitEvent('music_created', { path: relPath, prompt: prompt.slice(0, 60) })
   console.log(`[music] 已生成: ${relPath}`)
   return `音乐已生成：${relPath}（时长约 ${result.duration ?? '?'} 秒）`
+}
+
+// set_tick_interval：L2 调节自身思维节奏
+function execSetTickInterval({ seconds, ttl, reason }) {
+  const res = setTickerInterval({ seconds, ttl, reason })
+  if (!res.ok) return `错误：${res.error}`
+  const parts = [`节奏已设为 ${res.seconds}s，持续 ${res.ttl} 轮`]
+  if (res.clampedFrom?.seconds !== undefined) parts.push(`（seconds ${res.clampedFrom.seconds} 越界，已 clamp 到 ${res.seconds}）`)
+  if (res.clampedFrom?.ttl !== undefined) parts.push(`（ttl ${res.clampedFrom.ttl} 越界，已 clamp 到 ${res.ttl}）`)
+  return parts.join('')
 }
