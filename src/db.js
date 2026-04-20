@@ -21,6 +21,7 @@ const USER_ROOT_ALIASES = new Set([
   'user_000001_identity',
   'user_000001_profile',
 ])
+const AUTO_CANONICAL_IDENTITY_ROOTS = false
 
 let db
 
@@ -250,6 +251,8 @@ function isCanonicalRootMemory(memory) {
 }
 
 function ensureCanonicalIdentityRoot(entityId) {
+  if (!AUTO_CANONICAL_IDENTITY_ROOTS) return null
+
   const meta = canonicalRootMetaForEntity(entityId)
   if (!meta) return null
 
@@ -762,7 +765,6 @@ export function getPersonMemory(entityId) {
   const db = getDB()
   const normalizedId = normalizeMemoryEntity(entityId)
   const rootMemId = canonicalRootMemIdForEntity(normalizedId)
-  if (rootMemId) ensureCanonicalIdentityRoot(normalizedId)
   return db.prepare(`
     SELECT * FROM memories
     WHERE event_type IN ('person', 'object')
