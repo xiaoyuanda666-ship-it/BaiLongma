@@ -222,6 +222,9 @@ async function process(input, label, msg = null) {
           })
         }
       },
+      onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
+        emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
+      },
       onStream: ({ event, mode, text }) => {
         if (event === 'start') emitEvent('stream_start', { mode })
         else if (event === 'chunk') emitEvent('stream_chunk', { text })

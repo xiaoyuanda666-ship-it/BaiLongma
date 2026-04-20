@@ -305,8 +305,6 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%, black 100%);
-  mask-image: linear-gradient(to bottom, transparent, black 12%, black 100%);
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
 }
@@ -341,7 +339,7 @@ body {
   transition: opacity 0.5s ease;
 }
 
-.stream-line.fading { opacity: 0.2; }
+.stream-line.fading { opacity: 1; }
 
 .line-header {
   display: flex;
@@ -370,6 +368,30 @@ body {
   color: var(--dim);
   font-family: "JetBrains Mono", ui-monospace, monospace;
   margin-left: auto;
+}
+
+.line-status {
+  font-size: 9px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--ink2);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  white-space: nowrap;
+}
+
+.line-status.busy {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 48%, transparent);
+  background: color-mix(in srgb, var(--warm) 12%, transparent);
+}
+
+.line-status.failed {
+  color: #e7a4a4;
+  border-color: rgba(224, 120, 120, 0.4);
+  background: rgba(224, 120, 120, 0.08);
 }
 
 .line-text {
@@ -953,7 +975,7 @@ body {
   </div>
 
   <div class="panel-actions">
-    <button class="reset-view" id="reset-view-btn" type="button">Reset View</button>
+    <button class="reset-view" id="reset-view-btn" type="button">重置节点图</button>
 
     <section class="physics-control" id="physics-control">
       <button class="physics-toggle" id="physics-toggle" type="button" aria-expanded="false">
@@ -964,21 +986,21 @@ body {
         <div class="physics-panel-inner">
           <div class="physics-field">
             <div class="physics-field-head">
-              <label class="physics-field-label" for="gravity-slider">Gravity</label>
+              <label class="physics-field-label" for="gravity-slider">引力</label>
               <span class="physics-field-value" id="gravity-value">1.00x</span>
             </div>
             <input class="physics-slider" id="gravity-slider" type="range" min="0.6" max="1.6" step="0.02" value="1">
           </div>
           <div class="physics-field">
             <div class="physics-field-head">
-              <label class="physics-field-label" for="repulsion-slider">Repulsion</label>
+              <label class="physics-field-label" for="repulsion-slider">斥力</label>
               <span class="physics-field-value" id="repulsion-value">1.00x</span>
             </div>
             <input class="physics-slider" id="repulsion-slider" type="range" min="0.6" max="1.6" step="0.02" value="1">
           </div>
           <div class="physics-field">
             <div class="physics-field-head">
-              <label class="physics-field-label" for="node-size-slider">Node Size</label>
+              <label class="physics-field-label" for="node-size-slider">节点大小</label>
               <span class="physics-field-value" id="node-size-value">1.00x</span>
             </div>
             <input class="physics-slider" id="node-size-slider" type="range" min="0.75" max="1.8" step="0.02" value="1">
@@ -992,15 +1014,15 @@ body {
 <aside id="panel-l2" class="panel">
   <header class="panel-stats">
     <div class="stat">
-      <span class="stat-label">state</span>
-      <div class="stat-value live" id="conn-state"><span class="live-dot"></span>streaming</div>
+      <span class="stat-label">状态</span>
+      <div class="stat-value live" id="conn-state"><span class="live-dot"></span>Token流</div>
     </div>
     <div class="stat">
-      <span class="stat-label">nodes</span>
+      <span class="stat-label">节点</span>
       <div class="stat-value" id="node-count">0</div>
     </div>
     <div class="stat">
-      <span class="stat-label">links</span>
+      <span class="stat-label">连线</span>
       <div class="stat-value" id="link-count">0</div>
     </div>
     <div class="stat">
@@ -1011,10 +1033,10 @@ body {
 
   <div class="stream-meta">
     <div>
-      <div class="stream-title-text">L2 · Tick</div>
-      <div class="stream-subtitle">heartbeat · think · tool</div>
+      <div class="stream-title-text">自主行动机制 · Tick</div>
+      <div class="stream-subtitle">心跳 · 思考 · 工具</div>
     </div>
-    <span class="pill pill-warm" id="pill-l2">STREAMING</span>
+    <span class="pill pill-warm" id="pill-l2">流式传输</span>
   </div>
 
   <div class="stream">
@@ -1029,7 +1051,7 @@ body {
   <div id="input-row">
     <span class="prompt-mark">▸</span>
     <input id="msg-input" type="text" placeholder="向 Jarvis 发送消息…" autocomplete="off">
-    <button id="send-btn" type="button">SEND</button>
+    <button id="send-btn" type="button">发送</button>
   </div>
 </section>
 
@@ -1570,10 +1592,10 @@ function renderLegend() {
   const decayed = nodeData.filter(n => (Date.now() - (n._ts || 0)) > 60000).length;
 
   const items = [
-    { name: "self", count: 1, color: themeColors.warm },
-    { name: "active", count: active, color: themeColors.nodeHigh },
-    { name: "known", count: known, color: themeColors.cool },
-    { name: "decayed", count: decayed, color: themeColors.dim },
+    { name: "限制", count: 1, color: themeColors.warm },
+    { name: "记忆", count: active, color: themeColors.nodeHigh },
+    { name: "知识", count: known, color: themeColors.cool },
+    { name: "衰减", count: decayed, color: themeColors.dim },
   ];
 
   el.innerHTML = items.map(i =>
@@ -1916,6 +1938,7 @@ class ThoughtStream {
     this.curLine = null;
     this.thinkingEl = null;
     this.lastToolEl = null;
+    this.statusEl = null;
   }
 
   tStamp() {
@@ -1939,6 +1962,7 @@ class ThoughtStream {
     // 关闭上一条工具的旋转动画
     this.finalizeLastTool();
     this.thinkingLine = null;
+    this.statusEl = null;
 
     this.curLine = document.createElement("div");
     this.curLine.className = "stream-line";
@@ -1976,6 +2000,27 @@ class ThoughtStream {
     this.curLine.scrollIntoView({ block: "end", inline: "nearest" });
   }
 
+  setStatus(text, kind = "busy") {
+    if (!this.curLine) this.newLine(this.thinkingLabel);
+    const header = this.curLine.querySelector(".line-header");
+    if (!header) return;
+    if (!this.statusEl || !this.statusEl.parentElement) {
+      this.statusEl = document.createElement("span");
+      this.statusEl.className = "line-status";
+      const timeEl = header.querySelector(".line-time");
+      header.insertBefore(this.statusEl, timeEl || null);
+    }
+    this.statusEl.className = `line-status ${kind}`.trim();
+    this.statusEl.textContent = text;
+  }
+
+  clearStatus() {
+    if (this.statusEl && this.statusEl.parentElement) {
+      this.statusEl.remove();
+    }
+    this.statusEl = null;
+  }
+
   // 开启一轮思考：若本轮已有思考行，则复用该行并恢复动画
   startThinkingSession() {
     if (this.thinkingLine && this.thinkingLine.parentElement) {
@@ -1988,6 +2033,7 @@ class ThoughtStream {
       this.newLine(this.thinkingLabel);
       this.thinkingLine = this.curLine;
     }
+    this.clearStatus();
     this.startThinking();
   }
 
@@ -2017,6 +2063,7 @@ class ThoughtStream {
       }
     }
     this.thinkingEl = null;
+    this.clearStatus();
   }
 
   finalizeLastTool() {
@@ -2075,6 +2122,7 @@ class ThoughtStream {
   end() {
     this.stopThinking();
     this.finalizeLastTool();
+    this.clearStatus();
     this.curLine = null;
     this.thinkingLine = null;
   }
@@ -2095,6 +2143,15 @@ const L2 = new ThoughtStream("si-l2", "warm", {
 // 通过最近一次 message_received / tick 事件来决定路由到哪块面板。
 let currentPath = "l2";
 function currentStream() { return currentPath === "l1" ? L1 : L2; }
+
+function isBusyErrorMessage(message = "") {
+  return /(429|rate limit|too many requests|busy|overload|temporarily unavailable|server busy|resource exhausted)/i.test(String(message || ""));
+}
+
+function formatRetryDelay(ms) {
+  if (!ms || ms < 1000) return `${ms || 0}ms`;
+  return `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 1)}s`;
+}
 
 let tokenAccum = 0;
 let tokenWindow = Date.now();
@@ -2148,13 +2205,14 @@ function handle({ type, data = {} }) {
     }
     case "tick":
       currentPath = "l2";
-      L2.newLine("心跳 💗");
+      L2.newLine("心跳 tick");
       break;
     case "stream_start":
       currentStream().startThinkingSession();
       break;
     case "stream_chunk":
       // 不再显示具体思考内容，仅用于驱动 token 速率指示
+      currentStream().clearStatus();
       bumpTokens(data.text);
       break;
     case "stream_end":
@@ -2166,6 +2224,29 @@ function handle({ type, data = {} }) {
     case "response":
       // 一轮完成：停所有动画
       currentStream().end();
+      break;
+    case "llm_retry": {
+      currentStream().startThinkingSession();
+      const nextAttempt = Number(data.nextAttempt || 2);
+      const delayText = formatRetryDelay(Number(data.delayMs || 0));
+      currentStream().setStatus("LLM busy, retry " + nextAttempt + " in " + delayText, "busy");
+      break;
+    }
+    case "message_requeued": {
+      currentStream().startThinkingSession();
+      const retryCount = Number(data.retryCount || 1);
+      currentStream().setStatus("LLM busy, queued retry " + retryCount + "/3", "busy");
+      break;
+    }
+    case "message_dropped":
+      currentStream().startThinkingSession();
+      currentStream().setStatus("LLM busy, retry limit reached", "failed");
+      break;
+    case "error":
+      if (isBusyErrorMessage(data.error)) {
+        currentStream().startThinkingSession();
+        currentStream().setStatus("LLM busy, please retry shortly", "busy");
+      }
       break;
     case "injector_result": {
       const nids = [...extractNids(data.matchedMemories), ...extractNids(data.recallMemories)];

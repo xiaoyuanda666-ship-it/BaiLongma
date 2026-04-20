@@ -186,6 +186,13 @@ async function streamOnceWithRetry(args) {
       lastErr = err
       if (attempt < MAX_ATTEMPTS - 1) {
         const delay = BACKOFFS_MS[attempt]
+        args.onRetry?.({
+          attempt: attempt + 1,
+          nextAttempt: attempt + 2,
+          maxAttempts: MAX_ATTEMPTS,
+          delayMs: delay,
+          error: err.message || String(err),
+        })
         console.warn(`[LLM] 瞬时错误 "${(err.message || '').slice(0, 80)}"，${delay}ms 后第 ${attempt + 2} 次尝试`)
         await abortableSleep(delay, args.signal)
       }
@@ -283,7 +290,7 @@ function buildToolLogDetail(args = {}, result = '') {
 
 // 主调用：agentic 循环，连续执行工具直到模型停止
 // 返回 { content: string, toolResult: { name, args, result } | null, aborted: bool }
-export async function callLLM({ systemPrompt, message, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, toolContext = {} }) {
+export async function callLLM({ systemPrompt, message, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onStream, onRetry, toolContext = {} }) {
   const toolSchemas = getToolSchemas(tools)
 
   const messages = [
@@ -311,6 +318,7 @@ export async function callLLM({ systemPrompt, message, temperature = 0.5, topP =
       maxTokens,
       thinking,
       signal,
+      onRetry,
       onStream: round === 0 ? onStream : undefined,  // 只在第一轮流式推送
     })
 
