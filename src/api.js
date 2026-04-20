@@ -48,20 +48,100 @@ function extractAgentRename(content) {
   const text = String(content || '').trim()
   if (!text) return null
 
-  const patterns = [
-    /(?:以后|之后|从现在起|从今以后)?(?:你|你以后|以后你)(?:就)?叫\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
-    /把你(?:的名字)?改成\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
-    /以后叫你\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
-    /your name is now\s+([A-Za-z][A-Za-z0-9 _-]{1,31})/i,
-    /i(?:'ll| will)? call you\s+([A-Za-z][A-Za-z0-9 _-]{1,31})/i,
+  const intentPatterns = [
+    /叫你/i,
+    /你.*叫/i,
+    /改名/i,
+    /改个?名字/i,
+    /换个?名字/i,
+    /名字.*改/i,
+    /name\s+is\s+now/i,
+    /call\s+you/i,
+    /rename\s+you/i,
+    /自称/i,
+    /对外.*叫/i,
+    /别叫/i,
+    /不要叫/i,
+    /换个称呼/i,
+    /给你.*起个?名字/i,
+    /给你.*换个?名字/i,
+  ]
+  if (!intentPatterns.some((pattern) => pattern.test(text))) return null
+
+  const normalizeName = (raw) => {
+    const cleaned = String(raw || "")
+      .trim()
+      .replace(/^[“"'`「『【（(]+/, "")
+      .replace(/[”"'`」』】）),。.!！？；;：:\s]+$/g, "")
+      .replace(/\s+/g, " ")
+
+    if (!cleaned) return null
+    if (cleaned.length > 32) return null
+    if (/^(你|我|我们|以后|之后|现在|一下|一个|这个|那个|名字|名称|称呼)$/i.test(cleaned)) return null
+    if (!/^[\u4e00-\u9fa5A-Za-z0-9 _-]+$/.test(cleaned)) return null
+    return cleaned
+  }
+
+  const rejectName = (name) => {
+    const lowered = String(name || '').toLowerCase()
+    return (
+      /^(一下|一个|这个|那个|以后|现在|名字|名称|称呼|自己|原来|之前|刚才|以后吧)$/.test(name) ||
+      /^(name|called|call|rename|my|your|you|me|it)$/.test(lowered)
+    )
+  }
+
+  const tryName = (raw) => {
+    const normalized = normalizeName(raw)
+    if (!normalized || rejectName(normalized)) return null
+    return normalized
+  }
+
+  const capturePatterns = [
+    /(?:以后|之后|从现在起|从今以后)?(?:你|你以后|以后你)(?:就|还是|直接)?叫(?:做)?\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:把你|给你|帮你)(?:的名字|名字)?(?:改成|改为|换成|换做)\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后)?(?:我|我们)(?:就)?叫你\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:你的名字|你名字)(?:是|叫|改成|改为)\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后|之后|从现在起)?(?:称呼你|管你叫)\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后|之后)?(?:你)?(?:对外|今后)?(?:就)?自称\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后|之后)?(?:别|不要)(?:再)?叫(?:自己)?\s*[“"'`「『【（(]?\s*[\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31}[”"'`」』】）)]?\s*(?:了)?[，,。.!！？；;\s]*(?:以后|现在|之后)?(?:就)?叫(?:自己|你)?\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:我想|我想要|我准备|我要)?(?:给你|帮你)(?:重新|再)?(?:起|取|换)(?:个)?名字(?:叫|是|为)?\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:把|将)(?:你的名字|你)(?:从)?\s*[“"'`「『【（(]?\s*[\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31}[”"'`」』】）)]?\s*(?:改|换)(?:成|为)\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后|之后|从现在起)?(?:对外)?(?:你|你自己)?(?:就)?叫\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /your name is now\s+[“"'`(]?\s*([A-Za-z][A-Za-z0-9 _-]{0,31})/i,
+    /i(?:'ll| will)? call you\s+[“"'`(]?\s*([A-Za-z][A-Za-z0-9 _-]{0,31})/i,
+    /rename you to\s+[“"'`(]?\s*([A-Za-z][A-Za-z0-9 _-]{0,31})/i,
+    /don't call yourself\s+[“"'`]?[A-Za-z][A-Za-z0-9 _-]{0,31}[”"'`]?\s*(?:anymore)?[, ]*(?:call yourself|be)\s+[“"'`]?\s*([A-Za-z][A-Za-z0-9 _-]{0,31})/i,
   ]
 
-  for (const pattern of patterns) {
+  for (const pattern of capturePatterns) {
     const match = text.match(pattern)
     if (!match) continue
-    const nextName = String(match[1] || '').trim().replace(/\s+/g, ' ')
+    const nextName = tryName(match[1])
     if (nextName) return nextName
   }
+
+  const colonMatch = text.match(/(?:名字|名称|称呼)[是为:：]\s*[“"'`「『【（(]?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i)
+  if (colonMatch) {
+    const nextName = tryName(colonMatch[1])
+    if (nextName) return nextName
+  }
+
+  const quotedNames = [...text.matchAll(/[“"'`「『【（(]\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})\s*[”"'`」』】）)]/g)]
+    .map((match) => tryName(match[1]))
+    .filter(Boolean)
+  if (quotedNames.length === 1) return quotedNames[0]
+
+  const semanticWindows = [
+    /(?:改名|换名字|换个名字|换个称呼|起个名字|取个名字|自称|对外叫)\s*(?:叫|成|为|是)?\s*([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+    /(?:以后|之后|从现在起).{0,12}?(?:叫|自称|称呼).{0,4}?([\u4e00-\u9fa5A-Za-z][\u4e00-\u9fa5A-Za-z0-9 _-]{0,31})/i,
+  ]
+  for (const pattern of semanticWindows) {
+    const match = text.match(pattern)
+    if (!match) continue
+    const nextName = tryName(match[1])
+    if (nextName) return nextName
+  }
+
   return null
 }
 
