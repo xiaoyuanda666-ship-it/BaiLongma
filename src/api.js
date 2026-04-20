@@ -16,6 +16,7 @@ const INDEX_PATH     = path.join(__dirname, '../index.html')
 const DASHBOARD_PATH = path.join(__dirname, '../dashboard.html')
 const BRAIN_PATH     = path.join(__dirname, '../brain.html')
 const BRAIN_UI_PATH  = path.join(__dirname, '../brain-ui.html')
+const WEBSITE_PATH   = path.join(__dirname, '../website.html')
 const BRAIN_UI_ASSET_ROOT = path.join(__dirname, 'ui', 'brain-ui')
 const SANDBOX_PATH   = path.join(__dirname, '../sandbox')
 const DEFAULT_AGENT_NAME = 'Longma'
@@ -377,6 +378,18 @@ export function startAPI(port = 3721) {
     }
 
     // GET /brain-ui — Brain UI（记忆图谱 + 思考流 + 聊天）
+    if (req.method === 'GET' && (url.pathname === '/site' || url.pathname === '/site.html')) {
+      try {
+        const html = fs.readFileSync(WEBSITE_PATH, 'utf-8')
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(html)
+      } catch {
+        res.writeHead(404)
+        res.end('website.html not found')
+      }
+      return
+    }
+
     if (req.method === 'GET' && (url.pathname === '/brain-ui' || url.pathname === '/brain-ui.html')) {
       try {
         const html = fs.readFileSync(BRAIN_UI_PATH, 'utf-8')

@@ -30,6 +30,7 @@ ${existenceDesc}。
 你要回复对方时，必须调用 send_message 工具（target_id=对方ID, content=回复内容）。
 你感觉若是多步任务，在响应文本中写下 [SET_TASK: 任务描述及步骤]。
 你可以继续调用需要的工具完成任务。
+你不需要思考很长
 如果用户要求你在未来某个时间再做事，使用 schedule_reminder 工具，并把时间换算成绝对时间 ISO 8601 字符串，不要传“明天早上”“两小时后”这类相对表达。
 
 系统标记协议（你要写在响应文本中，不是工具调用）
@@ -40,6 +41,7 @@ ${existenceDesc}。
 - 当你更新自我定义时，[UPDATE_PERSONA: 对自己的描述]。
 
 其余规则（TICK 机制、感知边界、工具用法、行为约束、存在哲学）由记忆系统按需注入，不在此处重复。
+重要，你在在所有的工具调用完成之后，调用一次 send_message 工具，回复用户。
 `
 
   const idleConstraint = !hasActiveTask
