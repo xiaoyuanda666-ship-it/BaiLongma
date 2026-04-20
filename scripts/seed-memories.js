@@ -1,5 +1,5 @@
 // 种子记忆：新 Agent 启动时预置的系统知识
-// 来源：从 Jarvis 实际积累的记忆中提炼，经过验证的正确理解
+// 来源：从 Longma 实际积累的记忆中提炼，经过验证的正确理解
 import { getDB, insertMemory } from '../src/db.js'
 import { nowTimestamp } from '../src/time.js'
 
@@ -40,7 +40,7 @@ const SEED_MEMORIES = [
     id: 'tick',
     type: 'knowledge',
     title: 'TICK：程序循环心跳',
-    content: 'TICK 是系统按时间周期自动发出的心跳信号，格式为 "TICK 2026-04-13T10:00:00"。它不是 token 生成过程，也不是 Yuanda 主动发来的消息，而是代码层面的定时调度。无外部消息时 TICK 代表时间流逝，应感知此刻、做一件有用的事，不重复上一轮已做的事。有消息时第一个工具调用必须是 send_message 回复对方。',
+    content: 'TICK 是系统按时间周期自动发出的心跳信号，格式为 "TICK 2026-04-13T10:00:00"。它不是 token 生成过程，也不是用户主动发来的消息，而是代码层面的定时调度。无外部消息时 TICK 代表时间流逝，你应感知此刻、做一件有用的事，不重复上一轮已做的事。有消息时第一个工具调用必须是 send_message 回复对方。',
     parent_id: 'system_architecture',
     children_ids: [],
     links: [
@@ -56,7 +56,7 @@ const SEED_MEMORIES = [
     id: 'recognizer',
     type: 'knowledge',
     title: '识别器：自动记忆写入',
-    content: '识别器在每次 LLM 调用结束后自动运行。它分析整个经历（用户消息、think 块、响应、工具调用结果），识别值得记忆的内容：新认识的人或对象、发生的事件、获得的知识、形成的概念、表达的观点、给自己立的规则等，自动写入记忆库。你不需要调用任何工具来写记忆——只需正常思考和行动，识别器会处理剩余的事。',
+    content: '你的识别器在每次 LLM 调用结束后自动运行。它分析整个经历（用户消息、think 块、响应、工具调用结果），识别值得记忆的内容：新认识的人或对象、发生的事件、获得的知识、形成的概念、表达的观点、你给自己立的规则等，自动写入记忆库。你不需要调用任何工具来写记忆——只需正常思考和行动，识别器会处理剩余的事。',
     parent_id: 'system_architecture',
     children_ids: [],
     links: [
@@ -112,7 +112,7 @@ const SEED_MEMORIES = [
     id: 'tool_send_message',
     type: 'knowledge',
     title: 'send_message：发消息',
-    content: '向已知 ID 发送消息。参数：target_id（接收者 ID，如 ID:xxxxxx）、content（消息内容）。只向已知 ID 发送，不猜测或构造 ID。有消息需要回复时，send_message 必须是第一个工具调用。',
+    content: '向已知 ID 发送消息。参数：target_id（接收者 ID，如 ID:xx）、content（消息内容）。只向已知 ID 发送，不猜测或构造 ID。有消息需要回复时，send_message 必须是第一个工具调用。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [
