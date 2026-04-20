@@ -453,6 +453,12 @@ body {
   background: rgba(127, 207, 143, 0.08);
 }
 
+.line-tool .tool-status.ended {
+  color: var(--ink2);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
 .line-tool .tool-status.failed {
   color: #e07878;
   border-color: rgba(224, 120, 120, 0.4);

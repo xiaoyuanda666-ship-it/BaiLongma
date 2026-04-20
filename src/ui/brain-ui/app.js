@@ -899,6 +899,8 @@ class ThoughtStream {
     this.thinkingEl = null;
     this.lastToolEl = null;
     this.statusEl = null;
+    this.hadToolCall = false;
+    this.toolFailed = false;
   }
 
   tStamp() {
@@ -923,6 +925,8 @@ class ThoughtStream {
     this.finalizeLastTool();
     this.thinkingLine = null;
     this.statusEl = null;
+    this.hadToolCall = false;
+    this.toolFailed = false;
 
     this.curLine = document.createElement("div");
     this.curLine.className = "stream-line";
@@ -1044,6 +1048,8 @@ class ThoughtStream {
     const icon = TOOL_ICON[name] || "🔧";
     const resultStr = result == null ? "" : String(result);
     const failure = isFailureResult(resultStr);
+    this.hadToolCall = true;
+    this.toolFailed = this.toolFailed || failure;
     const statusCls = failure ? "failed" : "success";
     const statusIcon = failure ? "✗" : "✓";
     const statusLabel = failure ? "失败" : "成功";
@@ -1081,12 +1087,42 @@ class ThoughtStream {
     this.lastToolEl = null;
   }
 
+  appendToolCycleEnd() {
+    if (!this.curLine || !this.hadToolCall) return;
+
+    const toolEl = document.createElement("div");
+    const statusCls = this.toolFailed ? "failed" : "ended";
+    toolEl.className = `line-tool done tool-${statusCls}`;
+    toolEl.style.color = readCSSVar(`--${this.color}`);
+
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "tool-icon";
+    iconSpan.textContent = this.toolFailed ? "⚠" : "◎";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "tool-name";
+    nameSpan.textContent = "工具调用结束";
+
+    const statusSpan = document.createElement("span");
+    statusSpan.className = `tool-status ${statusCls}`;
+    statusSpan.textContent = this.toolFailed ? "已结束" : "完成";
+
+    toolEl.appendChild(iconSpan);
+    toolEl.appendChild(nameSpan);
+    toolEl.appendChild(statusSpan);
+    this.curLine.appendChild(toolEl);
+    this.scrollToLatest();
+  }
+
   end() {
     this.stopThinking();
     this.finalizeLastTool();
     this.clearStatus();
+    this.appendToolCycleEnd();
     this.curLine = null;
     this.thinkingLine = null;
+    this.hadToolCall = false;
+    this.toolFailed = false;
   }
 }
 
