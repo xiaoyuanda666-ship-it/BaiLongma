@@ -143,6 +143,35 @@ function parseReminderDueAt(value) {
   return dueAt
 }
 
+function trimAssistantFluff(content) {
+  let text = String(content || '').trim()
+  if (!text) return text
+
+  const patterns = [
+    /[，,、。.!！？~～\s]*(?:从现在起|从今以后|以后)?我就是[\u4e00-\u9fa5A-Za-z0-9 _-]{1,24}[，,、。.!！？~～\s]*为您效劳[！!～~。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要我帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*随时为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要我帮忙的[？?]?[～~！!。.\s]*$/u,
+  ]
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const pattern of patterns) {
+      const next = text.replace(pattern, '').trim()
+      if (next !== text) {
+        text = next
+        changed = true
+      }
+    }
+  }
+
+  return text
+}
+
 // express：表达器入口，根据 format 路由到对应输出渠道
 async function execExpress({ target_id, content, format = 'text' }, context = {}) {
   if (!content?.trim()) return '错误：未提供表达内容'
@@ -163,12 +192,14 @@ async function execSendMessage({ target_id, content }, context = {}) {
 
   const resolvedId = resolveAllowedTargetId(target_id, context.allowedTargetIds)
   assertVisibleTargetId(resolvedId, context.visibleTargetIds)
+  const cleanedContent = trimAssistantFluff(content)
+  if (!cleanedContent) return '错误：消息内容为空'
 
   const timestamp = nowTimestamp()
   console.log(`\n[消息发送] → ${resolvedId}`)
-  console.log(`  ${content}`)
+  console.log(`  ${cleanedContent}`)
   console.log(`  时间：${timestamp}`)
-  emitEvent('message', { from: 'consciousness', to: resolvedId, content, timestamp })
+  emitEvent('message', { from: 'consciousness', to: resolvedId, content: cleanedContent, timestamp })
   return `消息已发送至 ${resolvedId}`
 }
 

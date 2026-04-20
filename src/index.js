@@ -53,6 +53,35 @@ function newSessionRef() {
   return `session_${Date.now()}_${state.sessionCounter}`
 }
 
+function trimAssistantFluff(content) {
+  let text = String(content || '').trim()
+  if (!text) return text
+
+  const patterns = [
+    /[，,、。.!！？~～\s]*(?:从现在起|从今以后|以后)?我就是[\u4e00-\u9fa5A-Za-z0-9 _-]{1,24}[，,、。.!！？~～\s]*为您效劳[！!～~。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要我帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*随时为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*为您效劳[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[～~！!。.\s]*$/u,
+    /[，,、。.!！？~～\s]*有什么需要我帮忙的[？?]?[～~！!。.\s]*$/u,
+  ]
+
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const pattern of patterns) {
+      const next = text.replace(pattern, '').trim()
+      if (next !== text) {
+        text = next
+        changed = true
+      }
+    }
+  }
+
+  return text
+}
+
 export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
   const visibleTargetIds = [
     currentTargetId,
@@ -234,11 +263,13 @@ async function process(input, label, msg = null) {
         toolCallLog.push({ name, args, result: String(result).slice(0, 500) })
         // 记录 Jarvis 发出的消息
         if (name === 'send_message' && args?.target_id && args?.content) {
+          const cleanedContent = trimAssistantFluff(args.content)
+          if (!cleanedContent) return
           insertConversation({
             role: 'jarvis',
             from_id: 'jarvis',
             to_id: args.target_id,
-            content: args.content,
+            content: cleanedContent,
             timestamp: nowTimestamp(),
           })
         }
