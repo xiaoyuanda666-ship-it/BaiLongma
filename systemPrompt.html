@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Heartbeat System Prompt</title>
+  <style>
+    :root {
+      --bg: #f5efe4;
+      --panel: rgba(255, 252, 245, 0.86);
+      --panel-strong: rgba(255, 248, 238, 0.96);
+      --ink: #1f1f1c;
+      --muted: #6e6457;
+      --line: rgba(78, 61, 44, 0.16);
+      --accent: #b6542a;
+      --accent-soft: #f2c6a4;
+      --shadow: 0 18px 42px rgba(84, 56, 31, 0.14);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(232, 183, 138, 0.45), transparent 34%),
+        radial-gradient(circle at 85% 20%, rgba(201, 115, 70, 0.18), transparent 28%),
+        linear-gradient(135deg, #fbf5eb 0%, #efe2cf 52%, #e7d6c0 100%);
+    }
+
+    .shell {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 24px auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .hero, .panel {
+      backdrop-filter: blur(12px);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 24px 26px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+    }
+
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 760px;
+      line-height: 1.6;
+    }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 210px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+    }
+
+    button:hover { transform: translateY(-1px); }
+    button:active { transform: translateY(0); }
+
+    .primary {
+      color: #fff7f1;
+      background: linear-gradient(135deg, #bf5628, #8d2f18);
+      box-shadow: 0 10px 24px rgba(147, 57, 26, 0.28);
+    }
+
+    .ghost {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.55);
+      border: 1px solid rgba(77, 60, 45, 0.14);
+    }
+
+    .status {
+      padding: 16px 20px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      align-items: center;
+      color: var(--muted);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #d08b3e;
+      box-shadow: 0 0 0 6px rgba(208, 139, 62, 0.14);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .panel {
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      letter-spacing: -0.02em;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .stat {
+      padding: 14px;
+      border-radius: 18px;
+      background: var(--panel-strong);
+      border: 1px solid rgba(80, 62, 46, 0.08);
+    }
+
+    .stat-label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .card {
+      border-radius: 18px;
+      padding: 14px;
+      background: var(--panel-strong);
+      border: 1px solid rgba(80, 62, 46, 0.08);
+    }
+
+    .card-title {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .list, pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    pre {
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      background: rgba(44, 28, 18, 0.92);
+      color: #fef6ea;
+      padding: 18px;
+      border-radius: 20px;
+      min-height: 65vh;
+      overflow: auto;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .error {
+      color: #8f2318;
+      font-weight: 700;
+    }
+
+    @media (max-width: 960px) {
+      .hero {
+        flex-direction: column;
+      }
+
+      .actions {
+        justify-content: flex-start;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      pre {
+        min-height: 52vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="hero">
+      <div>
+        <h1>Heartbeat System Prompt</h1>
+        <p>这个页面直接读取当前运行中 Bailongma 的 heartbeat 最终系统提示词。左侧显示注入统计，右侧显示原始 prompt，方便你肉眼确认近期聊天记录和行为日志是否已进入系统提示词。</p>
+      </div>
+      <div class="actions">
+        <button class="primary" id="refreshBtn">刷新预览</button>
+        <button class="ghost" id="copyBtn">复制 Prompt</button>
+      </div>
+    </section>
+
+    <section class="panel status">
+      <span class="dot"></span>
+      <span id="statusText">等待加载…</span>
+    </section>
+
+    <section class="grid">
+      <aside class="panel">
+        <h2>注入概览</h2>
+        <div class="stats">
+          <div class="stat">
+            <span class="stat-label">聊天记录</span>
+            <strong class="stat-value" id="conversationCount">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">行为日志</span>
+            <strong class="stat-value" id="actionLogCount">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">相关记忆</span>
+            <strong class="stat-value" id="memoryCount">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">任务知识</span>
+            <strong class="stat-value" id="taskKnowledgeCount">0</strong>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card">
+            <p class="card-title">Heartbeat 输入</p>
+            <p class="list" id="messageText">-</p>
+          </div>
+          <div class="card">
+            <p class="card-title">方向提示</p>
+            <p class="list" id="directionsText">-</p>
+          </div>
+          <div class="card">
+            <p class="card-title">最近聊天预览</p>
+            <p class="list" id="conversationText">-</p>
+          </div>
+          <div class="card">
+            <p class="card-title">最近行为日志预览</p>
+            <p class="list" id="actionLogText">-</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <h2>最终 System Prompt</h2>
+        <pre id="promptText">加载中…</pre>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const statusText = document.getElementById('statusText')
+    const promptText = document.getElementById('promptText')
+    const refreshBtn = document.getElementById('refreshBtn')
+    const copyBtn = document.getElementById('copyBtn')
+    const conversationCount = document.getElementById('conversationCount')
+    const actionLogCount = document.getElementById('actionLogCount')
+    const memoryCount = document.getElementById('memoryCount')
+    const taskKnowledgeCount = document.getElementById('taskKnowledgeCount')
+    const messageText = document.getElementById('messageText')
+    const directionsText = document.getElementById('directionsText')
+    const conversationText = document.getElementById('conversationText')
+    const actionLogText = document.getElementById('actionLogText')
+
+    function formatConversation(items) {
+      if (!items || items.length === 0) return '当前 heartbeat 没有注入聊天记录。'
+      return items.slice(-8).map((item) => {
+        const time = String(item.timestamp || '').slice(11, 16)
+        if (item.role === 'user') return `[${time}] ${item.from_id}: ${item.content}`
+        return `[${time}] 我 → ${item.to_id}: ${item.content}`
+      }).join('\n')
+    }
+
+    function formatActionLog(items) {
+      if (!items || items.length === 0) return '当前 heartbeat 没有注入行为日志。'
+      return items.slice(-8).map((item) => {
+        const time = String(item.timestamp || '').slice(11, 16)
+        const detail = item.detail ? `\n  ${item.detail}` : ''
+        return `- [${time}] ${item.tool} · ${item.summary}${detail}`
+      }).join('\n')
+    }
+
+    async function loadPreview() {
+      statusText.textContent = '正在刷新 heartbeat prompt…'
+      statusText.className = ''
+      refreshBtn.disabled = true
+      try {
+        const res = await fetch('/system-prompt-preview')
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'load failed')
+
+        conversationCount.textContent = String((data.injection?.conversationWindow || []).length)
+        actionLogCount.textContent = String((data.injection?.actionLog || []).length)
+        memoryCount.textContent = String((data.injection?.memories || []).length)
+        taskKnowledgeCount.textContent = String((data.injection?.taskKnowledge || []).length)
+        messageText.textContent = data.message || '-'
+        directionsText.textContent = (data.injection?.directions || []).join('\n') || '无额外方向提示'
+        conversationText.textContent = formatConversation(data.injection?.conversationWindow || [])
+        actionLogText.textContent = formatActionLog(data.injection?.actionLog || [])
+        promptText.textContent = data.systemPrompt || ''
+        statusText.textContent = `已刷新：聊天 ${conversationCount.textContent} 条，日志 ${actionLogCount.textContent} 条`
+      } catch (err) {
+        promptText.textContent = ''
+        statusText.textContent = `加载失败：${err.message}`
+        statusText.className = 'error'
+      } finally {
+        refreshBtn.disabled = false
+      }
+    }
+
+    refreshBtn.addEventListener('click', loadPreview)
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(promptText.textContent || '')
+        statusText.textContent = '已复制当前 system prompt'
+      } catch (err) {
+        statusText.textContent = `复制失败：${err.message}`
+        statusText.className = 'error'
+      }
+    })
+
+    loadPreview()
+  </script>
+</body>
+</html>

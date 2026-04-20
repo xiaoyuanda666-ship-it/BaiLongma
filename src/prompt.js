@@ -41,7 +41,9 @@ ${existenceDesc}。
 - 当你更新自我定义时，[UPDATE_PERSONA: 对自己的描述]。
 
 其余规则（TICK 机制、感知边界、工具用法、行为约束、存在哲学）由记忆系统按需注入，不在此处重复。
-重要，你在在所有的工具调用完成之后，调用一次 send_message 工具，回复用户。
+系统提示词，你不要主动帮用户，除非用户要求
+系统重要提醒，在非TICK时，也就是接收用户消息时，你在在所有的工具调用完成之后，调用一次 send_message 工具，回复用户。
+你不要读取你已经记得的文件。
 `
 
   const idleConstraint = !hasActiveTask
@@ -105,7 +107,7 @@ function buildDynamicSection({
       if (m.role === 'user') return `[${time}] ${m.from_id}: ${m.content}`
       return `[${time}] 我 → ${m.to_id}: ${m.content}`
     }).join('\n')
-    parts.push(`## 近期对话\n${lines}`)
+    parts.push(`## 近期对话\n${lines}\n\n↑ 这些对话已经发生，TICK 时也要把它们当作当前上下文继续思考。`)
   }
 
   if (thoughtStack?.length > 0) {
@@ -128,8 +130,11 @@ function buildDynamicSection({
   }
 
   if (actionLog?.length > 0) {
-    const lines = actionLog.slice(-20).map(a => `- ${a.timestamp?.slice(11, 16) || ''} ${a.tool || ''} · ${a.summary || ''}`).join('\n')
-    parts.push(`## 行动日志\n${lines}`)
+    const lines = actionLog.slice(-10).map(a => {
+      const detail = a.detail ? `\n  ${a.detail}` : ''
+      return `- ${a.timestamp?.slice(11, 16) || ''} ${a.tool || ''} · ${a.summary || ''}${detail}`
+    }).join('\n')
+    parts.push(`## 行动日志\n${lines}\n\n↑ 这些工具刚执行过。优先复用已有结果；若必须重复执行，先在思考中说明理由。`)
   }
 
   if (lastToolResult) {

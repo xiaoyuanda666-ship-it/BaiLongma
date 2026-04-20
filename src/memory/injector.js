@@ -5,6 +5,7 @@ import {
   getPersonMemory,
   getMemoriesByEntity,
   getRecentConversation,
+  getRecentConversationTimeline,
   getRecentActionLogs,
 } from '../db.js'
 
@@ -115,6 +116,8 @@ export async function runInjector({ message, state, hint = '' }) {
     personMemory = getPersonMemory(senderId)
     conversationWindow = getRecentConversation(senderId, 20, 24)
     senderMemories = getMemoriesByEntity(senderId, 10)
+  } else if (message && /^TICK\s/i.test(message.trim())) {
+    conversationWindow = getRecentConversationTimeline(20, 24)
   }
 
   const hintText = hint ? hint.replace(/<think>[\s\S]*?<\/think>/gi, '').slice(0, 400) : ''
@@ -181,7 +184,7 @@ export async function runInjector({ message, state, hint = '' }) {
   if (senderId || state?.prev_recall) baseTools.push('search_memory')
   const tools = [...new Set(baseTools)]
 
-  const actionLog = getRecentActionLogs(50)
+  const actionLog = getRecentActionLogs(10)
 
   return {
     memories,

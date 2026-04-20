@@ -577,7 +577,19 @@ async function main() {
   }
 
   // 启动 HTTP API
-  startAPI(3721)
+  startAPI(3721, {
+    getStateSnapshot: () => ({
+      action: state.action,
+      task: state.task,
+      prev_recall: state.prev_recall,
+      lastToolResult: state.lastToolResult
+        ? { ...state.lastToolResult, args: { ...(state.lastToolResult.args || {}) } }
+        : null,
+      sessionCounter: state.sessionCounter,
+      recentActions: (state.recentActions || []).map(item => ({ ...item })),
+      thoughtStack: (state.thoughtStack || []).map(item => ({ ...item })),
+    }),
+  })
 
   // 启动 TUI
   startTUI('ID:000001')

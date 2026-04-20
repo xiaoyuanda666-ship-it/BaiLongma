@@ -1172,7 +1172,7 @@ function connectSSE() {
   setConnectionState("connecting", true);
   const es = new EventSource(`${API}/events`);
 
-  es.onopen = () => setConnectionState("streaming", true);
+  es.onopen = () => setConnectionState("已连接", true);
 
   es.onmessage = event => {
     try { handle(JSON.parse(event.data)); } catch (_) {}

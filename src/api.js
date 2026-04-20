@@ -8,6 +8,7 @@ import { getDB, getConfig, setConfig } from './db.js'
 import { emitEvent, addSSEClient, removeSSEClient } from './events.js'
 import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
+import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 
 export { emitEvent }
 
@@ -17,6 +18,7 @@ const DASHBOARD_PATH = path.join(__dirname, '../dashboard.html')
 const BRAIN_PATH     = path.join(__dirname, '../brain.html')
 const BRAIN_UI_PATH  = path.join(__dirname, '../brain-ui.html')
 const WEBSITE_PATH   = path.join(__dirname, '../website.html')
+const SYSTEM_PROMPT_PATH = path.join(__dirname, '../systemPrompt.html')
 const BRAIN_UI_ASSET_ROOT = path.join(__dirname, 'ui', 'brain-ui')
 const SANDBOX_PATH   = path.join(__dirname, '../sandbox')
 const DEFAULT_AGENT_NAME = 'Longma'
@@ -166,7 +168,7 @@ function extractAgentRename(content) {
   return null
 }
 
-export function startAPI(port = 3721) {
+export function startAPI(port = 3721, { getStateSnapshot = null } = {}) {
   const server = http.createServer((req, res) => {
     const base = `http://localhost:${port}`
     const url = new URL(req.url, base)
@@ -275,6 +277,16 @@ export function startAPI(port = 3721) {
     // GET /quota
     if (req.method === 'GET' && url.pathname === '/quota') {
       jsonResponse(res, 200, getQuotaStatus())
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/system-prompt-preview') {
+      Promise.resolve()
+        .then(() => buildHeartbeatSystemPromptPreview({
+          stateSnapshot: typeof getStateSnapshot === 'function' ? getStateSnapshot() : {},
+        }))
+        .then((preview) => jsonResponse(res, 200, preview))
+        .catch((err) => jsonResponse(res, 500, { error: err.message }))
       return
     }
 
@@ -398,6 +410,18 @@ export function startAPI(port = 3721) {
       } catch {
         res.writeHead(404)
         res.end('brain-ui.html not found')
+      }
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/systemPrompt.html') {
+      try {
+        const html = fs.readFileSync(SYSTEM_PROMPT_PATH, 'utf-8')
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(html)
+      } catch {
+        res.writeHead(404)
+        res.end('systemPrompt.html not found')
       }
       return
     }

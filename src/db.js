@@ -824,6 +824,19 @@ export function getRecentConversation(entityId, limit = 20, maxHours = 24) {
   return rows.reverse() // 按时间正序返回
 }
 
+// 获取全局近期对话时间线（用于 TICK/heartbeat 场景，无明确发送者时仍可注入最近聊天上下文）
+export function getRecentConversationTimeline(limit = 20, maxHours = 24) {
+  const db = getDB()
+  const cutoff = new Date(Date.now() - maxHours * 3600 * 1000).toISOString()
+  const rows = db.prepare(`
+    SELECT * FROM conversations
+    WHERE timestamp >= ?
+    ORDER BY timestamp DESC
+    LIMIT ?
+  `).all(cutoff, limit)
+  return rows.reverse()
+}
+
 // 获取最近 N 小时内有过双向对话的所有他者 ID（按最近对话时间倒序）
 // 用于 TICK 场景给 send_message 提供"熟人"白名单，让意识体可主动联系已建立过连接的对象
 export function getRecentConversationPartners(maxHours = 24, limit = 20) {
