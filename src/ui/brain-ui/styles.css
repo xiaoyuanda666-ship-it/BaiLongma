@@ -529,7 +529,7 @@ body {
   border-radius: 14px;
   border: 1px solid var(--line-strong);
   background: var(--console-bg);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(15px);
   -webkit-backdrop-filter: blur(20px);
 }
 

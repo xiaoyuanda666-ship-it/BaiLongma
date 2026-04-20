@@ -4,6 +4,7 @@ const API = "http://localhost:3721";
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const MAX_CHAT_HISTORY = 60;
+const DEFAULT_AGENT_NAME = "Longma";
 
 const themeSwitcher = document.getElementById("theme-switcher");
 const resetViewBtn = document.getElementById("reset-view-btn");
@@ -15,6 +16,32 @@ const nodeSizeSlider = document.getElementById("node-size-slider");
 const gravityValue = document.getElementById("gravity-value");
 const repulsionValue = document.getElementById("repulsion-value");
 const nodeSizeValue = document.getElementById("node-size-value");
+const brandNameEl = document.getElementById("agent-brand-name");
+const graphEl = document.getElementById("graph");
+
+let agentName = DEFAULT_AGENT_NAME;
+
+function setAgentName(nextName) {
+  const normalized = String(nextName || "").trim() || DEFAULT_AGENT_NAME;
+  agentName = normalized;
+  document.title = `${normalized} · Cognitive Surface`;
+  if (brandNameEl) brandNameEl.textContent = `${normalized} AI Agent`;
+  if (graphEl) graphEl.setAttribute("aria-label", `${normalized} memory graph`);
+  const input = document.getElementById("msg-input");
+  if (input) input.placeholder = `向 ${normalized} 发送消息…`;
+  document.querySelectorAll(".msg-jarvis .msg-label").forEach((el) => {
+    el.textContent = normalized;
+  });
+}
+
+async function loadAgentProfile() {
+  try {
+    const res = await fetch(`${API}/agent-profile`);
+    if (!res.ok) return;
+    const data = await res.json();
+    setAgentName(data.name);
+  } catch {}
+}
 
 const physicsSettings = {
   gravity: 1,
@@ -1202,6 +1229,9 @@ function handle({ type, data = {} }) {
         openChat(true);
       }
       break;
+    case "agent_name_updated":
+      setAgentName(data.name);
+      break;
     default:
       break;
   }
@@ -1476,7 +1506,7 @@ function createMarkdownBody(text) {
 
 function addMsg(role, text, options = {}) {
   const { alert = role === "jarvis", pending = true, label } = options;
-  const defaultLabel = role === "user" ? "You" : role === "jarvis" ? "Jarvis" : "Peer";
+  const defaultLabel = role === "user" ? "You" : role === "jarvis" ? agentName : "Peer";
   const labelText = label || defaultLabel;
   const div = document.createElement("div");
   div.className = `msg msg-${role}`;
@@ -1582,6 +1612,7 @@ d3.timer(() => {
   refreshNodeVisuals();
 });
 
+setAgentName(DEFAULT_AGENT_NAME);
 readPhysicsSettings();
 updatePhysicsReadout();
 refreshThemeColors();
@@ -1590,4 +1621,5 @@ setInterval(() => {
   loadMemories();
 }, 5 * 60 * 1000);
 connectSSE();
+loadAgentProfile();
 restoreChatHistory();

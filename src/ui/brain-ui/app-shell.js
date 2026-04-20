@@ -1,6 +1,6 @@
 const createGraphStage = () => `
 <div class="grid-overlay"></div>
-<svg id="graph" aria-label="Jarvis memory graph"></svg>
+<svg id="graph" aria-label="Longma memory graph"></svg>
 `;
 
 const createPrimaryPanel = () => `
@@ -9,7 +9,7 @@ const createPrimaryPanel = () => `
     <div class="brand-mark"></div>
     <div class="brand-copy">
       <div class="eyebrow">Cognitive Surface</div>
-      <div class="brand-title">白龙马 AI Agent</div>
+      <div class="brand-title" id="agent-brand-name">Longma AI Agent</div>
     </div>
   </header>
 
@@ -107,7 +107,7 @@ const createConsole = () => `
   </div>
   <div id="input-row">
     <span class="prompt-mark">▸</span>
-    <input id="msg-input" type="text" placeholder="向 Jarvis 发送消息…" autocomplete="off">
+    <input id="msg-input" type="text" placeholder="向 Longma 发送消息…" autocomplete="off">
     <button id="send-btn" type="button">发送</button>
   </div>
 </section>

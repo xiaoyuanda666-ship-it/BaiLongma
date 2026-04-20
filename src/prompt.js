@@ -1,6 +1,7 @@
 import { nowTimestamp } from './time.js'
 
 export function buildSystemPrompt({
+  agentName = 'Longma',
   persona = '',
   memories = '',
   directions = '',
@@ -46,6 +47,7 @@ ${existenceDesc}。
     : `\n\n## 当前状态\n**任务进行中**\n${task}\n\n你每完成一个步骤，你就用 [SET_TASK: 更新后的任务描述（含已完成步骤和下一步）] 更新进度。全部完成后写下 [CLEAR_TASK]。`
 
   const dynamic = buildDynamicSection({
+    agentName,
     persona,
     memories,
     directions,
@@ -65,6 +67,7 @@ ${existenceDesc}。
 }
 
 function buildDynamicSection({
+  agentName,
   persona,
   memories,
   directions,
@@ -80,6 +83,10 @@ function buildDynamicSection({
   lastToolResult,
 }) {
   const parts = []
+
+  if (agentName) {
+    parts.push(`## 你的当前名字\n你当前对用户展示和自称使用的名字是：${agentName}`)
+  }
 
   if (constraints?.length > 0) {
     const list = constraints.map(c => `- ${c.content}`).join('\n')

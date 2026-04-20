@@ -4,7 +4,7 @@ import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { pushMessage } from './queue.js'
-import { getDB } from './db.js'
+import { getDB, getConfig, setConfig } from './db.js'
 import { emitEvent, addSSEClient, removeSSEClient } from './events.js'
 import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
@@ -18,6 +18,7 @@ const BRAIN_PATH     = path.join(__dirname, '../brain.html')
 const BRAIN_UI_PATH  = path.join(__dirname, '../brain-ui.html')
 const BRAIN_UI_ASSET_ROOT = path.join(__dirname, 'ui', 'brain-ui')
 const SANDBOX_PATH   = path.join(__dirname, '../sandbox')
+const DEFAULT_AGENT_NAME = 'Longma'
 
 function jsonResponse(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -37,6 +38,31 @@ function contentTypeFor(filePath) {
     default:
       return 'text/plain; charset=utf-8'
   }
+}
+
+function getAgentName() {
+  return (getConfig('agent_name') || '').trim() || DEFAULT_AGENT_NAME
+}
+
+function extractAgentRename(content) {
+  const text = String(content || '').trim()
+  if (!text) return null
+
+  const patterns = [
+    /(?:以后|之后|从现在起|从今以后)?(?:你|你以后|以后你)(?:就)?叫\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
+    /把你(?:的名字)?改成\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
+    /以后叫你\s*([A-Za-z][A-Za-z0-9 _-]{1,31}|[\u4e00-\u9fa5A-Za-z0-9 _-]{1,16})(?:吧|啦|了|。|！|!|，|,|$)/i,
+    /your name is now\s+([A-Za-z][A-Za-z0-9 _-]{1,31})/i,
+    /i(?:'ll| will)? call you\s+([A-Za-z][A-Za-z0-9 _-]{1,31})/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (!match) continue
+    const nextName = String(match[1] || '').trim().replace(/\s+/g, ' ')
+    if (nextName) return nextName
+  }
+  return null
 }
 
 export function startAPI(port = 3721) {
@@ -64,9 +90,14 @@ export function startAPI(port = 3721) {
           const { from_id = 'ID:000001', content, channel = 'API' } = JSON.parse(body)
           if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
           const trimmed = content.trim()
+          const renamedTo = extractAgentRename(trimmed)
+          if (renamedTo) {
+            setConfig('agent_name', renamedTo)
+            emitEvent('agent_name_updated', { name: renamedTo })
+          }
           pushMessage(from_id, trimmed, channel)
           emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString() })
-          jsonResponse(res, 200, { ok: true })
+          jsonResponse(res, 200, { ok: true, agent_name: getAgentName() })
         } catch (e) {
           jsonResponse(res, 400, { error: e.message })
         }
@@ -143,6 +174,11 @@ export function startAPI(port = 3721) {
     // GET /quota
     if (req.method === 'GET' && url.pathname === '/quota') {
       jsonResponse(res, 200, getQuotaStatus())
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/agent-profile') {
+      jsonResponse(res, 200, { name: getAgentName() })
       return
     }
 

@@ -191,9 +191,11 @@ async function process(input, label, msg = null) {
 
   // 2. 组装系统提示词
   const persona = getConfig('persona') || ''
+  const agentName = getConfig('agent_name') || 'Longma'
   const entities = getKnownEntities()
   const hasActiveTask = !!state.task
   const systemPrompt = buildSystemPrompt({
+    agentName,
     persona,
     memories: memoriesText,
     directions: directionsText,
