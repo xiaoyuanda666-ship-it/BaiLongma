@@ -277,21 +277,15 @@ async function process(input, label, msg = null) {
   console.log('\nJarvis:', response)
   emitEvent('response', { sessionRef, label, content: response })
 
-  // 标签救援：模型输出 <l1_reply>/<final_reply> 文本但未调 send_message —— 视作要回复的他者消息
+  // 收紧约束：回复他者时只有真实 send_message 工具调用才算已发出消息，不再做文本标签救援。
   if (msg && msg.fromId && !toolCallLog.some(t => t.name === 'send_message')) {
-    const tagMatch = response.match(/<l1_reply>([\s\S]*?)<\/l1_reply>/i)
-      || response.match(/<final_reply>([\s\S]*?)<\/final_reply>/i)
-    const rescued = tagMatch?.[1]?.trim()
-    if (rescued) {
-      const targetId = msg.fromId
-      const timestamp = nowTimestamp()
-      insertConversation({ role: 'jarvis', from_id: 'jarvis', to_id: targetId, content: rescued, timestamp })
-      emitEvent('message', { from: 'consciousness', to: targetId, content: rescued, timestamp })
-      toolCallLog.push({ name: 'send_message', args: { target_id: targetId, content: rescued }, result: `消息已发送至 ${targetId}（标签救援）` })
-      state.recentActions.push({ ts: timestamp, summary: `send_message → ${targetId}` })
-      if (state.recentActions.length > 5) state.recentActions.shift()
-      console.log(`[标签救援] Jarvis → ${targetId}: ${rescued}`)
-    }
+    console.warn(`[协议违规] 模型未调用 send_message，回复不会发出。from=${msg.fromId}`)
+    emitEvent('protocol_violation', {
+      label,
+      reason: 'missing_send_message',
+      fromId: msg.fromId,
+      content: response.slice(0, 500),
+    })
   }
 
   // 4. 检测 [RECALL: ...]
