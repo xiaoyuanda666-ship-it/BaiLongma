@@ -135,7 +135,14 @@ function isFastUserMessage(msg) {
 
 function shouldPreemptFor(entry) {
   if (!entry || !processing || !currentExecution) return true
-  return (entry.priority || PRIORITY.background) > currentExecution.priority
+  const incomingPriority = entry.priority || PRIORITY.background
+  if (incomingPriority > currentExecution.priority) return true
+
+  // 用户实时消息之间也允许相互抢占。
+  // 这样当前如果正卡在工具调用里，新的用户消息仍然可以立刻打断并优先处理。
+  if (incomingPriority >= PRIORITY.user && currentExecution.priority >= PRIORITY.user) return true
+
+  return false
 }
 
 function beginExecution({ priority, kind, label, controller }) {

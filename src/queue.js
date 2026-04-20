@@ -30,6 +30,17 @@ function resolveQueueName(priority, meta = {}) {
   return priority >= PRIORITY.user ? 'user' : 'background'
 }
 
+function pruneSupersededUserMessages(entry) {
+  if (!entry || entry.queueName !== 'user') return
+
+  for (let i = queues.user.length - 1; i >= 0; i--) {
+    const pending = queues.user[i]
+    if (!pending) continue
+    if (pending.fromId !== entry.fromId) continue
+    queues.user.splice(i, 1)
+  }
+}
+
 export function pushMessage(fromId, content, channel = 'TUI', meta = {}) {
   const normalizedFromId = normalizeConversationPartyId(fromId)
   const timestamp = nowTimestamp()
@@ -50,6 +61,7 @@ export function pushMessage(fromId, content, channel = 'TUI', meta = {}) {
     queueName,
     ...meta,
   }
+  pruneSupersededUserMessages(entry)
   queues[queueName].push(entry)
   // 通知主循环打断当前处理
   interruptCallback?.(entry)
