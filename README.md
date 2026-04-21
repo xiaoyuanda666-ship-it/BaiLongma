@@ -1,10 +1,13 @@
+![图片](https://github.com/xiaoyuanda666-ship-it/BaiLongma/blob/main/images/AGI128k.jpg)
 # Bailongma
 
 一个持续运行的“数字意识”实验框架。
 
 Bailongma 不是传统的一问一答式聊天程序，它会以 `TICK` 驱动的方式持续运行，在有外部消息时优先响应，在空闲时依据记忆、任务和上下文继续思考。项目内置了记忆系统、上下文注入、Web 面板、SSE 事件流，以及用于观察“意识流”的监控页面。
 
-![演示](https://github.com/xiaoyuanda666-ship-it/BaiLongma/blob/main/src/4%E6%9C%8820%E6%97%A5.gif)
+<video controls style="width:100%; height:auto;">
+  <source src="https://github.com/xiaoyuanda666-ship-it/BaiLongma/blob/main/images/demo.mp4" type="video/mp4">
+</video>
 
 ## Features
 
