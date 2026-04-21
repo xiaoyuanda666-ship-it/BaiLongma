@@ -1,16 +1,90 @@
 {
-  "name": "jarvis",
-  "version": "0.1.0",
+  "name": "bailongma",
+  "productName": "Bailongma",
+  "version": "0.1.1",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
-  "main": "src/index.js",
+  "main": "electron/main.cjs",
+  "author": {
+    "name": "xiaoyuanda666-ship-it"
+  },
   "scripts": {
-    "start": "node --env-file=.env src/index.js",
-    "dev": "node --env-file=.env --watch src/index.js"
+    "start": "electron .",
+    "start:backend": "node --env-file=.env src/index.js",
+    "dev": "node --env-file=.env --watch src/index.js",
+    "build": "electron-builder --win",
+    "publish": "electron-builder --win --publish always",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
+    "electron-updater": "^6.3.9",
     "openai": "^6.34.0",
     "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.xiaoyuanda.bailongma",
+    "productName": "Bailongma",
+    "artifactName": "${productName} Setup ${version}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "scripts/seed-memories.js",
+      "index.html",
+      "dashboard.html",
+      "brain.html",
+      "brain-ui.html",
+      "website.html",
+      "systemPrompt.html",
+      "activation.html",
+      "sandbox/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,*.d.ts}",
+      "!**/node_modules/.cache",
+      "!**/.vscode",
+      "!data/**/*"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true,
+      "installerHeaderIcon": "build/installerHeaderIcon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Bailongma"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xiaoyuanda666-ship-it",
+        "repo": "BaiLongma",
+        "releaseType": "release"
+      }
+    ]
   }
 }

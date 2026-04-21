@@ -4,7 +4,7 @@ import { buildSystemPrompt } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
 import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge } from './memory/injector.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
-import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, getNextPendingReminder } from './db.js'
+import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, getNextPendingReminder, getMemoryCount } from './db.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -15,6 +15,10 @@ import { registerProvider } from './providers/registry.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
+import { seedSandboxOnce } from './paths.js'
+
+// 首次启动时把资源目录里的 sandbox 种子文件拷到用户数据目录（Electron 安装场景）
+seedSandboxOnce()
 
 // 当前 LLM 处理的 AbortController（主循环打断用）
 let currentAbortController = null
@@ -28,6 +32,10 @@ const PRIORITY = {
 
 // 初始化数据库
 getDB()
+if (getMemoryCount() === 0) {
+  console.log('[系统] 记忆库为空，注入默认 seed memories')
+  await import('../scripts/seed-memories.js')
+}
 const birthTime = getOrInitBirthTime()
 
 // 从数据库恢复持久化任务（重启后不丢失）
@@ -38,11 +46,19 @@ if (persistedTask) {
 
 // 注册 Provider（多媒体能力用 MiniMax，独立于 LLM 选择）
 // 本文件下方的 `function process(...)` 会遮蔽全局 process，所以用 globalThis.process 访问环境变量。
-const MINIMAX_API_KEY_ENV = globalThis.process.env.MINIMAX_API_KEY
-if (MINIMAX_API_KEY_ENV) {
-  registerProvider(new MinimaxProvider({ apiKey: MINIMAX_API_KEY_ENV }))
+function registerMinimaxIfAvailable() {
+  const envKey = globalThis.process.env.MINIMAX_API_KEY
+  const configKey = config.provider === 'minimax' ? config.apiKey : null
+  const key = envKey || configKey
+  if (key) registerProvider(new MinimaxProvider({ apiKey: key }))
 }
-console.log(`[LLM] 使用 ${config.provider}（模型: ${config.model}）`)
+registerMinimaxIfAvailable()
+
+if (config.needsActivation) {
+  console.log('[LLM] 未激活，等待用户在激活页填入 API Key')
+} else {
+  console.log(`[LLM] 使用 ${config.provider}（模型: ${config.model}）`)
+}
 
 // 运行状态
 const state = {
@@ -566,35 +582,11 @@ function triggerImmediateTick() {
   })()
 }
 
-async function main() {
-  console.log('Jarvis 启动中...')
+let loopStarted = false
 
-  const persona = getConfig('persona')
-  if (persona) {
-    console.log(`[系统] 已加载人格：${persona.slice(0, 60)}...`)
-  } else {
-    console.log('[系统] 人格未设置，等待 Jarvis 自我定义')
-  }
-
-  // 启动 HTTP API
-  startAPI(3721, {
-    getStateSnapshot: () => ({
-      action: state.action,
-      task: state.task,
-      prev_recall: state.prev_recall,
-      lastToolResult: state.lastToolResult
-        ? { ...state.lastToolResult, args: { ...(state.lastToolResult.args || {}) } }
-        : null,
-      sessionCounter: state.sessionCounter,
-      recentActions: (state.recentActions || []).map(item => ({ ...item })),
-      thoughtStack: (state.thoughtStack || []).map(item => ({ ...item })),
-    }),
-  })
-
-  // 启动 TUI
-  startTUI('ID:000001')
-
-  console.log('输入消息后按回车发送给 Jarvis\n')
+async function startConsciousnessLoop({ runImmediateTick = true } = {}) {
+  if (loopStarted) return
+  loopStarted = true
 
   // 注册调度函数，供控制层（stop/start）唤起
   setScheduler(scheduleNextTick)
@@ -614,9 +606,54 @@ async function main() {
     triggerImmediateTick()
   })
 
-  // 首次立即运行，之后自适应调度
-  await onTick()
+  // 激活刚完成时不要立刻打一发 L2 TICK，避免和激活校验/用户首条消息争抢配额。
+  if (runImmediateTick) {
+    await onTick()
+  }
   scheduleNextTick()
+}
+
+async function main() {
+  console.log('Jarvis 启动中...')
+
+  const persona = getConfig('persona')
+  if (persona) {
+    console.log(`[系统] 已加载人格：${persona.slice(0, 60)}...`)
+  } else {
+    console.log('[系统] 人格未设置，等待 Jarvis 自我定义')
+  }
+
+  // 启动 HTTP API —— 无论是否激活都要起，激活页本身就靠它
+  const apiPort = Number(globalThis.process.env.BAILONGMA_PORT) || 3721
+  startAPI(apiPort, {
+    getStateSnapshot: () => ({
+      action: state.action,
+      task: state.task,
+      prev_recall: state.prev_recall,
+      lastToolResult: state.lastToolResult
+        ? { ...state.lastToolResult, args: { ...(state.lastToolResult.args || {}) } }
+        : null,
+      sessionCounter: state.sessionCounter,
+      recentActions: (state.recentActions || []).map(item => ({ ...item })),
+      thoughtStack: (state.thoughtStack || []).map(item => ({ ...item })),
+    }),
+    onActivated: () => {
+      console.log(`[LLM] 激活成功：${config.provider}（${config.model}）`)
+      registerMinimaxIfAvailable()
+      startConsciousnessLoop({ runImmediateTick: false }).catch(err => console.error('[系统] 主循环启动失败:', err))
+    },
+  })
+
+  // 启动 TUI
+  startTUI('ID:000001')
+
+  if (config.needsActivation) {
+    console.log(`输入消息前请先在浏览器打开 http://127.0.0.1:${apiPort}/activation 完成激活\n`)
+    return
+  }
+
+  console.log('输入消息后按回车发送给 Jarvis\n')
+  await startConsciousnessLoop()
 }
 
 main()

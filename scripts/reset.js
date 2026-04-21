@@ -4,9 +4,10 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { getDB, resetAll } from '../src/db.js'
 import { nowTimestamp } from '../src/time.js'
+import { paths } from '../src/paths.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SANDBOX_DIR = path.join(__dirname, '../sandbox')
+const SANDBOX_DIR = paths.sandboxDir
 
 // sandbox 种子文件（不删除，每次重建为初始内容）
 const SEED_FILES = {

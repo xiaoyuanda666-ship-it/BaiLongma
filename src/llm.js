@@ -5,10 +5,20 @@ import { getToolSchemas } from './capabilities/schemas.js'
 import { recordUsage, shouldThrottle } from './quota.js'
 import { insertActionLog } from './db.js'
 
-const client = new OpenAI({
-  apiKey: config.apiKey,
-  baseURL: config.baseURL,
-})
+// 延迟创建 OpenAI 客户端：激活流程把 key 写入 config 后再调用这里，
+// 避免模块加载阶段就锁死尚未填入的 apiKey/baseURL。
+let client = null
+let clientKey = null
+function getClient() {
+  const signature = `${config.provider}|${config.baseURL}|${config.apiKey}`
+  if (client && clientKey === signature) return client
+  if (!config.apiKey) {
+    throw new Error('LLM 尚未激活，请先通过激活页填入 API Key')
+  }
+  client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })
+  clientKey = signature
+  return client
+}
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
 async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream }) {
@@ -33,7 +43,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     requestParams.tool_choice = 'auto'
   }
 
-  const stream = await client.chat.completions.create(requestParams, { signal })
+  const stream = await getClient().chat.completions.create(requestParams, { signal })
 
   let fullContent = ''
   let toolCallsMap = {}

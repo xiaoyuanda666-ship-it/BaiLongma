@@ -9,18 +9,21 @@ import { emitEvent, addSSEClient, removeSSEClient } from './events.js'
 import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
+import { paths } from './paths.js'
+import { config, activate as activateLLM, getActivationStatus } from './config.js'
 
 export { emitEvent }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const INDEX_PATH     = path.join(__dirname, '../index.html')
-const DASHBOARD_PATH = path.join(__dirname, '../dashboard.html')
-const BRAIN_PATH     = path.join(__dirname, '../brain.html')
-const BRAIN_UI_PATH  = path.join(__dirname, '../brain-ui.html')
-const WEBSITE_PATH   = path.join(__dirname, '../website.html')
-const SYSTEM_PROMPT_PATH = path.join(__dirname, '../systemPrompt.html')
-const BRAIN_UI_ASSET_ROOT = path.join(__dirname, 'ui', 'brain-ui')
-const SANDBOX_PATH   = path.join(__dirname, '../sandbox')
+const INDEX_PATH         = paths.indexHtml
+const DASHBOARD_PATH     = paths.dashboardHtml
+const BRAIN_PATH         = paths.brainHtml
+const BRAIN_UI_PATH      = paths.brainUiHtml
+const WEBSITE_PATH       = paths.websiteHtml
+const SYSTEM_PROMPT_PATH = paths.systemPromptHtml
+const ACTIVATION_PATH    = paths.activationHtml
+const BRAIN_UI_ASSET_ROOT = paths.brainUiAssetRoot
+const SANDBOX_PATH       = paths.sandboxDir
 const DEFAULT_AGENT_NAME = 'Longma'
 
 function jsonResponse(res, status, body) {
@@ -168,7 +171,8 @@ function extractAgentRename(content) {
   return null
 }
 
-export function startAPI(port = 3721, { getStateSnapshot = null } = {}) {
+export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = null } = {}) {
+  const onActivatedCallback = onActivated
   const server = http.createServer((req, res) => {
     const base = `http://localhost:${port}`
     const url = new URL(req.url, base)
@@ -351,15 +355,62 @@ export function startAPI(port = 3721, { getStateSnapshot = null } = {}) {
       return
     }
 
-    // GET / — Dashboard
+    // GET /activation-status — 查询是否已经激活
+    if (req.method === 'GET' && url.pathname === '/activation-status') {
+      jsonResponse(res, 200, getActivationStatus())
+      return
+    }
+
+    // POST /activate — 填入 API Key 完成激活
+    if (req.method === 'POST' && url.pathname === '/activate') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', async () => {
+        try {
+          const body = Buffer.concat(chunks).toString('utf-8')
+          const { provider, apiKey } = JSON.parse(body || '{}')
+          const info = await activateLLM({ provider, apiKey })
+          emitEvent('activated', info)
+          // 通知 index.js 启动主循环
+          if (typeof onActivatedCallback === 'function') {
+            try { onActivatedCallback() } catch (err) { console.error('[API] onActivated 回调出错:', err) }
+          }
+          jsonResponse(res, 200, { ok: true, ...info })
+        } catch (err) {
+          jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // GET /activation — 激活引导页
+    if (req.method === 'GET' && (url.pathname === '/activation' || url.pathname === '/activation.html')) {
+      try {
+        const html = fs.readFileSync(ACTIVATION_PATH, 'utf-8')
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(html)
+      } catch {
+        res.writeHead(404)
+        res.end('activation.html not found')
+      }
+      return
+    }
+
+    // GET / — 未激活时进入激活页，已激活时进入 brain-ui
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
+      if (config.needsActivation) {
+        res.writeHead(302, { Location: '/activation' })
+        res.end()
+        return
+      }
       try {
         const html = fs.readFileSync(INDEX_PATH, 'utf-8')
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
         res.end(html)
       } catch {
-        res.writeHead(404)
-        res.end('index.html not found')
+        // 没有 index.html 时，直接去 brain-ui
+        res.writeHead(302, { Location: '/brain-ui' })
+        res.end()
       }
       return
     }
@@ -403,6 +454,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null } = {}) {
     }
 
     if (req.method === 'GET' && (url.pathname === '/brain-ui' || url.pathname === '/brain-ui.html')) {
+      if (config.needsActivation) {
+        res.writeHead(302, { Location: '/activation' })
+        res.end()
+        return
+      }
       try {
         const html = fs.readFileSync(BRAIN_UI_PATH, 'utf-8')
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
@@ -505,7 +561,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null } = {}) {
 
     // POST /admin/reset-files — 清除 sandbox 用户文件（保留 readme.txt、world.txt）
     if (req.method === 'POST' && url.pathname === '/admin/reset-files') {
-      const sandboxPath = path.join(__dirname, '../sandbox')
+      const sandboxPath = SANDBOX_PATH
       const KEEP = new Set(['readme.txt', 'world.txt'])
       function clearDir(dir) {
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

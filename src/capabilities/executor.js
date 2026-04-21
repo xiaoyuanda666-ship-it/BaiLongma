@@ -33,9 +33,10 @@ function getUrlTtl(url) {
   return URL_TTL_MS.default
 }
 
+import { paths } from '../paths.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // 文件操作只允许在 sandbox 目录内
-const SANDBOX_ROOT = path.resolve(__dirname, '../../sandbox')
+const SANDBOX_ROOT = paths.sandboxDir
 
 function createAbortError(reason = 'Aborted') {
   const err = new Error(reason)

@@ -2,6 +2,7 @@
 // 来源：从 Longma 实际积累的记忆中提炼，经过验证的正确理解
 import { getDB, insertMemory } from '../src/db.js'
 import { nowTimestamp } from '../src/time.js'
+import { pathToFileURL } from 'url'
 
 getDB()
 

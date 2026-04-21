@@ -16,8 +16,9 @@ import { callLLM } from '../llm.js'
 import { searchMemories } from '../db.js'
 import { extractJSON } from '../utils.js'
 
+import { paths } from '../paths.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SANDBOX_ROOT = path.resolve(__dirname, '../../sandbox')
+const SANDBOX_ROOT = paths.sandboxDir
 
 const MAX_ROUNDS = 3
 const FILE_PREVIEW_CHARS = 2000  // 文件内容截断长度

@@ -1,9 +1,7 @@
 import Database from 'better-sqlite3'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { paths } from './paths.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DB_PATH = path.join(__dirname, '../data/jarvis.db')
+const DB_PATH = paths.dbFile
 
 const CANONICAL_USER_ID = 'ID:000001'
 const CANONICAL_AGENT_ENTITY = 'agent:jarvis'
@@ -65,9 +63,12 @@ function initSchema() {
       event_type  TEXT    NOT NULL,
       content     TEXT    NOT NULL,
       detail      TEXT    NOT NULL,
+      title       TEXT    DEFAULT '',
+      mem_id      TEXT,
       entities    TEXT    DEFAULT '[]',
       concepts    TEXT    DEFAULT '[]',
       tags        TEXT    DEFAULT '[]',
+      links       TEXT    DEFAULT '[]',
       source_ref  TEXT,
       timestamp   TEXT    NOT NULL,
       parent_id   INTEGER REFERENCES memories(id),
@@ -578,6 +579,11 @@ export function getRecentMemories(limit = 10) {
   return db.prepare(`
     SELECT * FROM memories ORDER BY timestamp DESC LIMIT ?
   `).all(limit)
+}
+
+export function getMemoryCount() {
+  const db = getDB()
+  return db.prepare('SELECT COUNT(*) AS c FROM memories').get().c
 }
 
 // 查询某时间段内的记忆

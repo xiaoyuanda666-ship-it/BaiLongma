@@ -39,20 +39,32 @@ D:\claude\Bailongma\
 
 - Node.js 18+
 - Windows PowerShell 或其他可运行 Node.js 的终端环境
-- 至少配置一个可用的 LLM API Key
+- 至少一个可用的 LLM API Key（MiniMax / DeepSeek / OpenAI 任选）
 
-## Quick Start
+## 普通用户：下载安装包
+
+从 [Releases](https://github.com/xiaoyuanda666-ship-it/BaiLongma/releases) 下载 `Bailongma Setup x.x.x.exe`，双击安装。安装完成后：
+
+1. 从开始菜单或桌面图标启动 **Bailongma**
+2. 首次打开自动进入激活页，粘贴一个 LLM API Key（默认推荐 MiniMax），点激活
+3. 激活通过后自动进入主界面 `brain-ui`，开始思考
+
+激活信息会保存在 `%APPDATA%\Bailongma\config.json`，记忆和沙盒也都存在同一目录下，升级或重装不会丢。
+
+应用启动时会自动向 GitHub Releases 检查新版本，有更新会在后台下载，下次重启生效。
+
+## 开发者：从源码运行
 
 ### 1. 安装依赖
 
 ```bash
-cd ./Bailongma/
+cd ./BaiLongma/
 npm install
 ```
 
-### 2. 配置 `.env`
+### 2. （可选）配置 `.env`
 
-项目通过 `node --env-file=.env` 启动，所以请在项目根目录准备 `.env` 文件。
+源码模式下仍然支持通过 `.env` 注入 key（和旧流程完全一致）；如果不写 `.env`，启动后浏览器打开 `http://127.0.0.1:3721/activation` 填 key 也能激活。
 
 最小配置示例：
 
@@ -61,38 +73,38 @@ LLM_PROVIDER=minimax
 MINIMAX_API_KEY=your_minimax_key
 ```
 
-也可以切换成其他 Provider：
+可选值：`minimax` / `deepseek` / `openai`。
 
-```env
-# 可选值：minimax / deepseek / openai
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your_openai_key
-```
-
-```env
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=your_deepseek_key
-```
-
-当前源码中的默认选择是：
+当前源码中各 Provider 的默认模型：
 
 - `minimax` -> `MiniMax-M2.7`
 - `deepseek` -> `deepseek-reasoner`
 - `openai` -> `gpt-5.4`
 
-### 3. 启动项目
+### 3. 启动
 
 ```bash
-cd ./Bailongma/
+# Electron 桌面版（推荐，体验与安装包一致）
 npm start
-```
 
-开发模式：
+# 纯命令行后端（老流程）
+npm run start:backend
 
-```bash
-cd ./Bailongma/
+# 开发模式（文件改动自动重启）
 npm run dev
 ```
+
+### 4. 打包 & 发布
+
+```bash
+# 仅打 Windows NSIS 安装包到 dist/
+npm run build
+
+# 打包并发布到 GitHub Releases（需要环境变量 GH_TOKEN）
+npm run publish
+```
+
+> 打包前要确保 `electron-builder install-app-deps` 能顺利跑完（重建 `better-sqlite3` 给 Electron ABI）。如果被 "resource busy" 挡住，说明有正在运行的 Bailongma/Jarvis 占着 `.node` 文件，先把它停掉即可。
 
 启动后会自动：
 
@@ -156,21 +168,12 @@ python scripts/send.py "继续刚才的任务" --from ID:Claude
 
 ## Runtime Notes
 
-### 为什么要用 `npm start`
+### 为什么要用 `npm start` / `npm run start:backend`
 
-不要直接运行：
+- `npm start` —— 启动 Electron 桌面版（会自己拉起后端 + 打开激活页/主界面）
+- `npm run start:backend` —— 只启动 Node 后端（用 `--env-file=.env` 注入环境变量）
 
-```bash
-node src/index.js
-```
-
-推荐始终使用：
-
-```bash
-npm start
-```
-
-因为 `package.json` 里已经通过 `--env-file=.env` 注入环境变量，直接执行 `node src/index.js` 时，通常会因为缺少 API Key 导致启动失败。
+直接 `node src/index.js` 也能跑（无 key 会进入激活等待态，打开 `http://127.0.0.1:3721/activation` 填入 key 即可）。
 
 ### 调度逻辑
 
@@ -234,11 +237,15 @@ taskkill /F /PID <PID>
 
 ### 启动时报缺少 API Key
 
-请确认：
+新版不会因为缺少 key 直接崩溃了，而是进入激活等待状态。打开 `http://127.0.0.1:3721/activation`（或桌面版自动弹出的激活页）填入 key 即可。如果想走回老的环境变量方式：
 
-- `.env` 在 `./Bailongma/` 下
+- `.env` 在 `./BaiLongma/` 下
 - `LLM_PROVIDER` 与对应的 Key 匹配
-- 你是通过 `npm start` 或 `npm run dev` 启动，而不是直接执行 `node ./Bailongma/src/index.js`
+- 通过 `npm run start:backend` 启动（它会 `--env-file=.env`）
+
+### 想清除激活、换 key 怎么办
+
+删掉 `%APPDATA%\Bailongma\config.json`（Windows）/ `~/Library/Application Support/Bailongma/config.json`（Mac）/ `~/.config/Bailongma/config.json`（Linux）。源码模式下这个文件在项目根目录，同名删除即可。下次启动会重新进入激活页。
 
 ### 中文显示异常
 

@@ -3,6 +3,7 @@ renderBrainUiApp(document.body);
 const API = "http://localhost:3721";
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
+const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
 const MAX_CHAT_HISTORY = 60;
 const DEFAULT_AGENT_NAME = "Longma";
 
@@ -20,6 +21,11 @@ const brandNameEl = document.getElementById("agent-brand-name");
 const graphEl = document.getElementById("graph");
 
 let agentName = DEFAULT_AGENT_NAME;
+let inputLocked = false;
+
+function defaultInputPlaceholder() {
+  return `向 ${agentName} 发送消息…`;
+}
 
 function setAgentName(nextName) {
   const normalized = String(nextName || "").trim() || DEFAULT_AGENT_NAME;
@@ -28,7 +34,7 @@ function setAgentName(nextName) {
   if (brandNameEl) brandNameEl.textContent = `${normalized} AI Agent`;
   if (graphEl) graphEl.setAttribute("aria-label", `${normalized} memory graph`);
   const input = document.getElementById("msg-input");
-  if (input) input.placeholder = `向 ${normalized} 发送消息…`;
+  if (input && !inputLocked) input.placeholder = defaultInputPlaceholder();
   document.querySelectorAll(".msg-jarvis .msg-label").forEach((el) => {
     el.textContent = normalized;
   });
@@ -1284,6 +1290,41 @@ let closeTimer = null;
 let hasPendingJarvisMessage = false;
 let pendingMessageDismissed = false;
 let audioCtx = null;
+let warmupTimer = null;
+
+function setComposerLocked(locked, reason = "") {
+  inputLocked = locked;
+  msgInput.disabled = locked;
+  sendBtn.disabled = locked;
+  msgInput.placeholder = locked ? (reason || "系统正在准备中…") : defaultInputPlaceholder();
+}
+
+function releaseWarmupLock() {
+  if (warmupTimer) {
+    clearTimeout(warmupTimer);
+    warmupTimer = null;
+  }
+  try { sessionStorage.removeItem(ACTIVATION_WARMUP_KEY); } catch {}
+  setComposerLocked(false);
+}
+
+function applyActivationWarmupLock() {
+  let until = 0;
+  try {
+    until = Number(sessionStorage.getItem(ACTIVATION_WARMUP_KEY) || 0);
+  } catch {}
+
+  const remaining = until - Date.now();
+  if (remaining <= 0) {
+    releaseWarmupLock();
+    return;
+  }
+
+  const seconds = Math.max(1, Math.ceil(remaining / 1000));
+  setComposerLocked(true, `系统刚激活，正在准备模型…约 ${seconds}s`);
+  if (warmupTimer) clearTimeout(warmupTimer);
+  warmupTimer = setTimeout(releaseWarmupLock, remaining);
+}
 
 function isHoveringChat() {
   return chatArea.matches(":hover") || chatHistory.matches(":hover") || chatMessages.matches(":hover");
@@ -1581,6 +1622,7 @@ async function restoreChatHistory() {
 }
 
 async function send() {
+  if (inputLocked) return;
   const text = msgInput.value.trim();
   if (!text) return;
   msgInput.value = "";
@@ -1653,6 +1695,7 @@ setAgentName(DEFAULT_AGENT_NAME);
 readPhysicsSettings();
 updatePhysicsReadout();
 refreshThemeColors();
+applyActivationWarmupLock();
 loadMemories();
 setInterval(() => {
   loadMemories();

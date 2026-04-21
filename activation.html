@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bailongma 激活</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #0b0b0e;
+      color: #d8d8dc;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    main {
+      width: 420px;
+      max-width: 90vw;
+      padding: 28px 32px;
+    }
+    h1 {
+      font-size: 18px;
+      font-weight: 500;
+      margin: 0 0 6px 0;
+      color: #f0f0f2;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #8a8a92;
+      margin: 0 0 28px 0;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      color: #8a8a92;
+      margin-bottom: 6px;
+    }
+    select, input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #17171b;
+      color: #e4e4e8;
+      border: 1px solid #2a2a30;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+    select:focus, input:focus {
+      border-color: #5a5a66;
+    }
+    .row {
+      margin-bottom: 16px;
+    }
+    button {
+      width: 100%;
+      background: #2a7ae4;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: background 0.15s ease;
+    }
+    button:hover:not(:disabled) { background: #1f6dd1; }
+    button:disabled {
+      background: #2a2a30;
+      color: #6a6a72;
+      cursor: not-allowed;
+    }
+    .status {
+      margin-top: 16px;
+      font-size: 12px;
+      min-height: 18px;
+    }
+    .status.err { color: #f87272; }
+    .status.ok { color: #60d394; }
+    .hint {
+      margin-top: 20px;
+      font-size: 11px;
+      color: #6a6a72;
+      line-height: 1.5;
+    }
+    .hint code {
+      color: #9ecbff;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>激活 Bailongma</h1>
+    <p class="subtitle">持续运行的数字意识，需要一个 LLM API Key 才能开始思考。</p>
+
+    <div class="row">
+      <label for="provider">Provider</label>
+      <select id="provider">
+        <option value="minimax" selected>MiniMax（推荐）</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label for="apiKey">API Key</label>
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴你的 API Key" />
+    </div>
+
+    <button id="activate">激活</button>
+
+    <div id="status" class="status"></div>
+
+    <p class="hint">
+      激活信息会保存在本地 <code>config.json</code>，仅用于调用你选择的 LLM 服务。<br />
+      如需更换，可在设置中重置。
+    </p>
+  </main>
+
+  <script>
+    const ACTIVATION_WARMUP_KEY = 'bailongma_activation_warmup_until'
+    const ACTIVATION_WARMUP_MS = 2500
+    const providerSel = document.getElementById('provider')
+    const apiKeyInput = document.getElementById('apiKey')
+    const btn = document.getElementById('activate')
+    const statusEl = document.getElementById('status')
+
+    fetch('/activation-status')
+      .then(r => r.json())
+      .then(data => {
+        if (data.activated) window.location.replace('/brain-ui')
+      })
+      .catch(() => {})
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text
+      statusEl.className = 'status' + (kind ? ' ' + kind : '')
+    }
+
+    async function activate() {
+      const provider = providerSel.value
+      const apiKey = apiKeyInput.value.trim()
+      if (!apiKey) {
+        setStatus('请先粘贴 API Key', 'err')
+        return
+      }
+
+      btn.disabled = true
+      setStatus('正在验证 Key…')
+
+      try {
+        const resp = await fetch('/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, apiKey }),
+        })
+        const data = await resp.json().catch(() => ({}))
+        if (!resp.ok || !data.ok) {
+          setStatus(data.error || '激活失败', 'err')
+          btn.disabled = false
+          return
+        }
+
+        try {
+          sessionStorage.setItem(ACTIVATION_WARMUP_KEY, String(Date.now() + ACTIVATION_WARMUP_MS))
+        } catch {}
+
+        setStatus('激活成功，正在进入主界面…', 'ok')
+        setTimeout(() => window.location.replace('/brain-ui'), 800)
+      } catch (err) {
+        setStatus('网络错误：' + err.message, 'err')
+        btn.disabled = false
+      }
+    }
+
+    btn.addEventListener('click', activate)
+    apiKeyInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') activate()
+    })
+    apiKeyInput.focus()
+  </script>
+</body>
+</html>
