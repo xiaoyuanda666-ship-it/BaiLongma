@@ -10,128 +10,152 @@
       padding: 0;
       height: 100%;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: #0b0b0e;
-      color: #d8d8dc;
-      font-size: 14px;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(107, 174, 255, 0.12), transparent 32%),
+        radial-gradient(circle at 82% 78%, rgba(50, 112, 255, 0.10), transparent 34%),
+        linear-gradient(160deg, #081019 0%, #0b1420 58%, #060b12 100%);
+      color: #e7edf7;
+      font-size: 16px;
       line-height: 1.6;
     }
     body {
       display: flex;
-      flex-direction: column;
-      justify-content: center;
       align-items: center;
+      justify-content: center;
       min-height: 100vh;
+      padding: 24px;
+      box-sizing: border-box;
     }
     main {
-      width: 420px;
-      max-width: 90vw;
-      padding: 28px 32px;
+      width: 520px;
+      max-width: 100%;
+      padding: 32px;
+      border-radius: 22px;
+      border: 1px solid rgba(150, 185, 255, 0.18);
+      background: rgba(10, 17, 27, 0.8);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(20px);
     }
     h1 {
-      font-size: 18px;
-      font-weight: 500;
-      margin: 0 0 6px 0;
-      color: #f0f0f2;
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+      font-weight: 700;
+      color: #f5f8fd;
     }
     .subtitle {
-      font-size: 13px;
-      color: #8a8a92;
-      margin: 0 0 28px 0;
+      margin: 0 0 28px;
+      font-size: 15px;
+      color: #9db0c8;
+    }
+    .row {
+      margin-bottom: 18px;
     }
     label {
       display: block;
-      font-size: 12px;
-      color: #8a8a92;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: #b1c1d7;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
     }
-    select, input {
+    select,
+    input {
       width: 100%;
       box-sizing: border-box;
-      background: #17171b;
-      color: #e4e4e8;
-      border: 1px solid #2a2a30;
-      border-radius: 4px;
-      padding: 8px 10px;
-      font-size: 13px;
-      font-family: inherit;
+      border: 1px solid rgba(132, 161, 204, 0.24);
+      border-radius: 12px;
+      background: rgba(16, 25, 38, 0.94);
+      color: #edf4ff;
+      padding: 13px 14px;
+      font-size: 16px;
       outline: none;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
-    select:focus, input:focus {
-      border-color: #5a5a66;
-    }
-    .row {
-      margin-bottom: 16px;
+    select:focus,
+    input:focus {
+      border-color: rgba(117, 168, 255, 0.72);
+      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.14);
     }
     button {
       width: 100%;
-      background: #2a7ae4;
-      color: #fff;
       border: none;
-      border-radius: 4px;
-      padding: 10px 12px;
-      font-size: 13px;
-      font-family: inherit;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #4f8cff 0%, #3572ff 100%);
+      color: #ffffff;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 700;
       cursor: pointer;
-      margin-top: 8px;
-      transition: background 0.15s ease;
+      transition: transform 0.15s ease, opacity 0.15s ease, filter 0.15s ease;
     }
-    button:hover:not(:disabled) { background: #1f6dd1; }
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      filter: brightness(1.04);
+    }
     button:disabled {
-      background: #2a2a30;
-      color: #6a6a72;
+      opacity: 0.55;
       cursor: not-allowed;
+      transform: none;
+      filter: none;
     }
     .status {
       margin-top: 16px;
-      font-size: 12px;
-      min-height: 18px;
+      min-height: 24px;
+      font-size: 14px;
+      color: #9db0c8;
     }
-    .status.err { color: #f87272; }
-    .status.ok { color: #60d394; }
+    .status.err { color: #ff8f8f; }
+    .status.ok { color: #74d89f; }
+    .model-note {
+      margin: 0 0 24px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(16, 25, 38, 0.78);
+      border: 1px solid rgba(132, 161, 204, 0.14);
+      font-size: 14px;
+      color: #d8e4f5;
+    }
+    .model-note code {
+      color: #9fcbff;
+      font-weight: 600;
+    }
     .hint {
-      margin-top: 20px;
-      font-size: 11px;
-      color: #6a6a72;
-      line-height: 1.5;
+      margin-top: 18px;
+      color: #8396ae;
+      font-size: 13px;
     }
     .hint code {
-      color: #9ecbff;
+      color: #9fcbff;
     }
   </style>
 </head>
 <body>
   <main>
     <h1>激活 Bailongma</h1>
-    <p class="subtitle">持续运行的数字意识，需要一个 LLM API Key 才能开始思考。</p>
+    <p class="subtitle">填写 DeepSeek Key 即可完成激活。</p>
 
-    <div class="row">
-      <label for="provider">Provider</label>
-      <select id="provider">
-        <option value="minimax" selected>MiniMax（推荐）</option>
-        <option value="deepseek">DeepSeek</option>
-        <option value="openai">OpenAI</option>
-      </select>
+    <div class="model-note">
+      模型：<code>deepseek-v4-flash</code>（思考模式）
     </div>
 
     <div class="row">
-      <label for="apiKey">API Key</label>
-      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴你的 API Key" />
+      <label for="apiKey">DeepSeek Key</label>
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="请输入 DeepSeek Key" />
     </div>
 
-    <button id="activate">激活</button>
-
+    <button id="activate" disabled>验证并进入</button>
     <div id="status" class="status"></div>
 
     <p class="hint">
-      激活信息会保存在本地 <code>config.json</code>，仅用于调用你选择的 LLM 服务。<br />
-      如需更换，可在设置中重置。
+      激活信息会保存在本地 <code>config.json</code>，仅用于连接 DeepSeek API。
     </p>
   </main>
 
   <script>
     const ACTIVATION_WARMUP_KEY = 'bailongma_activation_warmup_until'
     const ACTIVATION_WARMUP_MS = 2500
-    const providerSel = document.getElementById('provider')
+    const MODEL = 'deepseek-v4-flash'
     const apiKeyInput = document.getElementById('apiKey')
     const btn = document.getElementById('activate')
     const statusEl = document.getElementById('status')
@@ -148,27 +172,27 @@
       statusEl.className = 'status' + (kind ? ' ' + kind : '')
     }
 
+    function syncButtonState() {
+      btn.disabled = apiKeyInput.value.trim().length === 0
+    }
+
     async function activate() {
-      const provider = providerSel.value
       const apiKey = apiKeyInput.value.trim()
-      if (!apiKey) {
-        setStatus('请先粘贴 API Key', 'err')
-        return
-      }
+      if (!apiKey) return
 
       btn.disabled = true
-      setStatus('正在验证 Key…')
+      setStatus('正在验证 DeepSeek Key…')
 
       try {
         const resp = await fetch('/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider, apiKey }),
+          body: JSON.stringify({ apiKey, model: MODEL }),
         })
         const data = await resp.json().catch(() => ({}))
         if (!resp.ok || !data.ok) {
           setStatus(data.error || '激活失败', 'err')
-          btn.disabled = false
+          syncButtonState()
           return
         }
 
@@ -176,18 +200,20 @@
           sessionStorage.setItem(ACTIVATION_WARMUP_KEY, String(Date.now() + ACTIVATION_WARMUP_MS))
         } catch {}
 
-        setStatus('激活成功，正在进入主界面…', 'ok')
-        setTimeout(() => window.location.replace('/brain-ui'), 800)
+        setStatus(`激活成功，已切换到 ${data.model}（思考模式）`, 'ok')
+        setTimeout(() => window.location.replace('/brain-ui'), 700)
       } catch (err) {
         setStatus('网络错误：' + err.message, 'err')
-        btn.disabled = false
+        syncButtonState()
       }
     }
 
     btn.addEventListener('click', activate)
+    apiKeyInput.addEventListener('input', syncButtonState)
     apiKeyInput.addEventListener('keydown', event => {
-      if (event.key === 'Enter') activate()
+      if (event.key === 'Enter' && !btn.disabled) activate()
     })
+    syncButtonState()
     apiKeyInput.focus()
   </script>
 </body>

@@ -86,6 +86,15 @@ const createSecondaryPanel = () => `
     </div>
   </header>
 
+  <section class="update-card" id="update-card">
+    <div class="update-copy">
+      <div class="update-title">桌面更新</div>
+      <div class="update-status" id="update-status">未检查</div>
+    </div>
+    <button class="update-action" id="check-update-btn" type="button">检查更新</button>
+    <button class="update-close" id="update-close-btn" type="button" aria-label="关闭">×</button>
+  </section>
+
   <div class="stream-meta">
     <div>
       <div class="stream-title-text">自主行动机制 · Tick</div>

@@ -4,8 +4,14 @@ const API = "http://localhost:3721";
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
+const UI_ZOOM_STORAGE_KEY = "bailongma_ui_zoom_factor";
 const MAX_CHAT_HISTORY = 60;
 const DEFAULT_AGENT_NAME = "Longma";
+const DEFAULT_UI_ZOOM = 1.1;
+const MIN_UI_ZOOM = 0.8;
+const MAX_UI_ZOOM = 1.8;
+const UI_ZOOM_STEP = 0.1;
+const UI_ZOOM_WHEEL_STEP = 0.05;
 
 const themeSwitcher = document.getElementById("theme-switcher");
 const resetViewBtn = document.getElementById("reset-view-btn");
@@ -19,12 +25,117 @@ const repulsionValue = document.getElementById("repulsion-value");
 const nodeSizeValue = document.getElementById("node-size-value");
 const brandNameEl = document.getElementById("agent-brand-name");
 const graphEl = document.getElementById("graph");
+const checkUpdateBtn = document.getElementById("check-update-btn");
+const updateStatusEl = document.getElementById("update-status");
+const updateCardEl = document.getElementById("update-card");
+const updateCloseBtn = document.getElementById("update-close-btn");
 
 let agentName = DEFAULT_AGENT_NAME;
 let inputLocked = false;
+let removeUpdaterStatusListener = null;
+let currentUiZoom = DEFAULT_UI_ZOOM;
 
 function defaultInputPlaceholder() {
   return `向 ${agentName} 发送消息…`;
+}
+
+function setUpdateStatus(message, state = "idle") {
+  if (!updateStatusEl) return;
+  updateStatusEl.textContent = message;
+  updateStatusEl.dataset.state = state;
+}
+
+function setUpdateButtonState({ disabled = false, label = "检查更新" } = {}) {
+  if (!checkUpdateBtn) return;
+  checkUpdateBtn.disabled = disabled;
+  checkUpdateBtn.textContent = label;
+}
+
+function setUpdateCardHidden(hidden) {
+  if (!updateCardEl) return;
+  updateCardEl.classList.toggle("hidden", Boolean(hidden));
+}
+
+function clampZoomFactor(factor) {
+  return Math.min(MAX_UI_ZOOM, Math.max(MIN_UI_ZOOM, Number(factor) || DEFAULT_UI_ZOOM));
+}
+
+function saveUiZoom(factor) {
+  try {
+    localStorage.setItem(UI_ZOOM_STORAGE_KEY, String(factor));
+  } catch {}
+}
+
+function loadSavedUiZoom() {
+  try {
+    const raw = Number(localStorage.getItem(UI_ZOOM_STORAGE_KEY));
+    if (Number.isFinite(raw)) return clampZoomFactor(raw);
+  } catch {}
+  return DEFAULT_UI_ZOOM;
+}
+
+function applyUiZoom(factor, { persist = true } = {}) {
+  const nextZoom = clampZoomFactor(factor);
+  currentUiZoom = nextZoom;
+
+  const bridge = window.bailongma;
+  if (bridge?.isElectron && typeof bridge.setZoomFactor === "function") {
+    bridge.setZoomFactor(nextZoom);
+  } else {
+    document.documentElement.style.zoom = String(nextZoom);
+  }
+
+  if (persist) saveUiZoom(nextZoom);
+}
+
+function stepUiZoom(delta) {
+  const nextZoom = Math.round((currentUiZoom + delta) * 100) / 100;
+  applyUiZoom(nextZoom);
+}
+
+function initUiZoom() {
+  const bridge = window.bailongma;
+  const initialZoom = loadSavedUiZoom();
+
+  if (!bridge?.isElectron) {
+    applyUiZoom(initialZoom, { persist: false });
+  } else {
+    try {
+      const bridgeZoom = bridge.getZoomFactor?.();
+      if (typeof bridgeZoom === "number" && Number.isFinite(bridgeZoom)) {
+        currentUiZoom = clampZoomFactor(bridgeZoom);
+      }
+    } catch {}
+    applyUiZoom(initialZoom, { persist: false });
+  }
+
+  window.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    stepUiZoom(event.deltaY < 0 ? UI_ZOOM_WHEEL_STEP : -UI_ZOOM_WHEEL_STEP);
+  }, { passive: false, capture: true });
+
+  window.addEventListener("keydown", (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+
+    const key = event.key;
+    if (key === "+" || key === "=" || key === "Add") {
+      event.preventDefault();
+      stepUiZoom(UI_ZOOM_STEP);
+      return;
+    }
+
+    if (key === "-" || key === "_" || key === "Subtract") {
+      event.preventDefault();
+      stepUiZoom(-UI_ZOOM_STEP);
+      return;
+    }
+
+    if (key === "0") {
+      event.preventDefault();
+      applyUiZoom(DEFAULT_UI_ZOOM);
+    }
+  });
 }
 
 function setAgentName(nextName) {
@@ -60,6 +171,91 @@ requestAnimationFrame(() => {
   resetViewBtn.classList.add("visible");
   physicsControl.classList.add("visible");
 });
+
+async function initUpdaterUi() {
+  if (!checkUpdateBtn || !updateStatusEl) return;
+
+  const bridge = window.bailongma;
+  if (!bridge?.isElectron) {
+    setUpdateStatus("仅桌面版可用", "muted");
+    setUpdateButtonState({ disabled: true, label: "不可用" });
+    return;
+  }
+
+  setUpdateStatus("准备检查版本", "idle");
+
+  try {
+    const version = await bridge.getVersion?.();
+    if (version) setUpdateStatus(`当前版本 ${version}`, "idle");
+  } catch {}
+
+  removeUpdaterStatusListener = bridge.onUpdaterStatus?.((payload = {}) => {
+    const stage = payload.stage || "idle";
+    const version = payload.version ? ` ${payload.version}` : "";
+    const percent = typeof payload.percent === "number" ? ` (${Math.round(payload.percent)}%)` : "";
+
+    switch (stage) {
+      case "checking":
+        setUpdateCardHidden(false);
+        setUpdateStatus("正在检查更新…", "checking");
+        setUpdateButtonState({ disabled: true, label: "检查中" });
+        break;
+      case "available":
+        setUpdateCardHidden(false);
+        setUpdateStatus(`发现新版本${version}，开始下载`, "available");
+        setUpdateButtonState({ disabled: true, label: "下载中" });
+        break;
+      case "downloading":
+        setUpdateCardHidden(false);
+        setUpdateStatus(`正在下载更新${percent}`, "downloading");
+        setUpdateButtonState({ disabled: true, label: "下载中" });
+        break;
+      case "downloaded":
+        setUpdateCardHidden(false);
+        setUpdateStatus(`新版本${version} 已下载，关闭重开即可安装`, "ready");
+        setUpdateButtonState({ disabled: false, label: "重新检查" });
+        break;
+      case "error":
+        setUpdateCardHidden(false);
+        setUpdateStatus(`更新失败：${payload.message || "请稍后重试"}`, "error");
+        setUpdateButtonState({ disabled: false, label: "重试更新" });
+        break;
+      case "dev":
+        setUpdateCardHidden(false);
+        setUpdateStatus(payload.message || "开发模式下不检查更新", "muted");
+        setUpdateButtonState({ disabled: true, label: "开发模式" });
+        break;
+      default:
+        setUpdateStatus(payload.message || `当前版本 ${payload.currentVersion || ""}`.trim(), "idle");
+        setUpdateButtonState({ disabled: false, label: "检查更新" });
+        if (/latest|已是|最新/i.test(payload.message || "")) {
+          setUpdateCardHidden(true);
+        }
+        break;
+    }
+  }) || null;
+
+  checkUpdateBtn.addEventListener("click", async () => {
+    setUpdateCardHidden(false);
+    setUpdateStatus("正在检查更新…", "checking");
+    setUpdateButtonState({ disabled: true, label: "检查中" });
+
+    try {
+      const result = await bridge.checkForUpdates?.();
+      if (!result?.ok && result?.message) {
+        setUpdateStatus(`更新失败：${result.message}`, "error");
+        setUpdateButtonState({ disabled: false, label: "重试更新" });
+      }
+    } catch (error) {
+      setUpdateStatus(`更新失败：${error?.message || "请稍后重试"}`, "error");
+      setUpdateButtonState({ disabled: false, label: "重试更新" });
+    }
+  });
+
+  updateCloseBtn?.addEventListener("click", () => {
+    setUpdateCardHidden(true);
+  });
+}
 
 function readCSSVar(name) {
   return getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -1091,7 +1287,7 @@ class ThoughtStream {
   }
 
   appendToolCycleEnd() {
-    if (!this.curLine || !this.hadToolCall) return;
+    if (!this.curLine) return;
 
     const toolEl = document.createElement("div");
     const statusCls = this.toolFailed ? "failed" : "ended";
@@ -1104,7 +1300,7 @@ class ThoughtStream {
 
     const nameSpan = document.createElement("span");
     nameSpan.className = "tool-name";
-    nameSpan.textContent = "工具调用结束";
+    nameSpan.textContent = this.hadToolCall ? "工具调用结束" : "本轮结束";
 
     const statusSpan = document.createElement("span");
     statusSpan.className = `tool-status ${statusCls}`;
@@ -1692,6 +1888,7 @@ d3.timer(() => {
 });
 
 setAgentName(DEFAULT_AGENT_NAME);
+initUiZoom();
 readPhysicsSettings();
 updatePhysicsReadout();
 refreshThemeColors();
@@ -1703,3 +1900,11 @@ setInterval(() => {
 connectSSE();
 loadAgentProfile();
 restoreChatHistory();
+initUpdaterUi();
+
+window.addEventListener("beforeunload", () => {
+  if (typeof removeUpdaterStatusListener === "function") {
+    removeUpdaterStatusListener();
+    removeUpdaterStatusListener = null;
+  }
+});

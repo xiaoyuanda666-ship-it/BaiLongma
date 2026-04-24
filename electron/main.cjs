@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, dialog, Menu } = require('electron')
+const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron')
 const path = require('path')
 const net = require('net')
 const http = require('http')
@@ -13,6 +13,14 @@ const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 
 let mainWindow = null
 let backendPort = 0
+
+function sendUpdaterStatus(payload = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('updater:status', {
+    currentVersion: app.getVersion(),
+    ...payload,
+  })
+}
 
 async function bootstrapBackend(port) {
   process.env.BAILONGMA_USER_DIR ||= USER_DIR
@@ -41,7 +49,7 @@ async function findFreePort(preferred = 3721) {
       return actual
     } catch {}
   }
-  throw new Error('无法找到可用端口')
+  throw new Error('Unable to find a free local port')
 }
 
 function waitForBackend(port, timeoutMs = 30000) {
@@ -51,7 +59,7 @@ function waitForBackend(port, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const tick = () => {
       if (Date.now() - startedAt > timeoutMs) {
-        reject(new Error('后端启动超时'))
+        reject(new Error('Backend startup timed out'))
         return
       }
 
@@ -104,28 +112,92 @@ function setupAutoUpdater() {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
-  autoUpdater.on('update-available', info => {
-    console.log('[updater] 发现新版本', info.version)
+  autoUpdater.on('checking-for-update', () => {
+    sendUpdaterStatus({ stage: 'checking', message: 'Checking for updates...' })
   })
+
+  autoUpdater.on('update-available', info => {
+    console.log('[updater] update available', info?.version)
+    sendUpdaterStatus({
+      stage: 'available',
+      version: info?.version,
+      message: `New version ${info?.version || ''} found, downloading...`.trim(),
+    })
+  })
+
+  autoUpdater.on('download-progress', progress => {
+    sendUpdaterStatus({
+      stage: 'downloading',
+      percent: Number(progress?.percent || 0),
+      transferred: progress?.transferred || 0,
+      total: progress?.total || 0,
+      message: `Downloading update ${Math.round(Number(progress?.percent || 0))}%`,
+    })
+  })
+
   autoUpdater.on('update-downloaded', info => {
+    sendUpdaterStatus({
+      stage: 'downloaded',
+      version: info?.version,
+      message: `Version ${info?.version || ''} is ready to install`.trim(),
+    })
+
     const result = dialog.showMessageBoxSync(mainWindow, {
       type: 'info',
-      title: '有新版本',
-      message: `Bailongma ${info.version} 已下载完成，是否现在重启更新？`,
-      buttons: ['现在重启', '下次启动再装'],
+      title: 'Update ready',
+      message: `Bailongma ${info.version} has been downloaded. Restart now to install?`,
+      buttons: ['Restart now', 'Later'],
       defaultId: 0,
       cancelId: 1,
     })
+
     if (result === 0) autoUpdater.quitAndInstall()
   })
+
+  autoUpdater.on('update-not-available', info => {
+    sendUpdaterStatus({
+      stage: 'idle',
+      version: info?.version || app.getVersion(),
+      message: 'You already have the latest version',
+    })
+  })
+
   autoUpdater.on('error', err => {
-    console.warn('[updater] 检查更新失败', err?.message || err)
+    const message = err?.message || String(err || 'Update failed')
+    console.warn('[updater] update failed', message)
+    sendUpdaterStatus({
+      stage: 'error',
+      message,
+    })
   })
 
   if (!IS_DEV) {
     autoUpdater.checkForUpdatesAndNotify().catch(() => {})
   }
 }
+
+ipcMain.handle('app:get-version', () => app.getVersion())
+
+ipcMain.handle('updater:check-for-updates', async () => {
+  if (IS_DEV) {
+    const message = 'Update checks are disabled in development mode'
+    sendUpdaterStatus({ stage: 'dev', message })
+    return { ok: false, skipped: true, reason: 'dev', message }
+  }
+
+  try {
+    sendUpdaterStatus({ stage: 'checking', message: 'Checking for updates...' })
+    const result = await autoUpdater.checkForUpdates()
+    return {
+      ok: true,
+      updateInfo: result?.updateInfo || null,
+    }
+  } catch (error) {
+    const message = error?.message || String(error || 'Update check failed')
+    sendUpdaterStatus({ stage: 'error', message })
+    return { ok: false, message }
+  }
+})
 
 app.on('second-instance', () => {
   if (!mainWindow) return
@@ -145,7 +217,7 @@ app.whenReady().then(async () => {
     await bootstrapBackend(backendPort)
     await waitForBackend(backendPort)
   } catch (err) {
-    dialog.showErrorBox('启动失败', `无法启动 Bailongma 后端：\n${err.message}`)
+    dialog.showErrorBox('Startup failed', `Unable to start the Bailongma backend:\n${err.message}`)
     app.quit()
     return
   }

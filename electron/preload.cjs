@@ -1,7 +1,16 @@
-// 预留给未来暴露给前端的桥（比如自动更新状态、打开系统文件夹等）。
-// 目前激活页和 brain-ui 都通过 HTTP 和后端说话，不需要额外 bridge。
-const { contextBridge } = require('electron')
+const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
 contextBridge.exposeInMainWorld('bailongma', {
   platform: process.platform,
+  isElectron: true,
+  getVersion: () => ipcRenderer.invoke('app:get-version'),
+  checkForUpdates: () => ipcRenderer.invoke('updater:check-for-updates'),
+  getZoomFactor: () => webFrame.getZoomFactor(),
+  setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
+  onUpdaterStatus: (handler) => {
+    if (typeof handler !== 'function') return () => {}
+    const listener = (_event, payload) => handler(payload)
+    ipcRenderer.on('updater:status', listener)
+    return () => ipcRenderer.removeListener('updater:status', listener)
+  },
 })

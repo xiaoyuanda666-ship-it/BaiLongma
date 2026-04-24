@@ -236,6 +236,109 @@ body {
   margin-bottom: 14px;
 }
 
+.update-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.update-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.update-title {
+  font-size: 10px;
+  color: var(--ink2);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.update-status {
+  font-size: 12px;
+  color: var(--ink);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.update-status[data-state="checking"],
+.update-status[data-state="downloading"] {
+  color: var(--warm);
+}
+
+.update-status[data-state="available"],
+.update-status[data-state="ready"] {
+  color: var(--cool);
+}
+
+.update-status[data-state="error"] {
+  color: #e7a4a4;
+}
+
+.update-status[data-state="muted"] {
+  color: var(--dim);
+}
+
+.update-action {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--cool) 28%, transparent);
+  background: transparent;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.update-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: var(--cool);
+  border-color: color-mix(in srgb, var(--cool) 48%, transparent);
+}
+
+.update-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.update-card.hidden {
+  display: none;
+}
+
+.update-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.update-close:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
 .stream-title-text {
   font-size: 13px;
   font-weight: 600;

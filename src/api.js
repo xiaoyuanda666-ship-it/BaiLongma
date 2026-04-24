@@ -368,8 +368,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       req.on('end', async () => {
         try {
           const body = Buffer.concat(chunks).toString('utf-8')
-          const { provider, apiKey } = JSON.parse(body || '{}')
-          const info = await activateLLM({ provider, apiKey })
+          const { apiKey, model } = JSON.parse(body || '{}')
+          const info = await activateLLM({ apiKey, model })
           emitEvent('activated', info)
           // 通知 index.js 启动主循环
           if (typeof onActivatedCallback === 'function') {

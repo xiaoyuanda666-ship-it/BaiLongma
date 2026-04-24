@@ -20,6 +20,12 @@ function getClient() {
   return client
 }
 
+function shouldEnableDeepSeekThinking(thinking) {
+  if (!thinking) return false
+  if (config.model === 'deepseek-chat') return false
+  return true
+}
+
 // 单次流式调用，返回 { content, toolCalls, aborted }
 async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream }) {
   const requestParams = {
@@ -31,9 +37,12 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   }
 
   if (typeof topP === 'number' && topP > 0) requestParams.top_p = topP
-  // thinking 控制：MiniMax 用 thinking 参数；DeepSeek 通过模型 id 切换
   if (config.provider === 'deepseek') {
-    requestParams.model = thinking ? 'deepseek-reasoner' : 'deepseek-chat'
+    const thinkingEnabled = shouldEnableDeepSeekThinking(thinking)
+    requestParams.reasoning_effort = 'high'
+    requestParams.extra_body = {
+      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' }
+    }
   } else {
     if (!thinking) requestParams.thinking = { type: 'disabled' }
   }
@@ -46,6 +55,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   const stream = await getClient().chat.completions.create(requestParams, { signal })
 
   let fullContent = ''
+  let fullReasoningContent = ''
   let toolCallsMap = {}
   let inThink = false
   let thinkDone = false
@@ -84,6 +94,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     // DeepSeek reasoner 思考内容（独立字段，不在 content 里）
     const reasoningText = delta?.reasoning_content
     if (reasoningText) {
+      fullReasoningContent += reasoningText
       if (!thinkDone) {
         inThink = true
         if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
@@ -144,7 +155,12 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   } catch (err) {
     if (err.name === 'AbortError' || signal?.aborted) {
       if (streamStarted) onStream?.({ event: 'end' })
-      return { content: fullContent, toolCalls: Object.values(toolCallsMap), aborted: true }
+      return {
+        content: fullContent,
+        reasoningContent: fullReasoningContent,
+        toolCalls: Object.values(toolCallsMap),
+        aborted: true
+      }
     }
     err.hadContent = fullContent.length > 0
     if (streamStarted) onStream?.({ event: 'end' })
@@ -157,7 +173,12 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     console.log(`[配额] 本轮 tokens: ${usageTokens}`)
   }
 
-  return { content: fullContent, toolCalls: Object.values(toolCallsMap), aborted: false }
+  return {
+    content: fullContent,
+    reasoningContent: fullReasoningContent,
+    toolCalls: Object.values(toolCallsMap),
+    aborted: false
+  }
 }
 
 // 判断是否为瞬时错误（5xx / 网络抖动 / 超时），429 交给外层 setRateLimited
@@ -331,7 +352,7 @@ export async function callLLM({ systemPrompt, message, temperature = 0.5, topP =
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     throwIfAborted(signal)
 
-    const { content, toolCalls, aborted } = await streamOnceWithRetry({
+    const { content, reasoningContent, toolCalls, aborted } = await streamOnceWithRetry({
       messages,
       toolSchemas,
       temperature,
@@ -416,6 +437,7 @@ export async function callLLM({ systemPrompt, message, temperature = 0.5, topP =
         }))
       }
       if (content) assistantMsg.content = content
+      if (reasoningContent) assistantMsg.reasoning_content = reasoningContent
       messages.push(assistantMsg)
 
       // 将工具结果加入对话
