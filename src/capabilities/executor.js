@@ -1,10 +1,11 @@
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { chromium } from 'playwright'
 import { nowTimestamp } from '../time.js'
-import { searchMemories, insertMemory, normalizeConversationPartyId, createReminder, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks } from '../db.js'
+import { searchMemories, searchMemoriesByKeywords, insertMemory, upsertMemoryByMemId, normalizeConversationPartyId, createReminder, findMergeableOneOffReminder, appendReminderTask, listPendingReminders, getReminderById, cancelReminder, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks } from '../db.js'
 import { emitEvent } from '../events.js'
 import { callCapability, listCapabilities } from '../providers/registry.js'
 import { isDailyLimitReached } from '../quota.js'
@@ -125,6 +126,10 @@ export async function executeTool(name, args, context = {}) {
         return await execBrowserRead(args, context)
       case 'search_memory':
         return await execSearchMemory(args)
+      case 'upsert_memory':
+        return await execUpsertMemory(args, context)
+      case 'skip_recognition':
+        return await execSkipRecognition(args)
       case 'speak':
         return await execSpeak(args)
       case 'generate_lyrics':
@@ -134,7 +139,8 @@ export async function executeTool(name, args, context = {}) {
       case 'set_tick_interval':
         return execSetTickInterval(args)
       case 'schedule_reminder':
-        return await execScheduleReminder(args, context)
+      case 'manage_reminder':
+        return await execManageReminder(args, context)
       case 'manage_prefetch_task':
         return execManagePrefetchTask(args)
       default:
@@ -253,36 +259,165 @@ async function execSendMessage({ target_id, content }, context = {}) {
   return `消息已发送至 ${resolvedId}`
 }
 
-async function execScheduleReminder({ due_at, task, target_id }, context = {}) {
-  if (!task?.trim()) return '错误：未提供 task'
+function parseHourMinute(value, label = 'time') {
+  const m = String(value || '').trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) throw new Error(`${label} 必须是 HH:MM 格式，例如 09:00`)
+  const hour = Number(m[1]), minute = Number(m[2])
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) throw new Error(`${label} 超出合法范围`)
+  return { hour, minute }
+}
 
-  const dueAt = parseReminderDueAt(due_at)
-  if (dueAt.getTime() <= Date.now()) {
-    throw new Error('提醒时间必须晚于当前时间')
+// 周期提醒：根据 type/config 计算下一次触发时间（晚于 fromDate）
+export function calculateNextDueAt(type, config, fromDate = new Date()) {
+  const now = fromDate
+  const { hour, minute } = parseHourMinute(config.time, 'time')
+
+  if (type === 'daily') {
+    const next = new Date(now)
+    next.setHours(hour, minute, 0, 0)
+    if (next <= now) next.setDate(next.getDate() + 1)
+    return next
+  }
+  if (type === 'weekly') {
+    const targetWeekday = Number(config.weekday)
+    if (!Number.isInteger(targetWeekday) || targetWeekday < 0 || targetWeekday > 6) {
+      throw new Error('weekday 必须是 0-6 之间的整数（0=周日）')
+    }
+    const next = new Date(now)
+    next.setHours(hour, minute, 0, 0)
+    let diff = (targetWeekday - now.getDay() + 7) % 7
+    if (diff === 0 && next <= now) diff = 7
+    next.setDate(next.getDate() + diff)
+    return next
+  }
+  if (type === 'monthly') {
+    const targetDay = Number(config.day_of_month)
+    if (!Number.isInteger(targetDay) || targetDay < 1 || targetDay > 31) {
+      throw new Error('day_of_month 必须是 1-31 之间的整数')
+    }
+    let year = now.getFullYear(), month = now.getMonth()
+    for (let i = 0; i < 12; i++) {
+      const lastDay = new Date(year, month + 1, 0).getDate()
+      if (targetDay <= lastDay) {
+        const next = new Date(year, month, targetDay, hour, minute, 0, 0)
+        if (next > now) return next
+      }
+      month++
+      if (month > 11) { month = 0; year++ }
+    }
+    throw new Error('找不到下一个匹配的月份')
+  }
+  throw new Error(`未知的 recurrence kind: ${type}`)
+}
+
+function buildSystemMessage(targetId, taskText) {
+  return `我是系统，根据你设置的提醒，你现在要为用户 ${targetId} 执行这件事：${taskText}。请立即处理，并在需要时通过 send_message 把结果发给 ${targetId}。`
+}
+
+function formatReminderRow(r) {
+  const recurrence = r.recurrence_type
+    ? `[${r.recurrence_type}] ${(() => {
+        try {
+          const c = JSON.parse(r.recurrence_config || '{}')
+          if (r.recurrence_type === 'daily') return `每天 ${c.time}`
+          if (r.recurrence_type === 'weekly') {
+            const names = ['周日','周一','周二','周三','周四','周五','周六']
+            return `每${names[c.weekday]} ${c.time}`
+          }
+          if (r.recurrence_type === 'monthly') return `每月 ${c.day_of_month} 号 ${c.time}`
+          return JSON.stringify(c)
+        } catch { return '' }
+      })()}`
+    : '[once]'
+  return `#${r.id} ${recurrence} 下次 ${r.due_at} → ${r.user_id}：${r.task}`
+}
+
+async function execManageReminder(args, context = {}) {
+  const action = args.action || (args.due_at || args.kind ? 'create' : null)
+  if (!action) return '错误：未提供 action（create/list/cancel）'
+
+  if (action === 'list') {
+    const rows = listPendingReminders(50)
+    if (!rows.length) return '当前没有待触发的提醒。'
+    return `共 ${rows.length} 条待触发提醒：\n` + rows.map(formatReminderRow).join('\n')
   }
 
-  const fallbackTargetId = context.visibleTargetIds?.[0] || context.allowedTargetIds?.[0] || 'ID:000001'
-  const resolvedTargetId = resolveAllowedTargetId(target_id || fallbackTargetId, context.allowedTargetIds)
-  const taskText = task.trim()
-  const isoDueAt = dueAt.toISOString()
-  const systemMessage = `我是系统，根据你设置的提醒，你现在要为用户 ${resolvedTargetId} 执行这件事：${taskText}。请立即处理，并在需要时通过 send_message 把结果发给 ${resolvedTargetId}。`
+  if (action === 'cancel') {
+    const id = Number(args.id)
+    if (!Number.isInteger(id) || id <= 0) return '错误：cancel 需要提供合法的提醒 id'
+    const existing = getReminderById(id)
+    if (!existing) return `错误：未找到提醒 #${id}`
+    if (existing.status !== 'pending') return `错误：提醒 #${id} 当前状态为 ${existing.status}，无法取消`
+    const result = cancelReminder(id)
+    if (!result.changes) return `错误：取消提醒 #${id} 失败`
+    emitEvent('reminder_cancelled', { id, user_id: existing.user_id, task: existing.task })
+    return `提醒 #${id} 已取消（${existing.task}）`
+  }
 
+  if (action !== 'create') return `错误：未知 action "${action}"，仅支持 create/list/cancel`
+
+  const { task } = args
+  if (!task?.trim()) return '错误：未提供 task'
+  const taskText = task.trim()
+  const fallbackTargetId = context.visibleTargetIds?.[0] || context.allowedTargetIds?.[0] || 'ID:000001'
+  const resolvedTargetId = resolveAllowedTargetId(args.target_id || fallbackTargetId, context.allowedTargetIds)
+
+  const kind = args.kind || 'once'
+
+  if (kind === 'once') {
+    const dueAt = parseReminderDueAt(args.due_at)
+    if (dueAt.getTime() <= Date.now()) throw new Error('提醒时间必须晚于当前时间')
+    const isoDueAt = dueAt.toISOString()
+    const minuteKey = isoDueAt.slice(0, 16)
+
+    const mergeTarget = findMergeableOneOffReminder(resolvedTargetId, minuteKey)
+    if (mergeTarget) {
+      const mergedTaskText = `${mergeTarget.task}; ${taskText}`
+      const newSystemMessage = buildSystemMessage(resolvedTargetId, mergedTaskText)
+      const r = appendReminderTask(mergeTarget.id, taskText, newSystemMessage)
+      if (!r.changes) return `错误：合并提醒 #${mergeTarget.id} 失败`
+      emitEvent('reminder_merged', { id: mergeTarget.id, user_id: resolvedTargetId, due_at: mergeTarget.due_at, task: mergedTaskText })
+      return `已合并到现有提醒 #${mergeTarget.id}（同时间），合并后任务：${mergedTaskText}`
+    }
+
+    const result = createReminder({
+      userId: resolvedTargetId,
+      dueAt: isoDueAt,
+      task: taskText,
+      systemMessage: buildSystemMessage(resolvedTargetId, taskText),
+      source: `tool:manage_reminder@${nowTimestamp()}`,
+    })
+    emitEvent('reminder_created', { id: Number(result.lastInsertRowid), user_id: resolvedTargetId, due_at: isoDueAt, task: taskText })
+    return `提醒已创建：#${result.lastInsertRowid}，将在 ${isoDueAt} 触发，目标用户 ${resolvedTargetId}`
+  }
+
+  // 周期提醒
+  const config = {}
+  if (kind === 'daily') {
+    config.time = args.time
+  } else if (kind === 'weekly') {
+    config.time = args.time
+    config.weekday = args.weekday
+  } else if (kind === 'monthly') {
+    config.time = args.time
+    config.day_of_month = args.day_of_month
+  } else {
+    throw new Error(`未知的 kind "${kind}"，支持 once/daily/weekly/monthly`)
+  }
+
+  const nextDate = calculateNextDueAt(kind, config)
+  const isoDueAt = nextDate.toISOString()
   const result = createReminder({
     userId: resolvedTargetId,
     dueAt: isoDueAt,
     task: taskText,
-    systemMessage,
-    source: `tool:schedule_reminder@${nowTimestamp()}`,
+    systemMessage: buildSystemMessage(resolvedTargetId, taskText),
+    source: `tool:manage_reminder@${nowTimestamp()}`,
+    recurrenceType: kind,
+    recurrenceConfig: config,
   })
-
-  emitEvent('reminder_created', {
-    id: Number(result.lastInsertRowid),
-    user_id: resolvedTargetId,
-    due_at: isoDueAt,
-    task: taskText,
-  })
-
-  return `提醒已创建：#${result.lastInsertRowid}，将在 ${isoDueAt} 触发，目标用户 ${resolvedTargetId}`
+  emitEvent('reminder_created', { id: Number(result.lastInsertRowid), user_id: resolvedTargetId, due_at: isoDueAt, task: taskText, recurrence_type: kind, recurrence_config: config })
+  return `周期提醒已创建：#${result.lastInsertRowid} (${kind})，下次触发 ${isoDueAt}，目标用户 ${resolvedTargetId}`
 }
 
 // read_file：读取文件内容
@@ -293,13 +428,7 @@ async function execReadFile(args, context = {}) {
   const filePath = normalizeSandboxPath(rawPath)
   const resolved = path.resolve(SANDBOX_ROOT, filePath)
   assertInSandbox(resolved)
-  const content = fs.readFileSync(resolved, 'utf-8')
-  const lines = content.split('\n')
-  // 限制单次读取不超过 200 行，避免上下文爆炸
-  if (lines.length > 200) {
-    return `[文件内容（前200行，共 ${lines.length} 行）]\n` + lines.slice(0, 200).join('\n')
-  }
-  return content
+  return fs.readFileSync(resolved, 'utf-8')
 }
 
 // list_dir：列出目录内容
@@ -647,6 +776,56 @@ function isLowValuePageText(text = '') {
   return /^(please wait|just a moment|checking your browser|enable javascript|access denied|forbidden|captcha|安全验证|请稍候|请稍等|正在验证|访问受限)/i.test(compact)
 }
 
+// 长文阈值：抓取结果超过此长度时落盘，识别器只看摘要 + body_path
+const ARTICLE_LENGTH_THRESHOLD = 2000
+const ARTICLE_SUMMARY_EXCERPT = 800
+
+function urlHash8(url) {
+  return crypto.createHash('sha1').update(String(url || '')).digest('hex').slice(0, 8)
+}
+
+function sanitizeSlugPart(value, max = 40) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, max)
+}
+
+// 把长文写入 sandbox/articles/{YYYY-MM}/{date}_{titleSlug}_{hash8}.md
+// 同 URL 当天再次抓取直接复用已有文件，避免重复落盘
+function saveLongArticle({ url, finalUrl, title, body, source }) {
+  const now = new Date()
+  const yyyyMm = now.toISOString().slice(0, 7)
+  const date = now.toISOString().slice(0, 10)
+  const hash = urlHash8(finalUrl || url || '')
+  const titleSlug = sanitizeSlugPart(title)
+  const baseName = titleSlug ? `${date}_${titleSlug}_${hash}.md` : `${date}_${hash}.md`
+
+  const monthDir = path.join(SANDBOX_ROOT, 'articles', yyyyMm)
+  const absPath = path.join(monthDir, baseName)
+  const relPath = path.posix.join('articles', yyyyMm, baseName)
+
+  if (fs.existsSync(absPath)) {
+    return { path: relPath, bytes: fs.statSync(absPath).size, reused: true }
+  }
+
+  fs.mkdirSync(monthDir, { recursive: true })
+  const frontmatter = [
+    '---',
+    `title: ${JSON.stringify(title || '')}`,
+    `source_url: ${url || ''}`,
+    finalUrl && finalUrl !== url ? `final_url: ${finalUrl}` : null,
+    `source_tool: ${source || 'fetch_url'}`,
+    `fetched_at: ${now.toISOString()}`,
+    '---',
+    '',
+  ].filter(Boolean).join('\n')
+  const content = frontmatter + (title ? `# ${title}\n\n` : '') + body
+  fs.writeFileSync(absPath, content, 'utf-8')
+  return { path: relPath, bytes: Buffer.byteLength(content, 'utf-8'), reused: false }
+}
+
 async function launchReadableBrowser() {
   const launchOptions = { headless: true }
   try {
@@ -788,7 +967,21 @@ async function execFetchUrl(args, context = {}) {
     })
   }
   const MAX = 5000
-  const content = text.length > MAX ? `${text.slice(0, MAX)}\n\n...` : text
+  const isLong = text.length >= ARTICLE_LENGTH_THRESHOLD
+  let bodyPath = null
+  let bodyBytes = null
+  if (isLong) {
+    try {
+      const saved = saveLongArticle({ url, finalUrl: url, title, body: text, source: 'fetch_url' })
+      bodyPath = saved.path
+      bodyBytes = saved.bytes
+    } catch (err) {
+      console.warn(`[fetch_url] 长文落盘失败: ${err.message}`)
+    }
+  }
+  const content = isLong
+    ? `${text.slice(0, ARTICLE_SUMMARY_EXCERPT)}\n\n...`
+    : (text.length > MAX ? `${text.slice(0, MAX)}\n\n...` : text)
   const payload = {
     ok: true,
     tool: 'fetch_url',
@@ -796,9 +989,13 @@ async function execFetchUrl(args, context = {}) {
     status: res.status,
     title,
     content,
-    truncated: text.length > MAX,
+    truncated: isLong || text.length > MAX,
     content_length: text.length,
-    hint: 'Use this page content with other sources if needed, then answer the user.',
+    body_path: bodyPath,
+    body_bytes: bodyBytes,
+    hint: bodyPath
+      ? `Long article saved. Full text at sandbox path: ${bodyPath}. Use read_file to open it.`
+      : 'Use this page content with other sources if needed, then answer the user.',
   }
 
   urlCache.set(url, { payload, fetchedAt: Date.now() })
@@ -859,7 +1056,21 @@ async function execBrowserRead(args, context = {}) {
       })
     }
 
-    const content = text.length > maxChars ? `${text.slice(0, maxChars)}\n\n...` : text
+    const isLong = text.length >= ARTICLE_LENGTH_THRESHOLD
+    let bodyPath = null
+    let bodyBytes = null
+    if (isLong) {
+      try {
+        const saved = saveLongArticle({ url, finalUrl, title, body: text, source: 'browser_read' })
+        bodyPath = saved.path
+        bodyBytes = saved.bytes
+      } catch (err) {
+        console.warn(`[browser_read] 长文落盘失败: ${err.message}`)
+      }
+    }
+    const content = isLong
+      ? `${text.slice(0, ARTICLE_SUMMARY_EXCERPT)}\n\n...`
+      : (text.length > maxChars ? `${text.slice(0, maxChars)}\n\n...` : text)
     return webJson({
       ok: true,
       tool: 'browser_read',
@@ -867,9 +1078,13 @@ async function execBrowserRead(args, context = {}) {
       final_url: finalUrl,
       title,
       content,
-      truncated: text.length > maxChars,
+      truncated: isLong || text.length > maxChars,
       content_length: text.length,
-      hint: 'Rendered page content extracted by Chromium.',
+      body_path: bodyPath,
+      body_bytes: bodyBytes,
+      hint: bodyPath
+        ? `Long article saved. Full text at sandbox path: ${bodyPath}. Use read_file to open it.`
+        : 'Rendered page content extracted by Chromium.',
     })
   } catch (err) {
     if (err.name === 'AbortError') throw err
@@ -886,14 +1101,67 @@ async function execBrowserRead(args, context = {}) {
   }
 }
 
-// search_memory：主动搜索记忆
-async function execSearchMemory({ keyword, limit = 5 }) {
-  if (!keyword) return '错误：未提供搜索关键词'
-  const rows = searchMemories(keyword, limit)
-  if (rows.length === 0) return `未找到包含"${keyword}"的记忆`
-  return rows.map(m =>
-    `[${m.timestamp.slice(0, 10)}] ${m.event_type}: ${m.content}\n  ${m.detail?.slice(0, 100) ?? ''}`
-  ).join('\n\n')
+// search_memory：批量按关键词检索记忆。
+// 优先走 keywords 数组；为兼容旧调用方，单字符串 keyword 也接受（自动转数组）。
+// 输入有 keywords 时返回 JSON 字符串（结构化命中 + matched_by），用于识别器查重。
+// 输入只有 keyword 时返回旧版拼接字符串，用于主对话主动检索。
+async function execSearchMemory(args = {}) {
+  const { keyword, keywords, limit, limit_per_keyword, type_filter } = args
+
+  if (Array.isArray(keywords) && keywords.length > 0) {
+    const cleaned = keywords.map(k => String(k || '').trim()).filter(Boolean).slice(0, 8)
+    if (cleaned.length === 0) return JSON.stringify({ ok: false, error: 'no valid keywords' })
+    const hits = searchMemoriesByKeywords(cleaned, {
+      limitPerKeyword: Math.max(1, Math.min(Number(limit_per_keyword || 5), 10)),
+      typeFilter: type_filter || null,
+    })
+    return JSON.stringify({ ok: true, count: hits.length, hits }, null, 2)
+  }
+
+  if (keyword) {
+    const rows = searchMemories(keyword, Math.max(1, Math.min(Number(limit || 5), 20)))
+    if (rows.length === 0) return `未找到包含"${keyword}"的记忆`
+    return rows.map(m =>
+      `[${m.timestamp.slice(0, 10)}] ${m.event_type}: ${m.content}\n  ${m.detail?.slice(0, 100) ?? ''}`
+    ).join('\n\n')
+  }
+
+  return '错误：未提供 keywords 或 keyword'
+}
+
+// upsert_memory：识别器调用，按 mem_id 批量 upsert。
+async function execUpsertMemory(args = {}, context = {}) {
+  const list = Array.isArray(args.memories) ? args.memories : null
+  if (!list || list.length === 0) {
+    return JSON.stringify({ ok: false, error: 'missing memories[]' })
+  }
+
+  const sourceRef = context.sessionRef || context.source_ref || null
+  // 同批次：无 parent 的先写，有 parent 的后写，保证父节点 mem_id 已就绪
+  const roots = list.filter(m => !m.parent_mem_id)
+  const children = list.filter(m => m.parent_mem_id)
+  const ordered = [...roots, ...children]
+
+  const results = []
+  for (const memory of ordered) {
+    try {
+      const payload = { ...memory, source_ref: memory.source_ref || sourceRef }
+      const r = upsertMemoryByMemId(payload)
+      results.push({ mem_id: r.mem_id, action: r.updated ? 'updated' : 'inserted', id: r.id })
+    } catch (err) {
+      results.push({ mem_id: memory.mem_id || null, action: 'error', error: err.message })
+    }
+  }
+
+  const inserted = results.filter(r => r.action === 'inserted').length
+  const updated = results.filter(r => r.action === 'updated').length
+  const failed = results.filter(r => r.action === 'error').length
+  return JSON.stringify({ ok: failed === 0, inserted, updated, failed, results }, null, 2)
+}
+
+// skip_recognition：识别器明确表示无内容要存
+async function execSkipRecognition({ reason } = {}) {
+  return JSON.stringify({ ok: true, skipped: true, reason: reason || '' })
 }
 
 // speak：将文字转为语音，保存为音频文件

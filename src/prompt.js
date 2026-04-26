@@ -37,7 +37,10 @@ export function buildSystemPrompt({
 - 你只有在任务开始、阶段切换、出现阻塞、或任务完成时，才更新任务状态；不要为每个细小动作都刷一条 [SET_TASK]。
 - 你任务全部完成后，写 [CLEAR_TASK]。
 - 你只有在确实需要深入回忆时，才写 [RECALL: 想回忆的内容]。
-- 如果用户要求你在未来某个时间再做事，你使用 schedule_reminder 工具，并把时间换算成绝对时间 ISO 8601 字符串，不要传“明天早上”“两小时后”这类相对表达。
+- 如果用户要求你在未来某个时间再做事，你使用 manage_reminder 工具：
+  - 一次性提醒：action=create, kind=once, due_at 用绝对时间 ISO 8601 字符串（不要传"明天早上"这类相对表达）
+  - 每天/每周/每月重复：kind=daily/weekly/monthly，配 time、weekday、day_of_month
+  - 用户问"我设了哪些提醒"时用 action=list；用户要取消时先 list 拿到 id 再 action=cancel
 
 ## TICK 处理
 - TICK 只代表时间流逝与系统心跳，不等于用户在和你说话。

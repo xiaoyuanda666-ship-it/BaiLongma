@@ -4,7 +4,8 @@ import { buildSystemPrompt } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
 import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge, formatPrefetchedItems } from './memory/injector.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
-import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, getNextPendingReminder, getMemoryCount } from './db.js'
+import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, advanceReminderDueAt, getNextPendingReminder, getMemoryCount } from './db.js'
+import { calculateNextDueAt } from './capabilities/executor.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -260,8 +261,24 @@ function enqueueDueReminders() {
   const now = new Date().toISOString()
   const dueReminders = getDueReminders(now, 20)
   for (const reminder of dueReminders) {
-    const marked = markReminderFired(reminder.id, now)
-    if (!marked.changes) continue
+    if (reminder.recurrence_type) {
+      let nextDueIso
+      try {
+        const config = JSON.parse(reminder.recurrence_config || '{}')
+        nextDueIso = calculateNextDueAt(reminder.recurrence_type, config, new Date()).toISOString()
+      } catch (err) {
+        console.error(`[提醒 #${reminder.id}] 周期下一次时间计算失败：${err.message}，回退为单次触发`)
+        const marked = markReminderFired(reminder.id, now)
+        if (!marked.changes) continue
+      }
+      if (nextDueIso) {
+        const advanced = advanceReminderDueAt(reminder.id, nextDueIso)
+        if (!advanced.changes) continue
+      }
+    } else {
+      const marked = markReminderFired(reminder.id, now)
+      if (!marked.changes) continue
+    }
     pushMessage('SYSTEM', reminder.system_message, 'REMINDER', {
       reminderTargetId: reminder.user_id,
       reminderId: reminder.id,
@@ -271,6 +288,7 @@ function enqueueDueReminders() {
       user_id: reminder.user_id,
       due_at: reminder.due_at,
       task: reminder.task,
+      recurrence_type: reminder.recurrence_type,
     })
   }
 }

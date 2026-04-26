@@ -301,8 +301,28 @@ function summarizeToolCall(name, args = {}) {
       return `fetch_url(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
     case 'browser_read':
       return `browser_read(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
-    case 'search_memory':
+    case 'search_memory': {
+      if (Array.isArray(args.keywords)) {
+        return `search_memory([${args.keywords.slice(0, 4).map(k => String(k).slice(0, 20)).join(', ')}])`
+      }
       return `search_memory(${String(args.keyword || args.query || args.q || '?').slice(0, 60)})`
+    }
+    case 'upsert_memory': {
+      const n = Array.isArray(args.memories) ? args.memories.length : 0
+      const ids = (args.memories || []).slice(0, 3).map(m => m?.mem_id || '?').join(', ')
+      return `upsert_memory(${n} 条: ${ids}${n > 3 ? '…' : ''})`
+    }
+    case 'skip_recognition':
+      return `skip_recognition(${String(args.reason || '').slice(0, 40)})`
+    case 'manage_reminder':
+    case 'schedule_reminder': {
+      const action = args.action || 'create'
+      if (action === 'list') return 'manage_reminder(list)'
+      if (action === 'cancel') return `manage_reminder(cancel #${args.id || '?'})`
+      const kind = args.kind || 'once'
+      const when = kind === 'once' ? (args.due_at || '?') : `${kind} ${args.time || '?'}`
+      return `manage_reminder(create ${when}: ${String(args.task || '?').slice(0, 30)})`
+    }
     case 'write_file':
       return `write_file(${args.path || args.filename || args.file_path || '?'})`
     case 'delete_file':

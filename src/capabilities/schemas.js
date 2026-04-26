@@ -133,7 +133,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'fetch_url',
-      description: 'Open a known URL with a lightweight HTTP request and return structured JSON with ok/status/title/content/error. Do not use it as a search engine. If ok is false because content is empty, blocked, or JS-rendered, try browser_read or another URL; never summarize an error as page content.',
+      description: 'Open a known URL with a lightweight HTTP request. Returns structured JSON with ok/status/title/content/body_path/error. Long articles (>=2000 chars) are auto-saved to sandbox/articles/ and content is truncated to a short excerpt; use the returned body_path with read_file to open the full text. Do not use this tool as a search engine. If ok is false because content is empty, blocked, or JS-rendered, try browser_read or another URL; never summarize an error as page content.',
       parameters: {
         type: 'object',
         properties: {
@@ -151,7 +151,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'browser_read',
-      description: 'Use a real headless Chromium browser to open and render a webpage, wait for JavaScript, scroll, and extract readable text. Use this when fetch_url returns no readable content, a waiting page, or a JS-rendered page. Returns structured JSON with ok/title/content/error.',
+      description: 'Use a real headless Chromium browser to open and render a webpage, wait for JavaScript, scroll, and extract readable text. Use this when fetch_url returns no readable content, a waiting page, or a JS-rendered page. Returns structured JSON with ok/title/content/body_path/error. Long articles (>=2000 chars) are auto-saved to sandbox/articles/ and content is truncated to a short excerpt; use body_path with read_file to open the full text.',
       parameters: {
         type: 'object',
         properties: {
@@ -294,28 +294,58 @@ export const TOOL_SCHEMAS = {
     }
   },
 
-  schedule_reminder: {
+  manage_reminder: {
     type: 'function',
     function: {
-      name: 'schedule_reminder',
-      description: '创建一次性提醒。到达指定时间后，系统会主动向你发送一条第一人称系统消息，提醒你继续执行任务。due_at 必须是绝对时间的 ISO 8601 字符串。你设置完成后要send_message跟用户说一下',
+      name: 'manage_reminder',
+      description: '管理提醒：创建（一次性 / 每天 / 每周几 / 每月几号）、列出、取消。到时系统会主动给你发系统消息让你继续执行。同 target_id + 同分钟的一次性提醒会自动合并任务，不会重复触发。创建后要 send_message 告诉用户。',
       parameters: {
         type: 'object',
         properties: {
-          due_at: {
+          action: {
             type: 'string',
-            description: '提醒触发时间，必须是绝对时间 ISO 8601 字符串，例如 2026-04-21T06:00:00+08:00'
+            enum: ['create', 'list', 'cancel'],
+            description: 'create=新建提醒；list=列出所有待触发提醒；cancel=按 id 取消'
+          },
+          kind: {
+            type: 'string',
+            enum: ['once', 'daily', 'weekly', 'monthly'],
+            description: '仅 create 用：once=一次性（必须给 due_at）；daily=每天（给 time）；weekly=每周（给 time + weekday）；monthly=每月（给 time + day_of_month）。默认 once。'
           },
           task: {
             type: 'string',
-            description: '到时间后你要执行的事项'
+            description: '仅 create 用：到时间后你要执行的事项'
           },
           target_id: {
             type: 'string',
-            description: '这条提醒最终服务的用户 ID，例如 ID:000001；默认使用当前对话对象'
+            description: '仅 create 用：这条提醒最终服务的用户 ID，例如 ID:000001；默认使用当前对话对象'
+          },
+          due_at: {
+            type: 'string',
+            description: '仅 kind=once 用：提醒触发时间，必须是绝对时间 ISO 8601 字符串，例如 2026-04-21T06:00:00+08:00'
+          },
+          time: {
+            type: 'string',
+            description: '仅 daily/weekly/monthly 用：每天/每周/每月的触发时间，HH:MM 格式（按本地时区），例如 09:00'
+          },
+          weekday: {
+            type: 'integer',
+            description: '仅 kind=weekly 用：星期几，0=周日，1=周一，...，6=周六',
+            minimum: 0,
+            maximum: 6
+          },
+          day_of_month: {
+            type: 'integer',
+            description: '仅 kind=monthly 用：每月几号，1-31。如果某月没有该日（例如 31 号），会跳到下一个有该日的月份',
+            minimum: 1,
+            maximum: 31
+          },
+          id: {
+            type: 'integer',
+            description: '仅 cancel 用：要取消的提醒 id（从 list 里查）'
           }
         },
-        required: ['due_at', 'task']
+        required: ['action']
       }
     }
   },
@@ -373,6 +403,91 @@ export const TOOL_SCHEMAS = {
           instrumental: { type: 'boolean', description: '是否生成纯器乐（无人声），默认 false' },
         },
         required: ['prompt']
+      }
+    }
+  },
+
+  search_memory: {
+    type: 'function',
+    function: {
+      name: 'search_memory',
+      description: '按多个关键词批量检索记忆库（FTS5 全文搜索）。每个关键词独立命中后合并去重，每条结果带 matched_by 字段标注命中关键词。识别器在写入新记忆前必须先调用此工具查重，命中已有 mem_id 则走 update，未命中则 insert。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keywords: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '关键词列表，1-8 个。建议同时给中英文/同义词以提高召回。'
+          },
+          limit_per_keyword: {
+            type: 'number',
+            description: '每个关键词最多返回几条命中，默认 5。'
+          },
+          type_filter: {
+            type: 'string',
+            enum: ['fact', 'person', 'object', 'knowledge', 'article'],
+            description: '可选：限定记忆类型。'
+          }
+        },
+        required: ['keywords']
+      }
+    }
+  },
+
+  upsert_memory: {
+    type: 'function',
+    function: {
+      name: 'upsert_memory',
+      description: '批量写入或更新记忆节点。按 mem_id 去重：mem_id 命中已存在则 PATCH（未传字段保留），不存在则 INSERT。调用前应先用 search_memory 查重以决定 mem_id。命名规则：person_{ID}、object_{slug}、article_{url_hash8}、concept_{snake}、fact_{snake}。',
+      parameters: {
+        type: 'object',
+        properties: {
+          memories: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                mem_id:        { type: 'string', description: '稳定 ID，遵循命名规则。' },
+                type:          { type: 'string', enum: ['fact', 'person', 'object', 'knowledge', 'article'], description: '记忆类型，新建必填。' },
+                title:         { type: 'string', description: '标题。文章直接用文章标题。新建必填。' },
+                content:       { type: 'string', description: '摘要 / 简要，<= 200 字。新建必填。' },
+                detail:        { type: 'string', description: '可选：更详细说明。' },
+                tags:          { type: 'array', items: { type: 'string' }, description: '可选：标签数组。' },
+                parent_mem_id: { type: 'string', description: '可选：父节点 mem_id。' },
+                links:         {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      target_mem_id: { type: 'string' },
+                      relation:      { type: 'string', description: '如 related_to / cites / contradicts' }
+                    }
+                  },
+                  description: '可选：与其他记忆节点的关联。'
+                },
+                body_path:     { type: 'string', description: 'article 类型：正文文件路径（来自 fetch_url / browser_read 的 body_path）。' }
+              },
+              required: ['mem_id']
+            },
+            description: '一次性批量写入的记忆数组，支持 1-N 条。'
+          }
+        },
+        required: ['memories']
+      }
+    }
+  },
+
+  skip_recognition: {
+    type: 'function',
+    function: {
+      name: 'skip_recognition',
+      description: '识别器专用：当本轮输入没有值得长期保存的记忆时调用，明确表示"已检阅，无须写入"。这是合法的终止信号，不要硬塞内容。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: '可选：简短理由。' }
+        }
       }
     }
   },

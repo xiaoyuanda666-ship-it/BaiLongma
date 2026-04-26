@@ -21,11 +21,9 @@ function printMemories(label, memories) {
     return
   }
   for (const m of memories) {
-    const parentStr = m.parent_ref ? ` → 挂载到：${m.parent_ref}` : ''
-    console.log(`  [${m.event_type}]${parentStr}`)
+    console.log(`  [${m.type || '?'}] ${m.action} mem_id=${m.mem_id}`)
+    console.log(`    title:   ${m.title}`)
     console.log(`    content: ${m.content}`)
-    console.log(`    detail:  ${(m.detail || '').slice(0, 80)}`)
-    if (m.tags?.length) console.log(`    tags:    ${JSON.stringify(m.tags)}`)
   }
 }
 
@@ -136,6 +134,50 @@ async function run() {
     sessionRef: 'test_006',
   })
   printMemories('场景6', memories)
+  await wait(1500)
+
+  // ── 场景7：重复输入触发去重 → 应该走 UPDATE 而不是 INSERT ──
+  console.log('\n>>> 场景7：再次提到 Yuanda 的同一观点（应触发 update）')
+  memories = await runRecognizer({
+    userMessage: '[ID:000001] 2026-04-13 11:00:00 [TUI] 再说一遍我的核心观点：意识就是记忆加算力，是真实运行的结果，不是模拟。',
+    jarvisThink: 'Yuanda 在重申他的核心观点。',
+    jarvisResponse: '记住了。',
+    toolCallLog: [],
+    task: null,
+    sessionRef: 'test_007',
+  })
+  printMemories('场景7（去重验证）', memories)
+  await wait(1500)
+
+  // ── 场景8：长文章场景 → 带 body_path 应触发 article 类型 ──
+  console.log('\n>>> 场景8：fetch_url 抓到长文（带 body_path）')
+  memories = await runRecognizer({
+    userMessage: '[ID:000001] 2026-04-13 11:05:00 [TUI] 帮我看一下这篇关于 Transformer 注意力机制的文章',
+    jarvisThink: '用户想了解 Transformer 注意力机制，我去抓取了一篇文章，系统已经把正文落盘到 sandbox。',
+    jarvisResponse: '已读完。注意力机制核心是 Q/K/V 三个矩阵的点积加 softmax 归一化。',
+    toolCallLog: [
+      {
+        name: 'fetch_url',
+        args: { url: 'https://example.com/transformer-attention' },
+        result: JSON.stringify({
+          ok: true,
+          tool: 'fetch_url',
+          url: 'https://example.com/transformer-attention',
+          status: 200,
+          title: 'Transformer 注意力机制详解',
+          content: 'Transformer 的核心是自注意力机制（Self-Attention），它通过查询（Query）、键（Key）、值（Value）三个矩阵的运算来实现序列内部任意位置之间的关联建模。具体来说，对于输入序列的每个位置...',
+          truncated: true,
+          content_length: 8500,
+          body_path: 'articles/2026-04/2026-04-13_transformer_attention_a3f8c91d.md',
+          body_bytes: 8650,
+          hint: 'Long article saved. Full text at sandbox path: articles/2026-04/2026-04-13_transformer_attention_a3f8c91d.md. Use read_file to open it.',
+        }),
+      }
+    ],
+    task: null,
+    sessionRef: 'test_008',
+  })
+  printMemories('场景8（article body_path）', memories)
   await wait(1500)
 
   // ── 最终：打印数据库全貌 ──

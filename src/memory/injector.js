@@ -180,7 +180,7 @@ export async function runInjector({ message, state, hint = '' }) {
   const baseTools = [
     'send_message', 'web_search', 'fetch_url', 'browser_read', 'list_dir', 'read_file', 'write_file',
     'delete_file', 'make_dir', 'exec_command', 'kill_process', 'list_processes',
-    'set_tick_interval', 'schedule_reminder', 'manage_prefetch_task',
+    'set_tick_interval', 'manage_reminder', 'manage_prefetch_task',
   ]
   if (senderId || state?.prev_recall) baseTools.push('search_memory')
   const tools = [...new Set(baseTools)]
@@ -204,7 +204,19 @@ export async function runInjector({ message, state, hint = '' }) {
   }
 }
 
-// 普通记忆：摘要行，带类型标签和 title（如有）
+// 从 memory.tags（JSON 字符串）中解出 body_path 标签
+function extractBodyPath(memory) {
+  try {
+    const tags = JSON.parse(memory.tags || '[]')
+    if (!Array.isArray(tags)) return null
+    const tag = tags.find(t => typeof t === 'string' && t.startsWith('body_path:'))
+    return tag ? tag.replace('body_path:', '') : null
+  } catch {
+    return null
+  }
+}
+
+// 普通记忆：摘要行，带类型标签和 title（如有）。article 类型附正文路径提示。
 // RECALL 记忆：带完整 detail
 export function formatMemoriesForPrompt(memories, recallMemories = []) {
   const parts = []
@@ -213,14 +225,18 @@ export function formatMemoriesForPrompt(memories, recallMemories = []) {
     parts.push(memories.map(memory => {
       const typeLabel = memory.event_type ? `[${memory.event_type}] ` : ''
       const titlePart = memory.title ? `《${memory.title}》 ` : ''
-      return `- [${memory.timestamp.slice(0, 10)}] ${typeLabel}${titlePart}${memory.content}`
+      const bodyPath = extractBodyPath(memory)
+      const bodyHint = bodyPath ? `\n  ↳ 正文：read_file("${bodyPath}")` : ''
+      return `- [${memory.timestamp.slice(0, 10)}] ${typeLabel}${titlePart}${memory.content}${bodyHint}`
     }).join('\n'))
   }
 
   if (recallMemories?.length > 0) {
     parts.push('[回忆细节]\n' + recallMemories.map(memory => {
       const titlePart = memory.title ? `《${memory.title}》 ` : ''
-      return `- [${memory.timestamp.slice(0, 10)}] ${titlePart}${memory.content}\n  ${memory.detail}`
+      const bodyPath = extractBodyPath(memory)
+      const bodyHint = bodyPath ? `\n  ↳ 正文：read_file("${bodyPath}")` : ''
+      return `- [${memory.timestamp.slice(0, 10)}] ${titlePart}${memory.content}\n  ${memory.detail}${bodyHint}`
     }).join('\n'))
   }
 

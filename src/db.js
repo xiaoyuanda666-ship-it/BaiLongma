@@ -121,19 +121,24 @@ function initSchema() {
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS reminders (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id        TEXT    NOT NULL,
-      due_at         TEXT    NOT NULL,
-      task           TEXT    NOT NULL,
-      system_message TEXT    NOT NULL,
-      status         TEXT    NOT NULL DEFAULT 'pending',
-      created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-      fired_at       TEXT,
-      cancelled_at   TEXT,
-      source         TEXT    DEFAULT ''
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id           TEXT    NOT NULL,
+      due_at            TEXT    NOT NULL,
+      task              TEXT    NOT NULL,
+      system_message    TEXT    NOT NULL,
+      status            TEXT    NOT NULL DEFAULT 'pending',
+      created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+      fired_at          TEXT,
+      cancelled_at      TEXT,
+      source            TEXT    DEFAULT '',
+      recurrence_type   TEXT,
+      recurrence_config TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_reminders_due_at ON reminders(status, due_at);
   `)
+  // 迁移：老库补上周期提醒字段
+  try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_type TEXT`) } catch {}
+  try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_config TEXT`) } catch {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS prefetch_tasks (
@@ -602,6 +607,125 @@ export function insertMemory(memory) {
   })
 }
 
+// 按 mem_id 做 PATCH 式 upsert：识别器走工具调用主动判重时使用。
+// 与 insertMemory 区别：
+//   - 必须有 mem_id
+//   - 已存在 mem_id：只更新传入字段（PATCH 语义），未传字段保留
+//   - 不存在：直接 INSERT，绕开 content 前 40 字 / URL 当日去重
+//   - body_path 自动写入 tags 作为 body_path:xxx 标签
+export function upsertMemoryByMemId(memory) {
+  const db = getDB()
+  if (!memory?.mem_id) throw new Error('upsertMemoryByMemId 需要 mem_id')
+
+  const m = { ...memory }
+  if (m.type && !m.event_type) m.event_type = m.type
+  if (m.parent_mem_id && !m.parent_ref) m.parent_ref = m.parent_mem_id
+
+  // body_path 写入 tags（避免新增列；formatMemoriesForPrompt 解析此 tag 显示）
+  if (m.body_path) {
+    const baseTags = safeJsonArray(m.tags)
+    const filtered = baseTags.filter(t => !String(t).startsWith('body_path:'))
+    m.tags = [...filtered, `body_path:${m.body_path}`]
+  }
+
+  if (m.entities !== undefined) {
+    m.entities = uniqueStrings(safeJsonArray(m.entities)).map(normalizeMemoryEntity)
+  }
+  if (m.tags !== undefined) {
+    m.tags = uniqueStrings(safeJsonArray(m.tags))
+  }
+  if (m.links !== undefined) {
+    m.links = normalizeMemoryLinks(m.links)
+  }
+
+  const existing = db.prepare(`SELECT id FROM memories WHERE mem_id = ? LIMIT 1`).get(m.mem_id)
+
+  if (existing) {
+    const sets = []
+    const params = { id: existing.id }
+
+    if (m.event_type !== undefined) { sets.push('event_type = @event_type'); params.event_type = m.event_type }
+    if (m.content !== undefined)    { sets.push('content = @content');       params.content = m.content }
+    if (m.detail !== undefined)     { sets.push('detail = @detail');         params.detail = m.detail }
+    if (m.title !== undefined)      { sets.push('title = @title');           params.title = m.title }
+    if (m.entities !== undefined)   { sets.push('entities = @entities');     params.entities = JSON.stringify(m.entities) }
+    if (m.concepts !== undefined)   { sets.push('concepts = @concepts');     params.concepts = JSON.stringify(m.concepts) }
+    if (m.tags !== undefined)       { sets.push('tags = @tags');             params.tags = JSON.stringify(m.tags) }
+    if (m.links !== undefined)      { sets.push('links = @links');           params.links = JSON.stringify(m.links) }
+    if (m.source_ref !== undefined) { sets.push('source_ref = @source_ref'); params.source_ref = m.source_ref }
+    if (m.parent_ref !== undefined) {
+      sets.push('parent_id = @parent_id')
+      params.parent_id = m.parent_ref ? resolveParentRef(m.parent_ref) : null
+    }
+
+    sets.push('timestamp = @timestamp')
+    params.timestamp = m.timestamp || new Date().toISOString()
+
+    db.prepare(`UPDATE memories SET ${sets.join(', ')} WHERE id = @id`).run(params)
+    console.log(`[DB] PATCH 记忆：${m.mem_id}`)
+    return { id: existing.id, mem_id: m.mem_id, updated: true }
+  }
+
+  if (!m.event_type) throw new Error('新建记忆需要 type')
+  if (!m.title)      throw new Error('新建记忆需要 title')
+  if (!m.content)    throw new Error('新建记忆需要 content')
+
+  const parentId = m.parent_ref ? resolveParentRef(m.parent_ref) : null
+  const result = db.prepare(`
+    INSERT INTO memories (event_type, content, detail, title, mem_id, entities, concepts, tags, links, source_ref, timestamp, parent_id)
+    VALUES (@event_type, @content, @detail, @title, @mem_id, @entities, @concepts, @tags, @links, @source_ref, @timestamp, @parent_id)
+  `).run({
+    event_type: m.event_type,
+    content:    m.content,
+    detail:     m.detail !== undefined ? m.detail : m.content,
+    title:      m.title,
+    mem_id:     m.mem_id,
+    entities:   JSON.stringify(m.entities || []),
+    concepts:   JSON.stringify(m.concepts || []),
+    tags:       JSON.stringify(m.tags || []),
+    links:      JSON.stringify(m.links || []),
+    source_ref: m.source_ref || null,
+    timestamp:  m.timestamp || new Date().toISOString(),
+    parent_id:  parentId,
+  })
+
+  console.log(`[DB] INSERT 新记忆：${m.mem_id}`)
+  return { id: result.lastInsertRowid, mem_id: m.mem_id, updated: false }
+}
+
+// 批量按关键词搜索：每个关键词独立 FTS5 检索，返回 { mem_id, type, title, content_excerpt, matched_by[] }
+// 同一 mem_id 在多个关键词命中时合并，matched_by 列出所有命中关键词
+export function searchMemoriesByKeywords(keywords, { limitPerKeyword = 5, typeFilter = null } = {}) {
+  if (!Array.isArray(keywords) || keywords.length === 0) return []
+  const merged = new Map()  // mem_id (or 'row:'+id) → { row, matched_by:Set }
+
+  for (const keyword of keywords) {
+    if (!keyword) continue
+    const hits = searchMemories(keyword, limitPerKeyword)
+    for (const row of hits) {
+      if (typeFilter && row.event_type !== typeFilter) continue
+      const key = row.mem_id || `row:${row.id}`
+      if (!merged.has(key)) merged.set(key, { row, matched_by: new Set() })
+      merged.get(key).matched_by.add(keyword)
+    }
+  }
+
+  return [...merged.values()].map(({ row, matched_by }) => {
+    const tags = safeJsonArray(row.tags)
+    const bodyPathTag = tags.find(t => String(t).startsWith('body_path:'))
+    return {
+      mem_id: row.mem_id || null,
+      id: row.id,
+      type: row.event_type,
+      title: row.title || '',
+      content_excerpt: (row.content || '').slice(0, 80),
+      timestamp: row.timestamp,
+      body_path: bodyPathTag ? String(bodyPathTag).replace('body_path:', '') : null,
+      matched_by: [...matched_by],
+    }
+  })
+}
+
 // 查询最近 N 条记忆
 export function getRecentMemories(limit = 10) {
   const db = getDB()
@@ -909,13 +1033,41 @@ export function getRecentActionLogs(limit = 50) {
   `).all(limit).reverse()
 }
 
-export function createReminder({ userId, dueAt, task, systemMessage, source = '' }) {
+export function createReminder({ userId, dueAt, task, systemMessage, source = '', recurrenceType = null, recurrenceConfig = null }) {
+  const db = getDB()
+  const normalizedUserId = normalizeConversationPartyId(userId || CANONICAL_USER_ID)
+  const configStr = recurrenceConfig ? JSON.stringify(recurrenceConfig) : null
+  return db.prepare(`
+    INSERT INTO reminders (user_id, due_at, task, system_message, status, source, recurrence_type, recurrence_config)
+    VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)
+  `).run(normalizedUserId, dueAt, task, systemMessage, source, recurrenceType, configStr)
+}
+
+// 找到同 user + 同 due_at（精确到分钟）且非周期的待触发提醒，用于合并
+export function findMergeableOneOffReminder(userId, dueAtIsoMinute) {
   const db = getDB()
   const normalizedUserId = normalizeConversationPartyId(userId || CANONICAL_USER_ID)
   return db.prepare(`
-    INSERT INTO reminders (user_id, due_at, task, system_message, status, source)
-    VALUES (?, ?, ?, ?, 'pending', ?)
-  `).run(normalizedUserId, dueAt, task, systemMessage, source)
+    SELECT * FROM reminders
+    WHERE status = 'pending'
+      AND recurrence_type IS NULL
+      AND user_id = ?
+      AND substr(due_at, 1, 16) = ?
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(normalizedUserId, dueAtIsoMinute) || null
+}
+
+export function appendReminderTask(id, additionalTask, newSystemMessage) {
+  const db = getDB()
+  const row = db.prepare(`SELECT task FROM reminders WHERE id = ?`).get(id)
+  if (!row) return { changes: 0 }
+  const mergedTask = `${row.task}; ${additionalTask}`
+  return db.prepare(`
+    UPDATE reminders
+    SET task = ?, system_message = ?
+    WHERE id = ? AND status = 'pending'
+  `).run(mergedTask, newSystemMessage, id)
 }
 
 export function getDueReminders(now = new Date().toISOString(), limit = 20) {
@@ -937,6 +1089,16 @@ export function markReminderFired(id, firedAt = new Date().toISOString()) {
   `).run(firedAt, id)
 }
 
+// 周期提醒触发后：保持 pending，推进 due_at 到下次发生时间
+export function advanceReminderDueAt(id, nextDueAtIso) {
+  const db = getDB()
+  return db.prepare(`
+    UPDATE reminders
+    SET due_at = ?
+    WHERE id = ? AND status = 'pending'
+  `).run(nextDueAtIso, id)
+}
+
 export function cancelReminder(id, cancelledAt = new Date().toISOString()) {
   const db = getDB()
   return db.prepare(`
@@ -944,6 +1106,21 @@ export function cancelReminder(id, cancelledAt = new Date().toISOString()) {
     SET status = 'cancelled', cancelled_at = ?
     WHERE id = ? AND status = 'pending'
   `).run(cancelledAt, id)
+}
+
+export function listPendingReminders(limit = 50) {
+  const db = getDB()
+  return db.prepare(`
+    SELECT * FROM reminders
+    WHERE status = 'pending'
+    ORDER BY due_at ASC, id ASC
+    LIMIT ?
+  `).all(limit)
+}
+
+export function getReminderById(id) {
+  const db = getDB()
+  return db.prepare(`SELECT * FROM reminders WHERE id = ?`).get(id) || null
 }
 
 export function getNextPendingReminder() {
