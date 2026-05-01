@@ -1,0 +1,160 @@
+/* ═══════════════════════ Notification 层（默认） ═══════════════════════ */
+#acui-host {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 568px;
+  max-width: 100vw;
+  pointer-events: none;
+  z-index: 9000;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+#acui-host > * { pointer-events: auto; }
+
+/* ═══════════════════════ Center 层（居中 + 遮罩） ═══════════════════════ */
+#acui-center-host {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+#acui-center-host > * { pointer-events: auto; }
+
+.acui-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  pointer-events: auto;
+  transition: background-color .2s;
+  z-index: -1;
+}
+.acui-backdrop.acui-enter-active { background: rgba(0, 0, 0, .5); }
+.acui-backdrop.acui-exit-active  { background: rgba(0, 0, 0, 0); }
+
+/* ═══════════════════════ Stage 层（全屏媒体：图片 / 视频） ═══════════════════════ */
+#acui-stage-host {
+  position: fixed;
+  inset: 0;
+  z-index: 9150;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#acui-stage-host > * { pointer-events: auto; }
+
+/* Stage 专用遮罩：比 center 层更深 */
+.acui-stage-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition: background-color .28s;
+  z-index: -1;
+}
+.acui-stage-backdrop.acui-enter-active {
+  background: rgba(0, 0, 0, .82);
+  pointer-events: auto;
+}
+.acui-stage-backdrop.acui-exit-active {
+  background: rgba(0, 0, 0, 0);
+}
+
+/* ═══════════════════════ Floating 层（自由浮动 + 拖动） ═══════════════════════ */
+#acui-floating-host {
+  position: fixed;
+  inset: 0;
+  z-index: 9050;
+  pointer-events: none;
+}
+#acui-floating-host > * {
+  pointer-events: auto;
+  user-select: none;
+  cursor: grab;
+}
+#acui-floating-host > .acui-dragging {
+  cursor: grabbing;
+  transform: scale(1.01);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+  transition: transform .12s ease-out, box-shadow .12s ease-out;
+}
+
+/* ═══════════════════════ 入场 / 出场动画 ═══════════════════════ */
+
+/* slide-from-right (notification 默认) */
+[data-enter="slide-from-right"] {
+  transform: translateX(110%);
+  opacity: 0;
+  transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .28s;
+}
+[data-enter="slide-from-right"].acui-enter-active {
+  transform: translateX(0);
+  opacity: 1;
+}
+[data-exit="slide-to-right"].acui-exit-active {
+  transform: translateX(110%);
+  opacity: 0;
+  transition: transform .24s cubic-bezier(.4,.0,.6,1), opacity .24s;
+}
+
+/* scale-up / scale-down (center 默认) */
+[data-enter="scale-up"] {
+  transform: scale(.9);
+  opacity: 0;
+  transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .22s;
+}
+[data-enter="scale-up"].acui-enter-active {
+  transform: scale(1);
+  opacity: 1;
+}
+[data-exit="scale-down"].acui-exit-active {
+  transform: scale(.94);
+  opacity: 0;
+  transition: transform .18s, opacity .18s;
+}
+
+/* fade-up / fade-down (floating 默认) */
+[data-enter="fade-up"] {
+  transform: translateY(8px);
+  opacity: 0;
+  transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .22s;
+}
+[data-enter="fade-up"].acui-enter-active {
+  transform: translateY(0);
+  opacity: 1;
+}
+[data-exit="fade-down"].acui-exit-active {
+  transform: translateY(8px);
+  opacity: 0;
+  transition: transform .18s, opacity .18s;
+}
+
+/* fade (通用) */
+[data-enter="fade"] { opacity: 0; transition: opacity .24s; }
+[data-enter="fade"].acui-enter-active { opacity: 1; }
+[data-exit="fade"].acui-exit-active   { opacity: 0; transition: opacity .2s; }
+
+/* stage-up / stage-down（媒体舞台）*/
+[data-enter="stage-up"] {
+  transform: translateY(28px) scale(.97);
+  opacity: 0;
+  transition: transform .32s cubic-bezier(.2,.8,.2,1), opacity .32s;
+}
+[data-enter="stage-up"].acui-enter-active {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+[data-exit="stage-down"].acui-exit-active {
+  transform: translateY(20px) scale(.97);
+  opacity: 0;
+  transition: transform .22s cubic-bezier(.4,0,.6,1), opacity .22s;
+}

@@ -13,6 +13,18 @@ export function registerProvider(provider) {
   console.log(`[Provider] 已注册: ${provider.name}`)
 }
 
+// 替换同名 provider（不存在则新增）
+export function replaceProvider(provider) {
+  const idx = providers.findIndex(p => p.name === provider.name)
+  if (idx >= 0) {
+    providers.splice(idx, 1, provider)
+    console.log(`[Provider] 已替换: ${provider.name}`)
+  } else {
+    providers.push(provider)
+    console.log(`[Provider] 已注册: ${provider.name}`)
+  }
+}
+
 // 获取支持某能力的第一个可用 provider
 export function getProvider(capability) {
   const p = providers.find(p => p.canDo(capability))

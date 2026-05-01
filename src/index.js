@@ -1,8 +1,8 @@
-import { config } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey } from './config.js'
 import { callLLM } from './llm.js'
 import { buildSystemPrompt } from './prompt.js'
 import { runRecognizer } from './memory/recognizer.js'
-import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge, formatPrefetchedItems } from './memory/injector.js'
+import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards } from './memory/injector.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, advanceReminderDueAt, getNextPendingReminder, getMemoryCount } from './db.js'
 import { calculateNextDueAt } from './capabilities/executor.js'
@@ -17,6 +17,9 @@ import { MinimaxProvider } from './providers/minimax.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
 import { seedSandboxOnce } from './paths.js'
+import { ensureSkillMemories } from './memory/seed-skills.js'
+import { dispatchSocialMessage } from './social/dispatch.js'
+import { startSocialConnectors } from './social/index.js'
 
 // 首次启动时把资源目录里的 sandbox 种子文件拷到用户数据目录（Electron 安装场景）
 seedSandboxOnce()
@@ -50,7 +53,8 @@ if (persistedTask) {
 function registerMinimaxIfAvailable() {
   const envKey = globalThis.process.env.MINIMAX_API_KEY
   const configKey = config.provider === 'minimax' ? config.apiKey : null
-  const key = envKey || configKey
+  const storedKey = _getMinimaxKey()
+  const key = envKey || configKey || storedKey
   if (key) registerProvider(new MinimaxProvider({ apiKey: key }))
 }
 registerMinimaxIfAvailable()
@@ -81,6 +85,10 @@ function trimAssistantFluff(content) {
   let text = String(content || '').trim()
   if (!text) return text
 
+  text = text
+    .replace(/^(?:\s*\[assistant(?:\s+to\s+[^\]\r\n]+)?(?:\s+\d{4}-\d{2}-\d{2}T[^\]\r\n]+)?\]\s*)+/giu, '')
+    .trim()
+
   const patterns = [
     /[，,、。.!！？~～\s]*(?:从现在起|从今以后|以后)?我就是[\u4e00-\u9fa5A-Za-z0-9 _-]{1,24}[，,、。.!！？~～\s]*为您效劳[！!～~。.\s]*$/u,
     /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
@@ -104,6 +112,19 @@ function trimAssistantFluff(content) {
   }
 
   return text
+}
+
+function requiresToolForUserMessage(text = '') {
+  const input = String(text || '')
+  const fileIntent = /(sandbox|文件|目录|创建|新建|写入|读取|删除|列出|保存|test-\d+|\.txt|\.json|\.md|\.js|\.html|\.css)/i.test(input)
+    && /(创建|新建|写入|读取|删除|列出|保存|改|修改|生成|create|write|read|delete|list|save)/i.test(input)
+  const commandIntent = /(执行命令|运行命令|跑命令|exec|command|npm|node|git|powershell|cmd)/i.test(input)
+  const webIntent = /(打开网页|抓取|联网|搜索|查询最新|fetch|url|https?:\/\/)/i.test(input)
+  return fileIntent || commandIntent || webIntent
+}
+
+function hasNonMessageToolCall(toolCallLog = []) {
+  return toolCallLog.some(t => t.name && t.name !== 'send_message')
 }
 
 export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
@@ -132,10 +153,9 @@ function buildToolContextForProcess(msg, injection) {
 function formatConversationMessage(row, currentMsg = null) {
   const timestamp = row.timestamp ? ` ${row.timestamp}` : ''
   if (row.role === 'jarvis') {
-    const target = row.to_id ? ` to ${row.to_id}` : ''
     return {
       role: 'assistant',
-      content: `[assistant${target}${timestamp}]\n${row.content || ''}`.trim(),
+      content: trimAssistantFluff(row.content || ''),
     }
   }
 
@@ -189,7 +209,9 @@ function buildLLMMessages({ systemPrompt, conversationWindow = [], input, msg = 
 
   const rows = Array.isArray(conversationWindow) ? conversationWindow : []
   for (const row of rows) {
-    if (row?.content) messages.push(formatConversationMessage(row, msg))
+    if (!row?.content) continue
+    const formatted = formatConversationMessage(row, msg)
+    if (formatted.content) messages.push(formatted)
   }
 
   const hasCurrentMessage = !!msg && rows.some(row =>
@@ -424,7 +446,7 @@ async function process(input, label, msg = null) {
       hasActiveTask,
       task: state.task || null,
       taskKnowledge: taskKnowledgeText,
-      extraContext: [prefetchText, extraContextText].filter(Boolean).join('\n\n'),
+      extraContext: [prefetchText, extraContextText, injection.uiSignalSummary, formatActiveUICards(injection.activeUICards)].filter(Boolean).join('\n\n'),
       existenceDesc: describeExistence(birthTime),
     })
 
@@ -525,7 +547,36 @@ async function process(input, label, msg = null) {
         .trim()
     )
 
-    if (fallbackContent) {
+    if (fallbackContent && requiresToolForUserMessage(input) && !hasNonMessageToolCall(toolCallLog)) {
+      const timestamp = nowTimestamp()
+      const blockedContent = '我刚才没有真正调用工具完成这个操作，所以不能声称已经完成。请重新发送一次，我会先执行对应工具，再基于工具结果回复。'
+      console.warn(`[协议兜底] 阻止了一次需要工具但未调用工具的文本回复。from=${msg.fromId}`)
+      emitEvent('message', {
+        from: 'consciousness',
+        to: msg.fromId,
+        content: blockedContent,
+        timestamp,
+      })
+      dispatchSocialMessage(msg.fromId, blockedContent).catch(err => console.warn('[social] fallback send failed:', err.message))
+      insertConversation({
+        role: 'jarvis',
+        from_id: 'jarvis',
+        to_id: msg.fromId,
+        content: blockedContent,
+        timestamp,
+      })
+      toolCallLog.push({
+        name: 'send_message',
+        args: { target_id: msg.fromId, content: blockedContent },
+        result: 'fallback blocked missing required tool call',
+      })
+      emitEvent('protocol_violation', {
+        label,
+        reason: 'missing_required_tool_call',
+        fromId: msg.fromId,
+        content: fallbackContent.slice(0, 500),
+      })
+    } else if (fallbackContent) {
       const timestamp = nowTimestamp()
       console.warn(`[协议兜底] 模型未调用 send_message，已将正文发给 ${msg.fromId}`)
       emitEvent('message', {
@@ -534,6 +585,7 @@ async function process(input, label, msg = null) {
         content: fallbackContent,
         timestamp,
       })
+      dispatchSocialMessage(msg.fromId, fallbackContent).catch(err => console.warn('[social] fallback send failed:', err.message))
       insertConversation({
         role: 'jarvis',
         from_id: 'jarvis',
@@ -772,6 +824,9 @@ async function startConsciousnessLoop({ runImmediateTick = true } = {}) {
 async function main() {
   console.log('Jarvis 启动中...')
 
+  // 同步 ACUI 技能记忆（AGENT_GUIDE.md hash 比对，按需更新 skill-ui-* 条目）
+  ensureSkillMemories()
+
   const persona = getConfig('persona')
   if (persona) {
     console.log(`[系统] 已加载人格：${persona.slice(0, 60)}...`)
@@ -799,6 +854,7 @@ async function main() {
       startConsciousnessLoop({ runImmediateTick: false }).catch(err => console.error('[系统] 主循环启动失败:', err))
     },
   })
+  startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
   // 启动 TUI
   startTUI('ID:000001')

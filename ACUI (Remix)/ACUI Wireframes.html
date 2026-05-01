@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACUI — Wireframe Exploration</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Special+Elite&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #f5f0e8; font-family: 'Caveat', cursive; }
+
+  /* Sketchy box style */
+  .sk { border: 2px solid #222; border-radius: 3px; position: relative; }
+  .sk-dash { border: 2px dashed #555; border-radius: 3px; }
+  .sk-fill-dark { background: #222; color: #fff; }
+  .sk-fill-mid { background: #e0dbd0; }
+  .sk-fill-blue { background: #c8daf0; border-color: #4a7ab5; }
+  .sk-fill-accent { background: #f0e4c8; border-color: #b58a2a; }
+  .sk-fill-green { background: #c8e8d0; border-color: #3a8a50; }
+  .sk-fill-red { background: #f0c8c8; border-color: #b53a3a; }
+
+  .label { font-family: 'Caveat', cursive; font-size: 11px; color: #666; position: absolute; top: -18px; left: 2px; white-space: nowrap; }
+  .label-inside { font-family: 'Caveat', cursive; font-size: 12px; color: #444; text-align: center; }
+  .label-inside-sm { font-family: 'Caveat', cursive; font-size: 10px; color: #666; }
+  .title-tag { font-family: 'Caveat', cursive; font-size: 13px; font-weight: 700; color: #222; background: #ffe; border: 1.5px solid #888; padding: 2px 6px; position: absolute; top: -22px; left: 0; }
+
+  /* Wave bars */
+  .wave { display: flex; align-items: center; gap: 2px; }
+  .wave-bar { background: #4a7ab5; border-radius: 2px; animation: wavePulse 1.2s ease-in-out infinite; }
+  @keyframes wavePulse {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.3); }
+  }
+
+  /* Globe placeholder */
+  .globe { border: 2.5px solid #4a7ab5; border-radius: 50%; position: relative; overflow: hidden; background: radial-gradient(circle at 35% 35%, #c8daf0, #2a4a7a); }
+  .globe-grid { position: absolute; inset: 0; opacity: 0.3; background: repeating-linear-gradient(0deg, transparent, transparent 12px, #fff 12px, #fff 13px), repeating-linear-gradient(90deg, transparent, transparent 12px, #fff 12px, #fff 13px); border-radius: 50%; }
+  
+  /* Chat bubbles */
+  .bubble-ai { background: #e8f0fc; border: 1.5px solid #4a7ab5; border-radius: 0 8px 8px 8px; padding: 4px 8px; font-size: 11px; font-family: 'Caveat', cursive; margin-bottom: 5px; max-width: 80%; }
+  .bubble-user { background: #222; color: #fff; border-radius: 8px 0 8px 8px; padding: 4px 8px; font-size: 11px; font-family: 'Caveat', cursive; margin-bottom: 5px; max-width: 80%; align-self: flex-end; }
+
+  /* News items */
+  .news-item { display: flex; gap: 6px; align-items: flex-start; border-bottom: 1px dashed #aaa; padding: 4px 0; }
+  .news-dot { width: 6px; height: 6px; border-radius: 50%; background: #b53a3a; flex-shrink: 0; margin-top: 4px; }
+
+  /* Annotation arrows */
+  .anno { font-family: 'Caveat', cursive; font-size: 10px; color: #888; font-style: italic; }
+
+  /* Component card overlay badge */
+  .badge { position: absolute; top: 4px; right: 4px; background: #222; color: #fff; font-size: 9px; font-family: 'Caveat', cursive; padding: 1px 5px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<script type="text/babel">
+const { useState } = React;
+
+/* ─── Reusable micro components ─── */
+function WaveBars({ count = 12, height = 32, color = '#4a7ab5', animated = true }) {
+  const bars = Array.from({ length: count }, (_, i) => {
+    const h = 8 + Math.sin(i * 0.8) * 10 + Math.random() * 8;
+    return (
+      <div key={i} className="wave-bar" style={{
+        width: 3, height: h,
+        background: color,
+        animationDelay: `${i * 0.08}s`,
+        animationDuration: `${0.8 + Math.random() * 0.5}s`,
+        animation: animated ? undefined : 'none'
+      }} />
+    );
+  });
+  return <div className="wave" style={{ height }}>{bars}</div>;
+}
+
+function Globe({ size = 80 }) {
+  return (
+    <div className="globe" style={{ width: size, height: size }}>
+      <div className="globe-grid" />
+      {/* continent blobs */}
+      <div style={{ position:'absolute', top:'20%', left:'15%', width:'35%', height:'30%', background:'rgba(80,140,80,0.5)', borderRadius:'40% 60% 50% 40%' }} />
+      <div style={{ position:'absolute', top:'35%', left:'55%', width:'28%', height:'35%', background:'rgba(80,140,80,0.5)', borderRadius:'50% 40% 60% 50%' }} />
+    </div>
+  );
+}
+
+function ChatBubbles() {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+      <div className="bubble-ai">今天天气怎么样？</div>
+      <div className="bubble-user">北京今日晴，22°C</div>
+      <div className="bubble-ai">帮我查一下热点新闻</div>
+      <div className="bubble-user">已为您整理3条...</div>
+    </div>
+  );
+}
+
+function NewsList({ count = 3 }) {
+  const items = ['AI大模型发布重大更新', '全球科技峰会开幕', '中国GDP增长超预期'];
+  return (
+    <div>
+      {items.slice(0, count).map((item, i) => (
+        <div key={i} className="news-item">
+          <div className="news-dot" />
+          <span style={{ fontSize: 10, fontFamily: 'Caveat', lineHeight: 1.3 }}>{item}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TimeWidget({ size = 'md' }) {
+  const fs = size === 'lg' ? 28 : size === 'sm' ? 14 : 20;
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ fontSize: fs, fontFamily: 'Caveat', fontWeight: 700, lineHeight: 1 }}>14:32</div>
+      <div style={{ fontSize: fs * 0.5, fontFamily: 'Caveat', color: '#666' }}>2026年4月26日 周日</div>
+    </div>
+  );
+}
+
+function VoiceMic({ size = 32 }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: '#222', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: 0, boxShadow: `0 0 0 4px rgba(74,122,181,0.3), 0 0 0 8px rgba(74,122,181,0.15)`
+    }}>
+      <svg width={size*0.45} height={size*0.45} viewBox="0 0 24 24" fill="none">
+        <rect x="9" y="2" width="6" height="12" rx="3" fill="white"/>
+        <path d="M5 10a7 7 0 0 0 14 0" stroke="white" strokeWidth="2" fill="none"/>
+        <line x1="12" y1="20" x2="12" y2="23" stroke="white" strokeWidth="2"/>
+      </svg>
+    </div>
+  );
+}
+
+/* ─── Layout A: Center Stage ─── */
+function LayoutA() {
+  return (
+    <div style={{ width: 360, height: 640, background: '#1a1a2e', position: 'relative', overflow: 'hidden', border: '3px solid #222', borderRadius: 4, fontFamily: 'Caveat' }}>
+      {/* Globe BG */}
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', opacity: 0.15 }}>
+        <Globe size={320} />
+      </div>
+
+      {/* Top bar: time + date */}
+      <div style={{ position: 'absolute', top: 14, left: 0, right: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px' }}>
+        <div style={{ color: '#fff', fontSize: 22, fontWeight: 700 }}>14:32</div>
+        <div style={{ background: 'rgba(255,255,255,0.15)', border: '1px dashed rgba(255,255,255,0.4)', borderRadius: 3, padding: '2px 8px', color: '#ccc', fontSize: 11 }}>4月26日 周日</div>
+      </div>
+
+      {/* Hot news strip */}
+      <div style={{ position: 'absolute', top: 50, left: 0, right: 0, background: 'rgba(181,58,58,0.25)', borderTop: '1px dashed rgba(255,80,80,0.4)', borderBottom: '1px dashed rgba(255,80,80,0.4)', padding: '4px 16px', display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{ color: '#ff8080', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>热点</div>
+        <div style={{ color: '#ddd', fontSize: 10 }}>AI大模型发布重大更新 / 全球科技峰会开幕</div>
+      </div>
+
+      {/* Center: Voice + Wave */}
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>正在聆听...</div>
+        <VoiceMic size={64} />
+        <WaveBars count={16} height={40} color='#5a9fdf' />
+        <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, border: '1px dashed rgba(255,255,255,0.3)', borderRadius: 3, padding: '2px 10px' }}>
+          "查一下今天的新闻"
+        </div>
+      </div>
+
+      {/* Bottom: AI Chat panel */}
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(10,10,30,0.92)', borderTop: '1.5px dashed rgba(255,255,255,0.2)', padding: '8px 12px 12px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+          <div style={{ alignSelf: 'flex-start', background: 'rgba(74,122,181,0.35)', border: '1px solid rgba(74,122,181,0.5)', borderRadius: '0 6px 6px 6px', padding: '3px 8px', color: '#acd', fontSize: 11 }}>今天北京晴，22°C ☀️</div>
+          <div style={{ alignSelf: 'flex-end', background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: '6px 0 6px 6px', padding: '3px 8px', color: '#eee', fontSize: 11 }}>帮我订一杯咖啡</div>
+        </div>
+        {/* Input */}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <div style={{ flex: 1, background: 'rgba(255,255,255,0.08)', border: '1px dashed rgba(255,255,255,0.3)', borderRadius: 3, padding: '4px 8px', color: '#888', fontSize: 11 }}>输入消息...</div>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#4a7ab5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24"><path d="M22 2L11 13" stroke="white" strokeWidth="2.5"/><path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="white" strokeWidth="2.5" fill="none"/></svg>
+          </div>
+        </div>
+      </div>
+
+      {/* AI control badge */}
+      <div style={{ position: 'absolute', top: 8, right: 8 }}>
+        <div style={{ background: 'rgba(74,122,181,0.5)', border: '1px solid #4a7ab5', borderRadius: 3, padding: '1px 5px', fontSize: 9, color: '#8af' }}>AI 控制中</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Layout B: Dashboard Grid ─── */
+function LayoutB() {
+  return (
+    <div style={{ width: 800, height: 520, background: '#f0ede6', position: 'relative', border: '3px solid #222', borderRadius: 4, fontFamily: 'Caveat', display: 'grid', gridTemplateColumns: '220px 1fr 200px', gridTemplateRows: '1fr', gap: 0, overflow: 'hidden' }}>
+      
+      {/* LEFT COLUMN */}
+      <div style={{ borderRight: '2px dashed #aaa', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {/* Time */}
+        <div className="sk sk-fill-mid" style={{ padding: 10 }}>
+          <div className="label">时间日期</div>
+          <TimeWidget size="md" />
+        </div>
+        {/* Globe */}
+        <div className="sk sk-fill-blue" style={{ padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <div className="label">3D地球</div>
+          <Globe size={80} />
+          <div style={{ fontSize: 10, color: '#4a7ab5', textAlign: 'center' }}>实时旋转中</div>
+        </div>
+        {/* Weather */}
+        <div className="sk sk-fill-accent" style={{ padding: 8 }}>
+          <div className="label">天气</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 22 }}>☀</div>
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>22°C</div>
+              <div style={{ fontSize: 10, color: '#777' }}>北京·晴</div>
+            </div>
+          </div>
+        </div>
+        {/* Hot News */}
+        <div className="sk" style={{ padding: 8, flex: 1 }}>
+          <div className="label">热点新闻</div>
+          <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 5, color: '#b53a3a' }}>📰 今日热点</div>
+          <NewsList count={3} />
+        </div>
+      </div>
+
+      {/* CENTER COLUMN */}
+      <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        {/* Globe BG */}
+        <div style={{ position: 'absolute', opacity: 0.06 }}>
+          <Globe size={360} />
+        </div>
+
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 8 }}>🎙 语音助手</div>
+        
+        {/* Voice mic */}
+        <VoiceMic size={72} />
+        
+        {/* Wave */}
+        <div style={{ marginTop: 16, marginBottom: 8 }}>
+          <WaveBars count={20} height={48} color='#4a7ab5' />
+        </div>
+        <div style={{ fontSize: 12, color: '#555', border: '1.5px dashed #aaa', borderRadius: 3, padding: '3px 12px', background: 'rgba(255,255,255,0.6)' }}>
+          "帮我查一下今天新闻"
+        </div>
+
+        {/* AI Component slots */}
+        <div style={{ marginTop: 18, display: 'flex', gap: 10, width: '100%' }}>
+          <div className="sk-dash" style={{ flex: 1, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(200,218,240,0.3)' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 18 }}>🗺</div>
+              <div style={{ fontSize: 10, color: '#666' }}>地图组件</div>
+              <div className="anno">AI动态注入</div>
+            </div>
+          </div>
+          <div className="sk-dash" style={{ flex: 1, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(200,218,240,0.3)' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 18 }}>🎬</div>
+              <div style={{ fontSize: 10, color: '#666' }}>视频卡片</div>
+              <div className="anno">AI动态注入</div>
+            </div>
+          </div>
+          <div className="sk-dash" style={{ flex: 1, height: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(200,218,240,0.3)' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 18 }}>🖼</div>
+              <div style={{ fontSize: 10, color: '#666' }}>图片卡片</div>
+              <div className="anno">AI动态注入</div>
+            </div>
+          </div>
+        </div>
+        <div className="anno" style={{ marginTop: 6, fontSize: 10 }}>↑ 这些组件由 AI 动态控制显示/隐藏</div>
+      </div>
+
+      {/* RIGHT COLUMN */}
+      <div style={{ borderLeft: '2px dashed #aaa', padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#333', borderBottom: '1.5px solid #333', paddingBottom: 4, marginBottom: 4 }}>💬 AI 对话</div>
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <ChatBubbles />
+        </div>
+        {/* Input */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="sk" style={{ padding: '5px 8px', fontSize: 11, color: '#999', background: '#fff' }}>输入消息...</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <div className="sk sk-fill-dark" style={{ flex: 1, textAlign: 'center', padding: '3px 0', fontSize: 11, color: '#fff', cursor: 'pointer' }}>发送</div>
+            <div className="sk sk-fill-blue" style={{ width: 32, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🎙</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Layout D: Input Bottom Center + Voice Right ─── */
+function LayoutD() {
+  return (
+    <div style={{ width: 900, height: 540, background: '#0d0d1a', position: 'relative', border: '3px solid #222', borderRadius: 4, fontFamily: 'Caveat', overflow: 'hidden' }}>
+      {/* Globe BG */}
+      <div style={{ position: 'absolute', top: '42%', left: '50%', transform: 'translate(-50%, -50%)', opacity: 0.13 }}>
+        <Globe size={460} />
+      </div>
+      {/* Scanlines */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(255,255,255,0.025) 39px, rgba(255,255,255,0.025) 40px)', pointerEvents: 'none' }} />
+
+      {/* TOP bar */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 42, borderBottom: '1px dashed rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px' }}>
+        <div style={{ color: '#fff', fontSize: 24, fontWeight: 700, letterSpacing: 2 }}>14:32</div>
+        <div style={{ color: '#666', fontSize: 10 }}>2026-04-26</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ border: '1px dashed rgba(255,100,100,0.5)', borderRadius: 2, padding: '1px 7px', color: '#ff8888', fontSize: 10 }}>🔴 热点</div>
+          <div style={{ border: '1px dashed rgba(100,200,100,0.5)', borderRadius: 2, padding: '1px 7px', color: '#88ff88', fontSize: 10 }}>☁ 晴 22°C</div>
+          <div style={{ border: '1px dashed rgba(100,150,255,0.5)', borderRadius: 2, padding: '1px 7px', color: '#88aaff', fontSize: 10 }}>AI 在线</div>
+        </div>
+      </div>
+
+      {/* LEFT: News + Chat history */}
+      <div style={{ position: 'absolute', left: 16, top: 52, width: 210, bottom: 72, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* News */}
+        <div style={{ background: 'rgba(0,0,0,0.65)', border: '1.5px dashed rgba(255,100,100,0.35)', borderRadius: 4, padding: 10 }}>
+          <div style={{ color: '#ff8888', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>📰 热点新闻</div>
+          {['AI大模型重大更新', '科技峰会在京开幕', 'GDP增速超预期'].map((n, i) => (
+            <div key={i} style={{ color: '#ccc', fontSize: 10, borderBottom: '1px dashed rgba(255,255,255,0.08)', padding: '3px 0', display: 'flex', gap: 5 }}>
+              <span style={{ color: '#ff6666' }}>0{i+1}</span>{n}
+            </div>
+          ))}
+        </div>
+        {/* Chat history */}
+        <div style={{ flex: 1, background: 'rgba(0,0,0,0.65)', border: '1.5px dashed rgba(74,122,181,0.35)', borderRadius: 4, padding: 10, display: 'flex', flexDirection: 'column', gap: 5, overflow: 'hidden' }}>
+          <div style={{ color: '#88aaff', fontSize: 12, fontWeight: 700, marginBottom: 2 }}>💬 聊天记录</div>
+          <div style={{ background: 'rgba(74,122,181,0.2)', border: '1px solid rgba(74,122,181,0.25)', borderRadius: '0 5px 5px 5px', padding: '3px 7px', color: '#acd', fontSize: 10 }}>北京今天晴，22°C</div>
+          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '5px 0 5px 5px', padding: '3px 7px', color: '#eee', fontSize: 10, marginLeft: 20 }}>帮我订杯咖啡</div>
+          <div style={{ background: 'rgba(74,122,181,0.2)', border: '1px solid rgba(74,122,181,0.25)', borderRadius: '0 5px 5px 5px', padding: '3px 7px', color: '#acd', fontSize: 10 }}>好的，已下单 ✓</div>
+          <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '5px 0 5px 5px', padding: '3px 7px', color: '#eee', fontSize: 10, marginLeft: 20 }}>查一下今日新闻</div>
+        </div>
+      </div>
+
+      {/* CENTER-TOP: AI dynamic component area */}
+      <div style={{ position: 'absolute', left: 242, right: 230, top: 52, bottom: 72, display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 0' }}>
+        <div style={{ color: 'rgba(255,255,255,0.18)', fontSize: 9, textAlign: 'center', marginBottom: 2 }}>↓ AI 动态组件区</div>
+        <div style={{ display: 'flex', gap: 8, flex: 1 }}>
+          <div style={{ flex: 1, border: '1.5px dashed rgba(74,122,181,0.25)', borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(74,122,181,0.07)', gap: 4 }}>
+            <div style={{ fontSize: 22 }}>🗺</div>
+            <div style={{ fontSize: 10, color: '#668' }}>地图组件</div>
+          </div>
+          <div style={{ flex: 1, border: '1.5px dashed rgba(255,255,255,0.12)', borderRadius: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+            <div style={{ fontSize: 22 }}>🎬</div>
+            <div style={{ fontSize: 10, color: '#555' }}>视频卡片</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, height: 70 }}>
+          {[{icon:'🖼',name:'图片卡片'},{icon:'📊',name:'数据图表'},{icon:'➕',name:'更多'}].map((c,i)=>(
+            <div key={i} style={{ flex: 1, border: `1.5px dashed rgba(255,255,255,${i===0?0.2:0.1})`, borderRadius: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, background: i===0?'rgba(74,122,181,0.08)':'transparent' }}>
+              <div style={{ fontSize: 16 }}>{c.icon}</div>
+              <div style={{ fontSize: 9, color: '#555' }}>{c.name}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* RIGHT: Voice + Wave (lower right) */}
+      <div style={{ position: 'absolute', right: 20, bottom: 82, width: 210, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, background: 'rgba(0,0,0,0.55)', border: '1.5px dashed rgba(74,122,181,0.4)', borderRadius: 6, padding: '14px 12px' }}>
+        <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10 }}>🎙 语音识别</div>
+        {/* Ripple + mic */}
+        <div style={{ position: 'relative', width: 60, height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {[1,2,3].map(i => (
+            <div key={i} style={{ position: 'absolute', border: `1.5px solid rgba(74,122,181,${0.5/i})`, borderRadius: '50%', width: 60 + i*22, height: 60 + i*22 }} />
+          ))}
+          <VoiceMic size={52} />
+        </div>
+        {/* Wave bars */}
+        <WaveBars count={18} height={38} color='#4a9fdf' animated />
+        <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: 10, letterSpacing: 0.5, textAlign: 'center' }}>"查一下今天新闻"</div>
+      </div>
+
+      {/* BOTTOM CENTER: Message input */}
+      <div style={{ position: 'absolute', bottom: 14, left: '50%', transform: 'translateX(-50%)', width: 460, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1.5px solid rgba(255,255,255,0.22)', borderRadius: 24, padding: '8px 18px', color: '#666', fontSize: 12 }}>
+          输入消息，或按住说话...
+        </div>
+        <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#4a7ab5', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '2px solid rgba(255,255,255,0.2)' }}>
+          <svg width="15" height="15" viewBox="0 0 24 24"><path d="M22 2L11 13" stroke="white" strokeWidth="2.5"/><path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="white" strokeWidth="2.5" fill="none"/></svg>
+        </div>
+      </div>
+
+      {/* Annotation: input label */}
+      <div style={{ position: 'absolute', bottom: 18, left: '50%', transform: 'translateX(-280px)', fontFamily: 'Caveat', fontSize: 9, color: '#555' }}>
+        ↑ 底部居中输入框
+      </div>
+      <div style={{ position: 'absolute', bottom: 122, right: 20, fontFamily: 'Caveat', fontSize: 9, color: '#555' }}>
+        右下角声波区 →
+      </div>
+    </div>
+  );
+}
+
+/* ─── Layout C: Full-Screen Immersive ─── */
+function LayoutC() {
+  return (
+    <div style={{ width: 900, height: 540, background: '#0d0d1a', position: 'relative', border: '3px solid #222', borderRadius: 4, fontFamily: 'Caveat', overflow: 'hidden' }}>
+      {/* Globe BG centered */}
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', opacity: 0.12 }}>
+        <Globe size={480} />
+      </div>
+
+      {/* Grid overlay scanlines */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(255,255,255,0.03) 39px, rgba(255,255,255,0.03) 40px)', pointerEvents: 'none' }} />
+
+      {/* TOP: Time + Status bar */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 42, borderBottom: '1px dashed rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px' }}>
+        <div style={{ color: '#fff', fontSize: 24, fontWeight: 700, letterSpacing: 2 }}>14:32</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ border: '1px dashed rgba(255,100,100,0.5)', borderRadius: 2, padding: '1px 7px', color: '#ff8888', fontSize: 10 }}>🔴 热点</div>
+          <div style={{ border: '1px dashed rgba(100,200,100,0.5)', borderRadius: 2, padding: '1px 7px', color: '#88ff88', fontSize: 10 }}>☁ 晴 22°C</div>
+          <div style={{ border: '1px dashed rgba(100,150,255,0.5)', borderRadius: 2, padding: '1px 7px', color: '#88aaff', fontSize: 10 }}>AI 在线</div>
+        </div>
+        <div style={{ color: '#555', fontSize: 10 }}>2026-04-26</div>
+      </div>
+
+      {/* CENTER: Giant voice area */}
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+        {/* Ripple rings */}
+        <div style={{ position: 'relative', width: 100, height: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {[1,2,3].map(i => (
+            <div key={i} style={{ position: 'absolute', border: `1.5px solid rgba(74,122,181,${0.4/i})`, borderRadius: '50%', width: 100 + i*30, height: 100 + i*30 }} />
+          ))}
+          <VoiceMic size={68} />
+        </div>
+        <WaveBars count={28} height={56} color='#4a9fdf' animated />
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, letterSpacing: 1 }}>"查一下今天的新闻"</div>
+      </div>
+
+      {/* LEFT floating panel: News */}
+      <div style={{ position: 'absolute', left: 16, top: 60, width: 200, background: 'rgba(0,0,0,0.7)', border: '1.5px dashed rgba(255,100,100,0.4)', borderRadius: 4, padding: 10 }}>
+        <div style={{ color: '#ff8888', fontSize: 12, fontWeight: 700, marginBottom: 6 }}>📰 热点新闻</div>
+        {['AI大模型重大更新', '科技峰会在京开幕', 'GDP增速超预期'].map((n, i) => (
+          <div key={i} style={{ color: '#ccc', fontSize: 10, borderBottom: '1px dashed rgba(255,255,255,0.1)', padding: '3px 0', display: 'flex', gap: 4 }}>
+            <span style={{ color: '#ff8888' }}>0{i+1}</span> {n}
+          </div>
+        ))}
+      </div>
+
+      {/* RIGHT floating panel: Chat */}
+      <div style={{ position: 'absolute', right: 16, top: 60, width: 200, background: 'rgba(0,0,0,0.7)', border: '1.5px dashed rgba(74,122,181,0.4)', borderRadius: 4, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ color: '#88aaff', fontSize: 12, fontWeight: 700, marginBottom: 2 }}>💬 对话</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ background: 'rgba(74,122,181,0.25)', border: '1px solid rgba(74,122,181,0.3)', borderRadius: '0 5px 5px 5px', padding: '3px 7px', color: '#acd', fontSize: 10, marginBottom: 4 }}>已为您整理新闻...</div>
+          <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: '5px 0 5px 5px', padding: '3px 7px', color: '#eee', fontSize: 10, marginLeft: 20, marginBottom: 4 }}>订一杯咖啡</div>
+          <div style={{ background: 'rgba(74,122,181,0.25)', border: '1px solid rgba(74,122,181,0.3)', borderRadius: '0 5px 5px 5px', padding: '3px 7px', color: '#acd', fontSize: 10 }}>好的，已下单✓</div>
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ flex: 1, background: 'rgba(255,255,255,0.07)', border: '1px dashed rgba(255,255,255,0.2)', borderRadius: 2, padding: '3px 6px', color: '#666', fontSize: 10 }}>输入...</div>
+          <div style={{ width: 22, height: 22, background: '#4a7ab5', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 10 }}>→</div>
+        </div>
+      </div>
+
+      {/* BOTTOM: Dynamic component area */}
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 110, borderTop: '1px dashed rgba(255,255,255,0.15)', padding: '8px 14px', display: 'flex', gap: 10, alignItems: 'stretch' }}>
+        <div style={{ color: 'rgba(255,255,255,0.2)', fontSize: 9, position: 'absolute', top: 4, left: 14 }}>AI动态组件区</div>
+        {[{icon:'🗺', name:'地图'},{icon:'🎬', name:'视频'},{icon:'🖼', name:'图片'},{icon:'📊', name:'数据'},{icon:'➕', name:'更多'}].map((c,i) => (
+          <div key={i} style={{ flex: 1, border: '1.5px dashed rgba(255,255,255,0.15)', borderRadius: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: i < 3 ? 'rgba(74,122,181,0.1)' : 'transparent', marginTop: 10 }}>
+            <div style={{ fontSize: 20 }}>{c.icon}</div>
+            <div style={{ fontSize: 9, color: '#888' }}>{c.name}</div>
+            {i < 3 && <div style={{ fontSize: 8, color: '#4a7ab5' }}>活跃</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main App ─── */
+function App() {
+  const [active, setActive] = useState('B');
+
+  return (
+    <DesignCanvas title="ACUI — 主界面线框探索">
+      <DCSection id="desktop3" title="方案 D · 输入框底部居中 + 声波右下 ★ 新">
+        <DCArtboard id="d1" label="左侧信息+聊天 / 中间组件区 / 右下声波 / 底部输入" width={900} height={540}>
+          <LayoutD />
+          <div style={{ position: 'absolute', bottom: -40, left: 0, fontFamily: 'Caveat', fontSize: 11, color: '#888' }}>
+            输入框固定底部居中 · 语音声波固定右侧偏下 · 左侧聊天记录+新闻常驻 · 中间动态组件区
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="mobile" title="方案 A · 移动端全屏">
+        <DCArtboard id="a1" label="中心语音 + 底部聊天" width={360} height={640}>
+          <LayoutA />
+          {/* Annotations */}
+          <div style={{ position: 'absolute', right: -130, top: 60, width: 120, fontFamily: 'Caveat', fontSize: 10, color: '#888', lineHeight: 1.5 }}>
+            ← 地球为半透明背景<br/>
+            ← 热点新闻滚动条<br/>
+            <br/>
+            ← 麦克风居中<br/>← 声波环绕<br/>
+            <br/>
+            ← 聊天记录折叠<br/>← 底部输入框
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="desktop1" title="方案 B · 桌面端三栏">
+        <DCArtboard id="b1" label="左信息 + 中语音 + 右聊天" width={800} height={520}>
+          <LayoutB />
+          <div style={{ position: 'absolute', bottom: -50, left: 0, fontFamily: 'Caveat', fontSize: 11, color: '#888' }}>
+            三栏布局：左侧固定信息组件 / 中间语音交互区 / 右侧聊天记录
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="desktop2" title="方案 C · 全屏沉浸式">
+        <DCArtboard id="c1" label="地球背景 + 浮动面板" width={900} height={540}>
+          <LayoutC />
+          <div style={{ position: 'absolute', bottom: -50, left: 0, fontFamily: 'Caveat', fontSize: 11, color: '#888' }}>
+            全屏地球背景 / 中心大语音区 / 左右浮动信息面板 / 底部动态组件区
+          </div>
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<div id="root"></div>
+</body>
+</html>

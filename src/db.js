@@ -118,6 +118,15 @@ function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_action_logs_timestamp ON action_logs(timestamp);
   `)
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN risk TEXT NOT NULL DEFAULT 'medium'`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN args_json TEXT NOT NULL DEFAULT '{}'`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN result_preview TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN error TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0`) } catch {}
+  try { db.exec(`ALTER TABLE action_logs ADD COLUMN source TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_status ON action_logs(status)`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_risk ON action_logs(risk)`) } catch {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS reminders (
@@ -169,8 +178,42 @@ function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_prefetch_source ON prefetch_cache(source);
   `)
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ui_signals (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      type       TEXT    NOT NULL,
+      target     TEXT,
+      payload    TEXT    NOT NULL DEFAULT '{}',
+      ts         INTEGER NOT NULL,
+      consumed   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ui_signals_unconsumed ON ui_signals(consumed, ts);
+  `)
+
   // 重建 FTS 索引（覆盖已有数据，确保历史记忆也被索引）
   db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`)
+}
+
+export function insertUISignal({ type, target = null, payload = {}, ts = Date.now() }) {
+  return getDB().prepare(
+    `INSERT INTO ui_signals (type, target, payload, ts) VALUES (?, ?, ?, ?)`
+  ).run(type, target, JSON.stringify(payload || {}), ts).lastInsertRowid
+}
+
+export function getUnconsumedUISignals(windowMs = 60_000) {
+  const since = Date.now() - windowMs
+  return getDB().prepare(
+    `SELECT id, type, target, payload, ts FROM ui_signals
+     WHERE consumed = 0 AND ts >= ?
+     ORDER BY ts ASC`
+  ).all(since)
+}
+
+export function markUISignalsConsumed(ids = []) {
+  if (!ids.length) return
+  const placeholders = ids.map(() => '?').join(',')
+  getDB().prepare(`UPDATE ui_signals SET consumed = 1 WHERE id IN (${placeholders})`).run(...ids)
 }
 
 export function normalizeConversationPartyId(id) {
@@ -229,6 +272,14 @@ function safeJsonArray(value) {
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
+  }
+}
+
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value ?? {})
+  } catch {
+    return '{}'
   }
 }
 
@@ -1018,11 +1069,40 @@ export function getRecentConversationPartners(maxHours = 24, limit = 20) {
 }
 
 // 写入一条行动日志
-export function insertActionLog({ timestamp, tool, summary, detail = '' }) {
+export function insertActionLog({
+  timestamp,
+  tool,
+  summary,
+  detail = '',
+  status = 'ok',
+  risk = 'medium',
+  args = null,
+  argsJson = null,
+  resultPreview = '',
+  error = '',
+  durationMs = 0,
+  source = '',
+}) {
   const db = getDB()
+  const serializedArgs = argsJson ?? safeStringify(args ?? {})
   db.prepare(`
-    INSERT INTO action_logs (timestamp, tool, summary, detail) VALUES (?, ?, ?, ?)
-  `).run(timestamp, tool, summary, String(detail).slice(0, 300))
+    INSERT INTO action_logs (
+      timestamp, tool, summary, detail,
+      status, risk, args_json, result_preview, error, duration_ms, source
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    timestamp,
+    tool,
+    summary,
+    String(detail).slice(0, 300),
+    status,
+    risk,
+    String(serializedArgs || '{}').slice(0, 2000),
+    String(resultPreview || '').slice(0, 500),
+    String(error || '').slice(0, 500),
+    Number(durationMs) || 0,
+    String(source || '').slice(0, 120)
+  )
 }
 
 // 获取最近 N 条行动日志（时间正序）

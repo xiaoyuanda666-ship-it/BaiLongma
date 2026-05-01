@@ -318,6 +318,37 @@ const SEED_MEMORIES = [
     ],
     tags: ['behavior'],
   },
+
+  // ══════════════════════════════════════════════════════════════
+  //  UI 技能（根节点）：可视化表达通道
+  // ══════════════════════════════════════════════════════════════
+  {
+    id: 'ui_skills',
+    type: 'knowledge',
+    title: 'ACUI：可视化表达通道',
+    content: '你拥有一个可视化通道，可主动向用户推送卡片组件，也能感知用户对界面的操作（关闭、点击）。两个工具：ui_show(component, props) 挂载组件；ui_hide(id) 关闭组件。可视化是表达不是回复——文字能讲清楚的事，不需要卡片。每次只在"信息密度高、需要直接看到"时使用，比如天气、日程、对比表。同时挂载的卡片不超过 3 个；用户关闭某卡片是明确的"不需要"信号。',
+    parent_id: null,
+    children_ids: ['skill_weather_card'],
+    links: [
+      { target_id: 'skill_weather_card', relation: 'parent_of' },
+    ],
+    tags: ['system', 'skill', 'skill.ui', 'ui', '界面', '卡片'],
+  },
+
+  // ── WeatherCard ────────────────────────────────────────────────
+  {
+    id: 'skill_weather_card',
+    type: 'knowledge',
+    title: 'WeatherCard：天气卡片',
+    content: '当用户问到天气、温度、预报，且你已通过 fetch_url 拿到数据时，可调用 ui_show("WeatherCard", { city, temp, condition, forecast }) 把信息可视化。参数：city（城市名，字符串）、temp（当前温度数字，例如 18）、condition（天气状况，如 "晴" "多云"）、forecast（可选，未来几天数组，每项 { day, low, high, condition }）。注意：若用户只是闲聊提到天气，不要弹卡片；若你已用文字回答完且足够清晰，也不要重复弹卡片。',
+    parent_id: 'ui_skills',
+    children_ids: [],
+    links: [
+      { target_id: 'ui_skills',     relation: 'child_of'   },
+      { target_id: 'tool_fetch_url', relation: 'depends_on' },
+    ],
+    tags: ['system', 'skill', 'skill.ui', '天气', 'weather', 'WeatherCard'],
+  },
 ]
 
 const ts = nowTimestamp()

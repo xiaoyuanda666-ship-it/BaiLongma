@@ -5,8 +5,9 @@ import { fileURLToPath } from 'url'
 import { spawn } from 'child_process'
 import { chromium } from 'playwright'
 import { nowTimestamp } from '../time.js'
-import { searchMemories, searchMemoriesByKeywords, insertMemory, upsertMemoryByMemId, normalizeConversationPartyId, createReminder, findMergeableOneOffReminder, appendReminderTask, listPendingReminders, getReminderById, cancelReminder, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks } from '../db.js'
-import { emitEvent } from '../events.js'
+import { searchMemories, searchMemoriesByKeywords, insertMemory, upsertMemoryByMemId, normalizeConversationPartyId, createReminder, findMergeableOneOffReminder, appendReminderTask, listPendingReminders, getReminderById, cancelReminder, upsertPrefetchTask, removePrefetchTask, listPrefetchTasks, insertActionLog } from '../db.js'
+import { emitEvent, emitUICommand, emitACUIEvent, hasACUIClient, addActiveUICard, removeActiveUICard } from '../events.js'
+import { dispatchSocialMessage } from '../social/dispatch.js'
 import { callCapability, listCapabilities } from '../providers/registry.js'
 import { isDailyLimitReached } from '../quota.js'
 import { setCustomInterval as setTickerInterval, getStatus as getTickerStatus } from '../ticker.js'
@@ -39,7 +40,22 @@ function getUrlTtl(url) {
 import { paths } from '../paths.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // 文件操作只允许在 sandbox 目录内
-const SANDBOX_ROOT = paths.sandboxDir
+const SANDBOX_ROOT = path.resolve(paths.sandboxDir)
+
+// inline-script 草稿注册表（内存 + 磁盘双存）
+const draftCodeMap = new Map()   // { scratchId → code }
+const appIdToName  = new Map()   // { scratchId → appName }
+
+// 由 api.js 调用：把 app:saveState 信号的状态自动落盘
+export function persistAppState(componentId, state) {
+  const name = appIdToName.get(componentId)
+  if (!name) return false
+  try {
+    const statePath = path.resolve(SANDBOX_ROOT, 'apps', name, 'state.json')
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf-8')
+    return true
+  } catch { return false }
+}
 
 function createAbortError(reason = 'Aborted') {
   const err = new Error(reason)
@@ -80,8 +96,15 @@ function createMergedAbortSignal(signal, timeoutMs) {
   }
 }
 
+function isPathInside(parentDir, candidatePath) {
+  const parent = path.resolve(parentDir)
+  const candidate = path.resolve(candidatePath)
+  const relative = path.relative(parent, candidate)
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
 function assertInSandbox(resolvedPath) {
-  if (!resolvedPath.startsWith(SANDBOX_ROOT)) {
+  if (!isPathInside(SANDBOX_ROOT, resolvedPath)) {
     throw new Error(`访问被拒绝：文件操作只允许在 sandbox 目录内（${SANDBOX_ROOT}）`)
   }
 }
@@ -94,7 +117,168 @@ function normalizeSandboxPath(filePath) {
 }
 
 // 工具执行器：根据工具名和参数执行对应操作，返回结果字符串
-export async function executeTool(name, args, context = {}) {
+const TOOL_RISK = {
+  read_file: 'low',
+  list_dir: 'low',
+  search_memory: 'low',
+  list_processes: 'low',
+  skip_recognition: 'low',
+  send_message: 'medium',
+  express: 'medium',
+  write_file: 'medium',
+  make_dir: 'medium',
+  upsert_memory: 'medium',
+  manage_reminder: 'medium',
+  schedule_reminder: 'medium',
+  manage_prefetch_task: 'medium',
+  ui_show: 'medium',
+  ui_update: 'medium',
+  ui_hide: 'medium',
+  ui_show_inline: 'medium',
+  ui_patch: 'medium',
+  manage_app: 'medium',
+  set_tick_interval: 'medium',
+  delete_file: 'high',
+  exec_command: 'high',
+  kill_process: 'high',
+  web_search: 'high',
+  fetch_url: 'high',
+  browser_read: 'high',
+  speak: 'high',
+  generate_lyrics: 'high',
+  generate_music: 'high',
+  generate_image: 'high',
+  ui_register: 'high',
+}
+
+function classifyTool(name) {
+  return TOOL_RISK[name] || 'medium'
+}
+
+function safeJsonStringify(value) {
+  try {
+    return JSON.stringify(value ?? {})
+  } catch {
+    return '{}'
+  }
+}
+
+function compactWhitespace(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function previewValue(value, max = 180) {
+  const text = typeof value === 'string' ? value : safeJsonStringify(value)
+  const compact = compactWhitespace(text)
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact
+}
+
+function getExecutionSource(context = {}) {
+  return context.source || context.trigger || (context.autonomous ? 'autonomous' : 'llm')
+}
+
+function summarizeToolExecution(name, args = {}) {
+  switch (name) {
+    case 'read_file':
+      return `read_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'list_dir':
+      return `list_dir(${args.path || args.dir || args.directory || '.'})`
+    case 'write_file':
+      return `write_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'delete_file':
+      return `delete_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'make_dir':
+      return `make_dir(${args.path || args.dir || args.directory || '?'})`
+    case 'exec_command':
+      return `exec_command(${String(args.command || args.cmd || '?').slice(0, 100)})`
+    case 'fetch_url':
+    case 'browser_read':
+      return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
+    case 'web_search':
+      return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
+    case 'send_message':
+    case 'express':
+      return `${name} -> ${args.target_id || '(unknown)'}`
+    case 'upsert_memory': {
+      const count = Array.isArray(args.memories) ? args.memories.length : 0
+      return `upsert_memory(${count})`
+    }
+    default:
+      return name
+  }
+}
+
+function isDangerousShellCommand(command) {
+  const text = String(command || '').trim()
+  const reasons = []
+  if (/(^|[\s"'`])\.\.([\\/]|$)/.test(text)) reasons.push('command references a parent directory')
+  if (/(^|[\s"'`])[a-z]:[\\/]/i.test(text) || /(^|[\s"'`])[\\/]{2}[^\\/]/.test(text)) reasons.push('command references an absolute filesystem path')
+  if (/(^|[\s"'`])~([\\/]|$)/.test(text) || /\$(home|env:userprofile)\b/i.test(text) || /%userprofile%/i.test(text)) reasons.push('command references the user home directory')
+  if (/\bgit\s+reset\s+--hard\b/i.test(text) || /\bgit\s+clean\b/i.test(text)) reasons.push('command can destructively rewrite the worktree')
+  if (/\b(format|diskpart|shutdown)\b/i.test(text)) reasons.push('command is system-level destructive or disruptive')
+  return reasons
+}
+
+function evaluateToolPolicy(name, args = {}, context = {}) {
+  const risk = classifyTool(name)
+  if (name === 'exec_command') {
+    const reasons = isDangerousShellCommand(args.command || args.cmd || '')
+    if (reasons.length) return { allowed: false, risk, reason: reasons.join('; ') }
+  }
+  if (context.autonomous && risk === 'high' && !context.allowHighRiskAutonomy) {
+    return { allowed: false, risk, reason: 'high-risk tool requires an explicit user-driven context' }
+  }
+  return { allowed: true, risk, reason: '' }
+}
+
+function inferToolStatus(result) {
+  const text = String(result ?? '').trim()
+  if (!text) return 'ok'
+  try {
+    const parsed = JSON.parse(text)
+    return parsed?.ok === false ? 'error' : 'ok'
+  } catch {}
+  return /^(错误|请求失败|执行失败|命令超时|命令执行失败|閿欒|璇锋眰澶辫触|鎵ц澶辫触|鍛戒护瓒呮椂|鍛戒护鎵ц澶辫触)/.test(text) ? 'error' : 'ok'
+}
+
+function writeToolAuditLog({ name, args, context, policy, status, result = '', error = '', startedAt }) {
+  const durationMs = Date.now() - startedAt
+  const detailParts = []
+  if (policy?.reason) detailParts.push(`policy=${policy.reason}`)
+  const argPreview = previewValue(args, 160)
+  if (argPreview && argPreview !== '{}') detailParts.push(`args=${argPreview}`)
+  const resultPreview = previewValue(result || error, 220)
+  if (resultPreview) detailParts.push(`result=${resultPreview}`)
+
+  try {
+    insertActionLog({
+      timestamp: new Date(startedAt).toISOString(),
+      tool: name,
+      summary: summarizeToolExecution(name, args),
+      detail: detailParts.join(' | '),
+      status,
+      risk: policy?.risk || classifyTool(name),
+      argsJson: safeJsonStringify(args),
+      resultPreview,
+      error,
+      durationMs,
+      source: getExecutionSource(context),
+    })
+  } catch (err) {
+    console.warn(`[audit] failed to persist tool audit log: ${err.message}`)
+  }
+
+  emitEvent('tool_audit', {
+    tool: name,
+    status,
+    risk: policy?.risk || classifyTool(name),
+    summary: summarizeToolExecution(name, args),
+    duration_ms: durationMs,
+    source: getExecutionSource(context),
+  })
+}
+
+async function executeToolUnchecked(name, args, context = {}) {
   try {
     throwIfAborted(context.signal)
     switch (name) {
@@ -136,6 +320,8 @@ export async function executeTool(name, args, context = {}) {
         return await execGenerateLyrics(args)
       case 'generate_music':
         return await execGenerateMusic(args)
+      case 'generate_image':
+        return await execGenerateImage(args)
       case 'set_tick_interval':
         return execSetTickInterval(args)
       case 'schedule_reminder':
@@ -143,12 +329,57 @@ export async function executeTool(name, args, context = {}) {
         return await execManageReminder(args, context)
       case 'manage_prefetch_task':
         return execManagePrefetchTask(args)
+      case 'ui_show':
+        return execUIShow(args)
+      case 'ui_update':
+        return execUIUpdate(args)
+      case 'ui_hide':
+        return execUIHide(args)
+      case 'ui_show_inline':
+        return execUIShowInline(args)
+      case 'ui_patch':
+        return execUIPatch(args)
+      case 'manage_app':
+        return execManageApp(args)
+      case 'ui_register':
+        return execUIRegister(args)
       default:
         return `错误：未知工具 "${name}"`
     }
   } catch (err) {
     if (err.name === 'AbortError') throw err
     return `执行失败：${err.message}`
+  }
+}
+
+export async function executeTool(name, args, context = {}) {
+  const startedAt = Date.now()
+  const safeArgs = args || {}
+  const policy = evaluateToolPolicy(name, safeArgs, context)
+
+  if (!policy.allowed) {
+    const result = toolJson({
+      ok: false,
+      tool: name,
+      error: 'permission denied',
+      policy: {
+        risk: policy.risk,
+        reason: policy.reason,
+      },
+    })
+    writeToolAuditLog({ name, args: safeArgs, context, policy, status: 'denied', result, startedAt })
+    return result
+  }
+
+  try {
+    const result = await executeToolUnchecked(name, safeArgs, context)
+    writeToolAuditLog({ name, args: safeArgs, context, policy, status: inferToolStatus(result), result, startedAt })
+    return result
+  } catch (err) {
+    if (err.name === 'AbortError') throw err
+    const result = `执行失败：${err.message}`
+    writeToolAuditLog({ name, args: safeArgs, context, policy, status: 'error', result, error: err.message, startedAt })
+    return result
   }
 }
 
@@ -203,6 +434,10 @@ function trimAssistantFluff(content) {
   let text = String(content || '').trim()
   if (!text) return text
 
+  text = text
+    .replace(/^(?:\s*\[assistant(?:\s+to\s+[^\]\r\n]+)?(?:\s+\d{4}-\d{2}-\d{2}T[^\]\r\n]+)?\]\s*)+/giu, '')
+    .trim()
+
   const patterns = [
     /[，,、。.!！？~～\s]*(?:从现在起|从今以后|以后)?我就是[\u4e00-\u9fa5A-Za-z0-9 _-]{1,24}[，,、。.!！？~～\s]*为您效劳[！!～~。.\s]*$/u,
     /[，,、。.!！？~～\s]*有什么需要帮忙的[？?]?[，,、。.!！？~～\s]*(?:随时)?为您效劳[～~！!。.\s]*$/u,
@@ -256,6 +491,9 @@ async function execSendMessage({ target_id, content }, context = {}) {
   console.log(`  ${cleanedContent}`)
   console.log(`  时间：${timestamp}`)
   emitEvent('message', { from: 'consciousness', to: resolvedId, content: cleanedContent, timestamp })
+  const socialResult = await dispatchSocialMessage(resolvedId, cleanedContent)
+  if (socialResult?.ok) return `消息已发送至 ${resolvedId}（${socialResult.platform} 已投递）`
+  if (socialResult?.skipped) return `消息已发送至 ${resolvedId}（社交平台未配置：${socialResult.reason}）`
   return `消息已发送至 ${resolvedId}`
 }
 
@@ -464,7 +702,29 @@ async function execWriteFile(args, context = {}) {
   // 确保目录存在
   fs.mkdirSync(path.dirname(resolved), { recursive: true })
   fs.writeFileSync(resolved, content, 'utf-8')
-  return `文件已写入：${resolved}`
+  const verifiedContent = fs.readFileSync(resolved, 'utf-8')
+  const verified = verifiedContent === String(content)
+  const bytes = Buffer.byteLength(verifiedContent, 'utf-8')
+  if (!verified) {
+    return toolJson({
+      ok: false,
+      tool: 'write_file',
+      path: filePath,
+      absolute_path: resolved,
+      bytes,
+      verified: false,
+      error: 'read-back verification did not match written content',
+    })
+  }
+  return toolJson({
+    ok: true,
+    tool: 'write_file',
+    path: filePath,
+    absolute_path: resolved,
+    bytes,
+    verified: true,
+    content_preview: verifiedContent.slice(0, 120),
+  })
 }
 
 // delete_file：删除沙盒内的文件或目录
@@ -482,10 +742,24 @@ async function execDeleteFile(args, context = {}) {
   const stat = fs.statSync(resolved)
   if (stat.isDirectory()) {
     fs.rmSync(resolved, { recursive: true, force: true })
-    return `目录已删除：${filePath}`
+    const verifiedAbsent = !fs.existsSync(resolved)
+    return toolJson({
+      ok: verifiedAbsent,
+      tool: 'delete_file',
+      path: filePath,
+      kind: 'directory',
+      verified_absent: verifiedAbsent,
+    })
   } else {
     fs.unlinkSync(resolved)
-    return `文件已删除：${filePath}`
+    const verifiedAbsent = !fs.existsSync(resolved)
+    return toolJson({
+      ok: verifiedAbsent,
+      tool: 'delete_file',
+      path: filePath,
+      kind: 'file',
+      verified_absent: verifiedAbsent,
+    })
   }
 }
 
@@ -498,7 +772,14 @@ async function execMakeDir(args, context = {}) {
   const resolved = path.resolve(SANDBOX_ROOT, dirPath)
   assertInSandbox(resolved)
   fs.mkdirSync(resolved, { recursive: true })
-  return `目录已创建：${dirPath}`
+  const verified = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()
+  return toolJson({
+    ok: verified,
+    tool: 'make_dir',
+    path: dirPath,
+    absolute_path: resolved,
+    verified,
+  })
 }
 
 // exec_command：在沙盒目录内执行 shell 命令
@@ -1236,6 +1517,21 @@ async function execGenerateMusic({ prompt, lyrics, instrumental }) {
   return `音乐已生成：${relPath}（时长约 ${result.duration ?? '?'} 秒）`
 }
 
+// generate_image：生成图片
+async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1 }) {
+  if (!prompt) return '错误：未提供图片描述'
+  if (isDailyLimitReached('image')) return '错误：今日图片生成配额已用完（50 次/天）'
+  const validRatios = new Set(['1:1', '16:9', '4:3', '3:4', '9:16'])
+  const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : '1:1'
+  const count = Math.min(Math.max(Math.floor(n) || 1, 1), 4)
+
+  const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count })
+
+  emitEvent('image_created', { urls: result.urls, prompt: prompt.slice(0, 60) })
+  console.log(`[image] 已生成 ${result.urls.length} 张图片`)
+  return `图片已生成（${result.urls.length} 张）：\n${result.urls.join('\n')}`
+}
+
 // manage_prefetch_task：管理预热任务
 function execManagePrefetchTask({ action, source, label, url, ttl_minutes, tags }) {
   if (action === 'list') {
@@ -1271,4 +1567,374 @@ function execSetTickInterval({ seconds, ttl, reason }) {
   if (res.clampedFrom?.seconds !== undefined) parts.push(`（seconds ${res.clampedFrom.seconds} 越界，已 clamp 到 ${res.seconds}）`)
   if (res.clampedFrom?.ttl !== undefined) parts.push(`（ttl ${res.clampedFrom.ttl} 越界，已 clamp 到 ${res.ttl}）`)
   return parts.join('')
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACUI · UI 控制工具
+// ─────────────────────────────────────────────────────────────────────────────
+const ACUI_COMPONENTS_PATH = path.resolve(__dirname, 'ui-components.json')
+const ACUI_REGISTRY_PATH   = path.resolve(__dirname, '..', 'ui', 'brain-ui', 'acui', 'registry.js')
+const ACUI_COMPONENTS_DIR  = path.resolve(__dirname, '..', 'ui', 'brain-ui', 'acui', 'components')
+
+let _acuiComponentsCache = null
+function loadACUIComponents() {
+  if (!_acuiComponentsCache) {
+    _acuiComponentsCache = JSON.parse(fs.readFileSync(ACUI_COMPONENTS_PATH, 'utf-8'))
+  }
+  return _acuiComponentsCache
+}
+function invalidateACUIComponentsCache() { _acuiComponentsCache = null }
+
+// 校验并就地容错：number-like 字符串自动转 number，避免 LLM 把 "18" 当 18 传过来时硬挂。
+function validateProps(propsSchema, props) {
+  if (!props || typeof props !== 'object') return null
+  for (const [name, spec] of Object.entries(propsSchema)) {
+    let v = props[name]
+    if (spec.required && (v === undefined || v === null)) {
+      return `字段 ${name} 必填`
+    }
+    if (v === undefined || v === null) continue
+    const t = spec.type
+    if (t === 'number' && typeof v !== 'number') {
+      // 容错：LLM 经常把数字当字符串传（"18"、"23.5"）。是合法 number-like 字符串就转一下。
+      if (typeof v === 'string' && v.trim() !== '' && !isNaN(Number(v))) {
+        props[name] = Number(v)
+        continue
+      }
+      return `字段 ${name} 必须为 number`
+    }
+    if (t === 'string' && typeof v !== 'string') return `字段 ${name} 必须为 string`
+    if (t === 'array'  && !Array.isArray(v))    return `字段 ${name} 必须为 array`
+    if (t === 'object' && (typeof v !== 'object' || Array.isArray(v))) return `字段 ${name} 必须为 object`
+    if (t === 'boolean' && typeof v !== 'boolean') return `字段 ${name} 必须为 boolean`
+  }
+  return null
+}
+
+// 合并 LLM 给的 hint 和组件 propsSchema 默认值，按 placement 推断动画/拖动/遮罩默认。
+function mergeHint(hint, def) {
+  const h = hint && typeof hint === 'object' ? hint : {}
+  const placement = ['notification', 'center', 'floating', 'stage'].includes(h.placement)
+    ? h.placement
+    : (def?.placement || 'notification')
+
+  const enterDefaults = { notification: 'slide-from-right', center: 'scale-up', floating: 'fade-up', stage: 'stage-up' }
+  const exitDefaults  = { notification: 'slide-to-right',   center: 'scale-down', floating: 'fade-down', stage: 'stage-down' }
+
+  const draggable = typeof h.draggable === 'boolean' ? h.draggable
+    : (typeof def?.draggable === 'boolean' ? def.draggable : (placement === 'floating'))
+  const modal = typeof h.modal === 'boolean' ? h.modal
+    : (typeof def?.modal === 'boolean' ? def.modal : (placement === 'center' || placement === 'stage'))
+
+  const size = h.size ?? def?.size ?? 'md'
+
+  // def.enter/exit 只在 placement=notification 时生效；切换到 center/floating/stage
+  // 组件原来的 slide-from-right 就不合适了，按 placement 默认动画走。
+  const usesDefAnim = placement === 'notification'
+  return {
+    placement,
+    size,
+    draggable,
+    modal,
+    enter: h.enter || (usesDefAnim ? def?.enter : null) || enterDefaults[placement],
+    exit:  h.exit  || (usesDefAnim ? def?.exit  : null) || exitDefaults[placement],
+  }
+}
+
+function execUIShow({ component, props, hint }) {
+  console.log(`[ui_show] component=${component} props=${JSON.stringify(props)}`)
+  if (!component) return '错误：未提供 component'
+  const components = loadACUIComponents()
+  const def = components[component]
+  if (!def) return `错误：组件 "${component}" 未注册（可用：${Object.keys(components).join(', ') || '无'}）`
+
+  const propsErr = validateProps(def.propsSchema, props || {})
+  if (propsErr) return `错误：props 校验失败 — ${propsErr}（实际 props=${JSON.stringify(props)}）`
+
+  if (!hasACUIClient()) return '错误：当前没有 UI 客户端连接，请改用文字回答'
+
+  const id = `${component.toLowerCase()}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+  emitUICommand({
+    op: 'mount',
+    id,
+    component,
+    props,
+    hint: mergeHint(hint, def),
+  })
+  addActiveUICard(id, { component })
+  emitEvent('action', { tool: 'ui_show', summary: `推送 ${component}`, detail: id })
+  return JSON.stringify({ ok: true, id })
+}
+
+function execUIHide({ id }) {
+  if (!id) return '错误：未提供 id'
+  if (!hasACUIClient()) return '错误：当前没有 UI 客户端连接'
+  emitUICommand({ op: 'unmount', id })
+  removeActiveUICard(id)
+  emitEvent('action', { tool: 'ui_hide', summary: `关闭卡片`, detail: id })
+  return JSON.stringify({ ok: true, id })
+}
+
+function execUIUpdate({ id, props }) {
+  if (!id) return '错误：未提供 id'
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return '错误：props 必须为对象'
+  if (!hasACUIClient()) return '错误：当前没有 UI 客户端连接'
+  emitUICommand({ op: 'update', id, props })
+  emitEvent('action', { tool: 'ui_update', summary: `更新卡片`, detail: id })
+  return JSON.stringify({ ok: true, id })
+}
+
+function execUIShowInline({ mode, template, styles, code, props, hint }) {
+  if (mode !== 'inline-template' && mode !== 'inline-script') return `错误：mode 必须为 inline-template / inline-script，当前 "${mode}"`
+  // 容错：LLM 漏传 props 或写成 null 时兜底成 {}。模板里没用到字段就不需要 props。
+  if (props == null) props = {}
+  if (typeof props !== 'object' || Array.isArray(props)) return '错误：props 必须为对象（可省略，但传了就必须是对象）'
+
+  if (mode === 'inline-template') {
+    if (!template || typeof template !== 'string') return '错误：mode=inline-template 时 template 为必填字符串'
+    if (template.length > 8000) return '错误：template 过长（>8000 字符），请精简或转用 ui_register 注册组件'
+  } else {
+    if (!code || typeof code !== 'string') return '错误：mode=inline-script 时 code 为必填字符串'
+    if (code.length > 32000) return '错误：code 过长（>32000 字符），请精简或转用 ui_register'
+    if (!/export\s+default\s+class\s+\w*\s*extends\s+HTMLElement/.test(code)) {
+      return '错误：code 必须以 `export default class extends HTMLElement` 形式开头'
+    }
+    // 后端语法预检：包一层 try/catch，仅做 parse 不真正执行
+    try {
+      new Function(code.replace(/^\s*export\s+default\s+/m, 'return '))
+    } catch (e) {
+      return `错误：代码语法预检失败 — ${e.message}`
+    }
+  }
+
+  if (!hasACUIClient()) return '错误：当前没有 UI 客户端连接，请改用文字回答'
+
+  const id = `scratch-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+  const payload = {
+    op: 'mount',
+    mode,
+    id,
+    props,
+    hint: mergeHint(hint, null),
+  }
+  if (mode === 'inline-template') {
+    payload.template = template
+    if (styles) payload.styles = styles
+  } else {
+    payload.code = code
+  }
+
+  // inline-script 草稿自动落盘，供 manage_app(save) 和服务重启后恢复
+  if (mode === 'inline-script') {
+    draftCodeMap.set(id, code)
+    try {
+      const draftDir = path.resolve(SANDBOX_ROOT, 'apps', '.drafts')
+      fs.mkdirSync(draftDir, { recursive: true })
+      fs.writeFileSync(path.resolve(draftDir, `${id}.js`), code, 'utf-8')
+    } catch (_) {}
+  }
+
+  addActiveUICard(id, { component: mode })
+  emitUICommand(payload)
+  emitEvent('action', {
+    tool: 'ui_show_inline',
+    summary: `临场组件 (${mode})`,
+    detail: id,
+    code: mode === 'inline-script' ? code.slice(0, 800) : undefined,
+    template: mode === 'inline-template' ? template.slice(0, 800) : undefined,
+  })
+  return JSON.stringify({ ok: true, id, mode })
+}
+
+function execUIPatch({ id, op, data }) {
+  if (!id) return '错误：未提供 id'
+  if (!op) return '错误：未提供 op'
+  if (!hasACUIClient()) return '错误：当前没有 UI 客户端连接'
+  emitUICommand({ op: 'patch', id, patchOp: op, data: data || {} })
+  emitEvent('action', { tool: 'ui_patch', summary: `应用补丁 ${op}`, detail: id })
+  return JSON.stringify({ ok: true, id, op })
+}
+
+function execManageApp({ action, name, label, draft_id, state, hint }) {
+  const appsRoot = path.resolve(SANDBOX_ROOT, 'apps')
+
+  if (action === 'save') {
+    if (!name) return '错误：save 操作必须提供 name'
+    if (!draft_id) return '错误：save 操作必须提供 draft_id'
+    // 从内存或草稿文件取代码
+    let code = draftCodeMap.get(draft_id)
+    if (!code) {
+      const draftPath = path.resolve(appsRoot, '.drafts', `${draft_id}.js`)
+      if (!fs.existsSync(draftPath)) return `错误：找不到草稿 ${draft_id}，请确认 draft_id 是 ui_show_inline 返回的 id`
+      code = fs.readFileSync(draftPath, 'utf-8')
+    }
+    const appDir = path.resolve(appsRoot, name)
+    fs.mkdirSync(appDir, { recursive: true })
+    // 版本备份（若已有同名应用）
+    const componentPath = path.resolve(appDir, 'component.js')
+    const metaPath = path.resolve(appDir, 'meta.json')
+    if (fs.existsSync(componentPath) && fs.existsSync(metaPath)) {
+      try {
+        const oldMeta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+        const v = oldMeta.version || 1
+        fs.copyFileSync(componentPath, path.resolve(appDir, `component.v${v}.js`))
+      } catch (_) {}
+    }
+    const meta = {
+      name, label: label || name,
+      created_at: new Date().toISOString(),
+      last_used: new Date().toISOString(),
+      version: 2,
+      draft_id,
+      hint: hint || { placement: 'floating', size: 'lg' },
+    }
+    fs.writeFileSync(componentPath, code, 'utf-8')
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
+    if (state) fs.writeFileSync(path.resolve(appDir, 'state.json'), JSON.stringify(state, null, 2), 'utf-8')
+    appIdToName.set(draft_id, name)
+    emitEvent('action', { tool: 'manage_app', summary: `保存应用 ${name}`, detail: draft_id })
+    return JSON.stringify({ ok: true, name, path: `sandbox/apps/${name}/` })
+  }
+
+  if (action === 'open') {
+    if (!name) return '错误：open 操作必须提供 name'
+    const appDir = path.resolve(appsRoot, name)
+    if (!fs.existsSync(appDir)) return `错误：应用 "${name}" 不存在，请先 save`
+    const code = fs.readFileSync(path.resolve(appDir, 'component.js'), 'utf-8')
+    const meta = JSON.parse(fs.readFileSync(path.resolve(appDir, 'meta.json'), 'utf-8'))
+    let savedState = {}
+    const statePath = path.resolve(appDir, 'state.json')
+    if (!state && fs.existsSync(statePath)) {
+      savedState = JSON.parse(fs.readFileSync(statePath, 'utf-8'))
+    }
+    const props = state || savedState
+    const mountHint = hint || meta.hint || { placement: 'floating', size: 'lg' }
+    const result = execUIShowInline({ mode: 'inline-script', code, props, hint: mountHint })
+    try {
+      const parsed = JSON.parse(result)
+      if (parsed.ok) {
+        appIdToName.set(parsed.id, name)
+        meta.last_used = new Date().toISOString()
+        fs.writeFileSync(path.resolve(appDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf-8')
+      }
+    } catch (_) {}
+    emitEvent('action', { tool: 'manage_app', summary: `打开应用 ${name}`, detail: name })
+    return result
+  }
+
+  if (action === 'list') {
+    if (!fs.existsSync(appsRoot)) return JSON.stringify({ ok: true, apps: [] })
+    const apps = fs.readdirSync(appsRoot, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.drafts')
+      .map(d => {
+        try { return JSON.parse(fs.readFileSync(path.resolve(appsRoot, d.name, 'meta.json'), 'utf-8')) }
+        catch { return { name: d.name } }
+      })
+    return JSON.stringify({ ok: true, apps })
+  }
+
+  if (action === 'delete') {
+    if (!name) return '错误：delete 操作必须提供 name'
+    const appDir = path.resolve(appsRoot, name)
+    if (!fs.existsSync(appDir)) return `错误：应用 "${name}" 不存在`
+    fs.rmSync(appDir, { recursive: true })
+    emitEvent('action', { tool: 'manage_app', summary: `删除应用 ${name}`, detail: name })
+    return JSON.stringify({ ok: true, name, deleted: true })
+  }
+
+  return `错误：未知 action "${action}"，可用：save / open / list / delete`
+}
+
+function isPascalCase(name) { return /^[A-Z][A-Za-z0-9]*$/.test(name) }
+function pascalToKebab(name) { return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase() }
+
+const RESERVED_COMPONENT_NAMES = new Set(['Inline', 'System', 'Base', 'Test'])
+
+function execUIRegister({ component_name, code, props_schema, use_case, example_call }) {
+  if (!component_name || !isPascalCase(component_name)) return '错误：component_name 必须为 PascalCase（如 TodoCard）'
+  if (RESERVED_COMPONENT_NAMES.has(component_name)) return `错误：component_name "${component_name}" 是保留名`
+  if (!code || typeof code !== 'string') return '错误：code 必填字符串'
+  if (!props_schema || typeof props_schema !== 'object' || Array.isArray(props_schema)) return '错误：props_schema 必须为对象'
+  if (!use_case || typeof use_case !== 'string') return '错误：use_case 必填'
+  if (!example_call || typeof example_call !== 'string') return '错误：example_call 必填'
+
+  // code 必须含 customElements.define & static tagName
+  if (!/customElements\s*\.\s*define/.test(code)) return '错误：code 必须以 customElements.define(...) 注册收尾'
+  if (!/static\s+tagName\s*=\s*['"`]/.test(code)) return '错误：code 必须含 static tagName = "acui-..."'
+
+  // 占用检查
+  const components = loadACUIComponents()
+  if (components[component_name]) return `错误：组件名 "${component_name}" 已存在`
+
+  // 语法预检：剥离顶层 import / export 行（new Function 不接受 module 语法）
+  try {
+    const stripped = code
+      .replace(/^\s*import\s[^\n]*\n/gm, '')
+      .replace(/^\s*export\s+default\s+/gm, '')
+      .replace(/^\s*export\s*\{[^}]*\}[^\n]*\n/gm, '')
+      .replace(/^\s*export\s+/gm, '')
+    new Function(stripped)
+  } catch (e) {
+    return `错误：代码语法预检失败 — ${e.message}`
+  }
+
+  const kebab = pascalToKebab(component_name)
+  const filePath = path.join(ACUI_COMPONENTS_DIR, `${kebab}.js`)
+
+  // 文件名必须严格 kebab-case，且只能写入 components 目录内
+  const resolved = path.resolve(filePath)
+  if (!isPathInside(ACUI_COMPONENTS_DIR, resolved)) return '错误：目标路径越界'
+  if (fs.existsSync(resolved)) return `错误：目标文件已存在：${kebab}.js`
+
+  // 写组件文件
+  fs.writeFileSync(resolved, code, 'utf-8')
+
+  // 改 registry.js：在 import 区追加，COMPONENTS 对象内追加键
+  let registry = fs.readFileSync(ACUI_REGISTRY_PATH, 'utf-8')
+  const importLine = `import { ${component_name} } from './components/${kebab}.js'`
+  if (!registry.includes(importLine)) {
+    // 在最后一个 import 后追加
+    registry = registry.replace(/((?:^import .*\n)+)/m, (m) => m + importLine + '\n')
+  }
+  // 在 COMPONENTS 对象里追加键
+  if (!new RegExp(`\\b${component_name}\\s*[,}]`).test(registry)) {
+    registry = registry.replace(/export const COMPONENTS = \{([\s\S]*?)\}/, (m, body) => {
+      const trimmed = body.replace(/\s+$/, '')
+      const sep = trimmed.endsWith(',') || trimmed === '' ? '' : ','
+      return `export const COMPONENTS = {${trimmed}${sep}\n  ${component_name},\n}`
+    })
+  }
+  fs.writeFileSync(ACUI_REGISTRY_PATH, registry, 'utf-8')
+
+  // 改 ui-components.json
+  components[component_name] = {
+    propsSchema: props_schema,
+    enter: 'slide-from-right',
+    exit:  'slide-to-right',
+  }
+  fs.writeFileSync(ACUI_COMPONENTS_PATH, JSON.stringify(components, null, 2), 'utf-8')
+  invalidateACUIComponentsCache()
+
+  // seed skill.ui 记忆
+  const skillContent = `[技能·UI] ${component_name}\n适用场景：${use_case}\n调用示例：${example_call}`
+  try {
+    insertMemory({
+      mem_id: `skill-ui-${kebab}`,
+      type: 'skill',
+      content: skillContent,
+      detail: skillContent,
+      title: `UI 组件：${component_name}`,
+      tags: ['skill.ui', `component:${component_name}`],
+      entities: [],
+      timestamp: new Date().toISOString(),
+    })
+  } catch (e) {
+    console.warn(`[ui_register] 写技能记忆失败：${e.message}（组件已注册成功）`)
+  }
+
+  // 通知前端热重载 registry
+  emitACUIEvent('acui:reload', { component_name })
+
+  emitEvent('action', { tool: 'ui_register', summary: `转正组件 ${component_name}`, detail: kebab })
+  return JSON.stringify({ ok: true, component_name, file: `${kebab}.js` })
 }

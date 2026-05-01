@@ -11,6 +11,7 @@ const createPrimaryPanel = () => `
       <div class="eyebrow">Cognitive Surface</div>
       <div class="brand-title" id="agent-brand-name">Longma AI Agent</div>
     </div>
+    <button class="settings-btn" id="settings-btn" title="设置" type="button">⚙</button>
   </header>
 
   <div class="stream-meta">
@@ -137,6 +138,71 @@ const createTooltip = () => `
 <div id="tip"></div>
 `;
 
+const createSettingsModal = () => `
+<div class="settings-overlay" id="settings-overlay" hidden>
+  <div class="settings-modal" role="dialog" aria-modal="true" aria-label="设置">
+    <div class="settings-header">
+      <span class="settings-title">设置</span>
+      <button class="settings-close" id="settings-close" type="button" aria-label="关闭">×</button>
+    </div>
+
+    <section class="settings-section">
+      <div class="settings-section-label">当前配置</div>
+      <div class="settings-config-row">
+        <span class="settings-config-type">LLM</span>
+        <span class="settings-config-info" id="settings-cfg-llm">—</span>
+        <span class="settings-config-dot" id="settings-cfg-llm-dot"></span>
+      </div>
+      <div class="settings-config-row">
+        <span class="settings-config-type">媒体</span>
+        <span class="settings-config-info" id="settings-cfg-media">—</span>
+        <span class="settings-config-dot" id="settings-cfg-media-dot"></span>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-label" id="settings-llm-section-label">LLM 配置</div>
+      <div class="settings-row">
+        <label class="settings-label" for="settings-provider-select">提供商</label>
+        <select class="settings-select" id="settings-provider-select">
+          <option value="deepseek">DeepSeek</option>
+          <option value="minimax">MiniMax</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="settings-model-select">切换模型</label>
+        <select class="settings-select" id="settings-model-select"></select>
+      </div>
+      <div class="settings-row">
+        <label class="settings-label" for="settings-llm-key">API Key</label>
+        <input class="settings-input" id="settings-llm-key" type="password" placeholder="留空则仅切换模型…" autocomplete="new-password">
+      </div>
+      <div class="settings-row-action">
+        <button class="settings-save-btn" id="settings-save-llm" type="button">保存</button>
+        <span class="settings-feedback" id="settings-llm-feedback"></span>
+      </div>
+    </section>
+
+    <section class="settings-section">
+      <div class="settings-section-label">MiniMax 媒体能力</div>
+      <div class="settings-row">
+        <label class="settings-label" for="settings-minimax-key">API Key</label>
+        <input class="settings-input" id="settings-minimax-key" type="password" placeholder="填入 MiniMax API Key…" autocomplete="new-password">
+      </div>
+      <div class="settings-row-action">
+        <button class="settings-save-btn" id="settings-save-minimax" type="button">保存</button>
+        <span class="settings-feedback" id="settings-minimax-feedback"></span>
+      </div>
+    </section>
+  </div>
+</div>
+`;
+
+const createPanelTabs = () => `
+<button id="panel-l1-tab" class="panel-tab panel-tab-left" aria-label="切换左面板" title="切换左面板 [ "></button>
+<button id="panel-l2-tab" class="panel-tab panel-tab-right" aria-label="切换右面板" title="切换右面板 ] "></button>
+`;
+
 export function createBrainUiMarkup() {
   return [
     createGraphStage(),
@@ -145,6 +211,8 @@ export function createBrainUiMarkup() {
     createConsole(),
     createThemeSwitcher(),
     createTooltip(),
+    createSettingsModal(),
+    createPanelTabs(),
   ].join("\n\n");
 }
 

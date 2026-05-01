@@ -1,0 +1,35 @@
+{
+  "WeatherCard": {
+    "propsSchema": {
+      "city":      { "type": "string",  "required": false },
+      "temp":      { "type": "number",  "required": false },
+      "condition": { "type": "string",  "required": false },
+      "desc":      { "type": "string",  "required": false },
+      "feel":      { "type": "number",  "required": false },
+      "high":      { "type": "number",  "required": false },
+      "low":       { "type": "number",  "required": false },
+      "wind":      { "type": "string",  "required": false },
+      "forecast":  { "type": "array",   "required": false }
+    },
+    "enter": "slide-from-right",
+    "exit":  "slide-to-right"
+  },
+  "ImageViewer": {
+    "propsSchema": {
+      "url":   { "type": "string", "required": true },
+      "title": { "type": "string", "required": false }
+    },
+    "placement": "stage",
+    "size": "xl"
+  },
+  "VideoPlayer": {
+    "propsSchema": {
+      "url":      { "type": "string",  "required": true },
+      "title":    { "type": "string",  "required": false },
+      "autoplay": { "type": "boolean", "required": false },
+      "poster":   { "type": "string",  "required": false }
+    },
+    "placement": "stage",
+    "size": "xl"
+  }
+}

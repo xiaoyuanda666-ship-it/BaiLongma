@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ACUI — 状态线框</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1a1a1a; font-family: 'Caveat', cursive; }
+
+  @keyframes wavePulse {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.25); }
+  }
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.08); }
+  }
+  @keyframes scanline {
+    0% { transform: translateY(-100%); }
+    100% { transform: translateY(100vh); }
+  }
+  @keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .anno {
+    font-family: 'Caveat', cursive;
+    font-size: 10px;
+    color: rgba(255,255,255,0.3);
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+/* ── Shared primitives ── */
+function WaveBars({ count = 16, height = 40, color = '#3a8fdf', minH = 4 }) {
+  const bars = Array.from({ length: count }, (_, i) => {
+    const h = minH + Math.abs(Math.sin(i * 0.75)) * (height - minH * 2);
+    return (
+      <div key={i} style={{
+        width: 3, height: h, background: color, borderRadius: 2, flexShrink: 0,
+        animation: `wavePulse ${0.7 + (i % 5) * 0.12}s ease-in-out infinite`,
+        animationDelay: `${i * 0.06}s`
+      }} />
+    );
+  });
+  return <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>{bars}</div>;
+}
+
+function Globe({ size = 200, zoom = false, zoomTarget = null }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: zoom
+        ? 'radial-gradient(circle at 42% 38%, #1a3a5c, #0a1a2e)'
+        : 'radial-gradient(circle at 38% 35%, #1a3560, #060d1f)',
+      border: `${zoom ? 2 : 1.5}px solid rgba(74,122,200,${zoom ? 0.8 : 0.35})`,
+      position: 'relative', overflow: 'hidden',
+      boxShadow: zoom
+        ? '0 0 60px rgba(74,150,255,0.4), inset 0 0 40px rgba(0,0,0,0.5)'
+        : '0 0 30px rgba(40,80,180,0.25)',
+      transition: 'all 0.8s ease',
+    }}>
+      {/* lat/lon grid */}
+      <div style={{
+        position: 'absolute', inset: 0, borderRadius: '50%', opacity: zoom ? 0.5 : 0.2,
+        background: `
+          repeating-linear-gradient(0deg, transparent, transparent ${zoom?18:22}px, rgba(100,180,255,0.4) ${zoom?18:22}px, rgba(100,180,255,0.4) ${zoom?19:23}px),
+          repeating-linear-gradient(90deg, transparent, transparent ${zoom?18:22}px, rgba(100,180,255,0.4) ${zoom?18:22}px, rgba(100,180,255,0.4) ${zoom?19:23}px)
+        `,
+        transition: 'all 0.8s ease'
+      }} />
+      {/* continents */}
+      {!zoom && <>
+        <div style={{ position:'absolute', top:'18%', left:'12%', width:'32%', height:'28%', background:'rgba(60,130,70,0.55)', borderRadius:'45% 55% 50% 40%', filter:'blur(1px)' }} />
+        <div style={{ position:'absolute', top:'30%', left:'52%', width:'26%', height:'32%', background:'rgba(60,130,70,0.55)', borderRadius:'50% 40% 55% 45%', filter:'blur(1px)' }} />
+        <div style={{ position:'absolute', top:'55%', left:'22%', width:'18%', height:'20%', background:'rgba(60,130,70,0.5)', borderRadius:'50%', filter:'blur(1px)' }} />
+      </>}
+      {/* zoom: street-level details */}
+      {zoom && <>
+        <div style={{ position:'absolute', top:'30%', left:'20%', width:'60%', height:'40%', background:'rgba(30,80,140,0.4)', borderRadius:2 }} />
+        {[[40,15,45,4],[55,20,30,3],[38,50,50,3],[20,35,40,3],[65,35,25,2]].map(([t,l,w,h],i)=>(
+          <div key={i} style={{ position:'absolute', top:`${t}%`, left:`${l}%`, width:`${w}%`, height:`${h}px`, background:'rgba(150,220,255,0.5)', borderRadius:1 }} />
+        ))}
+        {/* location pin */}
+        {zoomTarget && (
+          <div style={{ position:'absolute', top:'38%', left:'45%', display:'flex', flexDirection:'column', alignItems:'center' }}>
+            <div style={{ width:8, height:8, borderRadius:'50%', background:'#ff4444', boxShadow:'0 0 10px #ff4444' }} />
+            <div style={{ width:1, height:12, background:'rgba(255,80,80,0.6)' }} />
+            <div style={{ fontSize:8, color:'#ff8888', fontFamily:'Caveat', whiteSpace:'nowrap', marginTop:2 }}>{zoomTarget}</div>
+          </div>
+        )}
+      </>}
+      {/* atmosphere glow */}
+      <div style={{ position:'absolute', inset:0, borderRadius:'50%', background:'radial-gradient(circle at 30% 25%, rgba(100,160,255,0.12), transparent 60%)', pointerEvents:'none' }} />
+    </div>
+  );
+}
+
+function MicButton({ active = false, size = 52 }) {
+  return (
+    <div style={{ position:'relative', width:size, height:size, display:'flex', alignItems:'center', justifyContent:'center' }}>
+      {active && [1,2,3].map(i=>(
+        <div key={i} style={{
+          position:'absolute', borderRadius:'50%',
+          border:`1.5px solid rgba(74,140,255,${0.5/i})`,
+          width: size + i*22, height: size + i*22,
+          animation:`pulse ${1.2 + i*0.3}s ease-in-out infinite`,
+          animationDelay:`${i*0.2}s`
+        }} />
+      ))}
+      <div style={{
+        width:size, height:size, borderRadius:'50%',
+        background: active ? 'linear-gradient(135deg,#1a4a8a,#0d2a5a)' : '#1a1a2e',
+        border:`2px solid rgba(74,140,255,${active?0.9:0.4})`,
+        display:'flex', alignItems:'center', justifyContent:'center',
+        boxShadow: active ? '0 0 20px rgba(74,140,255,0.5)' : 'none',
+        transition:'all 0.3s ease'
+      }}>
+        <svg width={size*0.42} height={size*0.42} viewBox="0 0 24 24" fill="none">
+          <rect x="9" y="2" width="6" height="12" rx="3" fill={active?"#7ab8ff":"#4a7ab5"}/>
+          <path d="M5 10a7 7 0 0 0 14 0" stroke={active?"#7ab8ff":"#4a7ab5"} strokeWidth="2" fill="none"/>
+          <line x1="12" y1="20" x2="12" y2="23" stroke={active?"#7ab8ff":"#4a7ab5"} strokeWidth="2"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function StatusBar() {
+  return (
+    <div style={{
+      position:'absolute', top:0, left:0, right:0, height:40,
+      borderBottom:'1px solid rgba(74,122,200,0.2)',
+      background:'rgba(5,8,20,0.8)',
+      backdropFilter:'blur(8px)',
+      display:'flex', alignItems:'center', justifyContent:'space-between',
+      padding:'0 18px', zIndex:10
+    }}>
+      <div style={{ display:'flex', alignItems:'baseline', gap:6 }}>
+        <span style={{ color:'#e8f0ff', fontSize:22, fontWeight:700, letterSpacing:2 }}>14:32</span>
+        <span style={{ color:'rgba(255,255,255,0.3)', fontSize:11 }}>周日 · 4月26日</span>
+      </div>
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        {[
+          { label:'☁ 晴 22°C', color:'rgba(120,200,120,0.8)', border:'rgba(100,200,100,0.3)' },
+          { label:'AI 在线', color:'rgba(120,180,255,0.8)', border:'rgba(100,160,255,0.3)' },
+        ].map((s,i)=>(
+          <div key={i} style={{ border:`1px solid ${s.border}`, borderRadius:3, padding:'1px 8px', color:s.color, fontSize:10 }}>{s.label}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InputBar({ placeholder = '输入消息，或按住说话...', dim = false }) {
+  return (
+    <div style={{
+      position:'absolute', bottom:14, left:'50%', transform:'translateX(-50%)',
+      width:480, display:'flex', gap:8, alignItems:'center', zIndex:20,
+      opacity: dim ? 0.4 : 1, transition:'opacity 0.3s'
+    }}>
+      <div style={{
+        flex:1, background:'rgba(255,255,255,0.05)',
+        border:'1.5px solid rgba(255,255,255,0.18)',
+        borderRadius:24, padding:'8px 18px',
+        color:'rgba(255,255,255,0.35)', fontSize:13,
+        boxShadow:'0 0 20px rgba(74,122,255,0.08)'
+      }}>{placeholder}</div>
+      <div style={{
+        width:38, height:38, borderRadius:'50%',
+        background:'rgba(40,80,180,0.8)',
+        border:'1.5px solid rgba(74,122,255,0.5)',
+        display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0
+      }}>
+        <svg width="14" height="14" viewBox="0 0 24 24"><path d="M22 2L11 13" stroke="white" strokeWidth="2.5"/><path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="white" strokeWidth="2.5" fill="none"/></svg>
+      </div>
+    </div>
+  );
+}
+
+function DynCard({ icon, title, w = 1, children, color = 'rgba(74,122,200,0.15)', borderColor = 'rgba(74,122,200,0.35)' }) {
+  return (
+    <div style={{
+      gridColumn: `span ${w}`,
+      background: color,
+      border: `1.5px solid ${borderColor}`,
+      borderRadius: 6, padding: '10px 12px',
+      animation: 'fadeSlideUp 0.4s ease both',
+      backdropFilter: 'blur(4px)',
+    }}>
+      <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:7 }}>
+        <span style={{ fontSize:14 }}>{icon}</span>
+        <span style={{ color:'rgba(255,255,255,0.6)', fontSize:11, fontWeight:600 }}>{title}</span>
+        <span style={{ marginLeft:'auto', fontSize:8, color:'rgba(74,150,255,0.6)', border:'1px solid rgba(74,150,255,0.3)', borderRadius:2, padding:'0 4px' }}>AI</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   STATE 1 — Default (idle)
+═══════════════════════════════════════ */
+function StateDefault() {
+  return (
+    <div style={{ width:900, height:540, background:'#060912', position:'relative', overflow:'hidden', border:'2px solid #222', borderRadius:4 }}>
+      {/* Globe background */}
+      <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%, -52%)', opacity:0.18 }}>
+        <Globe size={500} />
+      </div>
+      {/* vignette */}
+      <div style={{ position:'absolute', inset:0, background:'radial-gradient(ellipse at center, transparent 30%, rgba(6,9,18,0.85) 100%)', pointerEvents:'none' }} />
+
+      <StatusBar />
+
+      {/* Dynamic components grid — center stage */}
+      <div style={{
+        position:'absolute', top:58, left:20, right:240, bottom:70,
+        display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gridTemplateRows:'1fr 1fr',
+        gap:10, padding:10
+      }}>
+        <DynCard icon="📰" title="热点新闻" w={2} color="rgba(180,60,60,0.12)" borderColor="rgba(200,80,80,0.3)">
+          {['AI大模型发布重大更新 · 今日', '全球科技峰会在北京开幕', '中国GDP增速超预期至5.8%'].map((n,i)=>(
+            <div key={i} style={{ display:'flex', gap:6, alignItems:'flex-start', borderBottom:'1px solid rgba(255,255,255,0.05)', padding:'3px 0', color:'rgba(255,255,255,0.55)', fontSize:10 }}>
+              <span style={{ color:'#ff6666', flexShrink:0 }}>0{i+1}</span>{n}
+            </div>
+          ))}
+        </DynCard>
+
+        <DynCard icon="☀️" title="天气" color="rgba(220,160,40,0.1)" borderColor="rgba(220,160,40,0.3)">
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <div style={{ fontSize:28, lineHeight:1 }}>☀</div>
+            <div>
+              <div style={{ color:'#ffe0a0', fontSize:20, fontWeight:700 }}>22°C</div>
+              <div style={{ color:'rgba(255,255,255,0.4)', fontSize:10 }}>北京 · 晴</div>
+            </div>
+          </div>
+        </DynCard>
+
+        <DynCard icon="🗓" title="今日日程" color="rgba(80,180,120,0.1)" borderColor="rgba(80,180,120,0.3)">
+          {['10:00 团队周会', '14:00 产品评审', '18:30 健身'].map((e,i)=>(
+            <div key={i} style={{ color:'rgba(255,255,255,0.5)', fontSize:9, padding:'2px 0' }}>· {e}</div>
+          ))}
+        </DynCard>
+
+        <DynCard icon="📊" title="数据面板">
+          <div style={{ display:'flex', gap:6, alignItems:'flex-end', height:40 }}>
+            {[30,50,35,65,45,70,55].map((h,i)=>(
+              <div key={i} style={{ flex:1, height:`${h}%`, background:'rgba(74,140,255,0.5)', borderRadius:'2px 2px 0 0' }} />
+            ))}
+          </div>
+        </DynCard>
+
+        {/* empty slot */}
+        <div style={{ border:'1.5px dashed rgba(255,255,255,0.08)', borderRadius:6, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <span style={{ color:'rgba(255,255,255,0.12)', fontSize:10 }}>等待 AI 注入...</span>
+        </div>
+      </div>
+
+      {/* Voice — right lower */}
+      <div style={{
+        position:'absolute', right:16, bottom:70, width:210,
+        background:'rgba(5,10,25,0.85)', border:'1.5px solid rgba(74,122,200,0.35)',
+        borderRadius:8, padding:'14px 12px',
+        display:'flex', flexDirection:'column', alignItems:'center', gap:10
+      }}>
+        <div style={{ color:'rgba(255,255,255,0.25)', fontSize:10 }}>语音助手</div>
+        <MicButton active={false} size={48} />
+        <WaveBars count={16} height={32} color='rgba(74,140,255,0.4)' minH={3} />
+        <div style={{ color:'rgba(255,255,255,0.2)', fontSize:10 }}>点击说话</div>
+      </div>
+
+      <InputBar />
+
+      {/* Anno */}
+      <div style={{ position:'absolute', bottom:56, left:'50%', transform:'translateX(-50%)', fontFamily:'Caveat', fontSize:9, color:'rgba(255,255,255,0.2)', whiteSpace:'nowrap' }}>
+        ↑ 底部居中 · 消息输入框
+      </div>
+      <div style={{ position:'absolute', right:14, bottom:268, fontFamily:'Caveat', fontSize:9, color:'rgba(255,255,255,0.2)' }}>
+        右下 · 语音区 →
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   STATE 2 — Map Activated (globe zoom)
+═══════════════════════════════════════ */
+function StateMapActive() {
+  return (
+    <div style={{ width:900, height:540, background:'#04080f', position:'relative', overflow:'hidden', border:'2px solid #222', borderRadius:4 }}>
+      {/* Globe ZOOMED — fills center */}
+      <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%, -50%)', opacity:0.55, zIndex:1 }}>
+        <Globe size={700} zoom zoomTarget="上海·浦东" />
+      </div>
+      {/* scan overlay */}
+      <div style={{ position:'absolute', inset:0, zIndex:2, background:'repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.08) 3px, rgba(0,0,0,0.08) 4px)', pointerEvents:'none' }} />
+      {/* vignette stronger */}
+      <div style={{ position:'absolute', inset:0, zIndex:3, background:'radial-gradient(ellipse at center, transparent 20%, rgba(4,8,15,0.75) 100%)', pointerEvents:'none' }} />
+
+      <div style={{ position:'relative', zIndex:10 }}>
+        <StatusBar />
+      </div>
+
+      {/* Left sidebar: collapsed other components */}
+      <div style={{
+        position:'absolute', left:14, top:52, bottom:70, zIndex:10,
+        width:190, display:'flex', flexDirection:'column', gap:8, padding:8
+      }}>
+        <div style={{ color:'rgba(255,255,255,0.2)', fontSize:9, marginBottom:2 }}>← 其他组件收缩</div>
+        {[{icon:'📰',t:'热点新闻'},{icon:'☀️',t:'天气 22°C'},{icon:'🗓',t:'今日日程'}].map((c,i)=>(
+          <div key={i} style={{
+            background:'rgba(5,10,25,0.75)',
+            border:'1px solid rgba(74,122,200,0.2)',
+            borderRadius:5, padding:'6px 10px',
+            display:'flex', alignItems:'center', gap:8,
+            opacity:0.6
+          }}>
+            <span style={{ fontSize:14 }}>{c.icon}</span>
+            <span style={{ color:'rgba(255,255,255,0.45)', fontSize:11 }}>{c.t}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Center: map HUD overlay */}
+      <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', zIndex:10, display:'flex', flexDirection:'column', alignItems:'center', gap:6, pointerEvents:'none' }}>
+        {/* Crosshair */}
+        <div style={{ position:'relative', width:60, height:60 }}>
+          <div style={{ position:'absolute', top:'50%', left:0, right:0, height:1, background:'rgba(255,80,80,0.6)', transform:'translateY(-50%)' }} />
+          <div style={{ position:'absolute', left:'50%', top:0, bottom:0, width:1, background:'rgba(255,80,80,0.6)', transform:'translateX(-50%)' }} />
+          {[[0,0],[0,90],[180,0],[180,90]].map(([r,rx],i)=>(
+            <div key={i} style={{
+              position:'absolute',
+              [i<2?'top':'bottom']:0,
+              [i%2===0?'left':'right']:0,
+              width:10, height:10,
+              borderTop: i<2?'2px solid rgba(255,100,100,0.8)':undefined,
+              borderBottom: i>=2?'2px solid rgba(255,100,100,0.8)':undefined,
+              borderLeft: i%2===0?'2px solid rgba(255,100,100,0.8)':undefined,
+              borderRight: i%2!==0?'2px solid rgba(255,100,100,0.8)':undefined,
+            }} />
+          ))}
+        </div>
+        <div style={{ background:'rgba(180,40,40,0.8)', border:'1px solid rgba(255,100,100,0.6)', borderRadius:3, padding:'2px 10px', color:'#ffaaaa', fontSize:11, whiteSpace:'nowrap' }}>
+          📍 上海·浦东新区
+        </div>
+      </div>
+
+      {/* Right: map info card */}
+      <div style={{
+        position:'absolute', right:14, top:58, zIndex:10,
+        width:210, background:'rgba(5,10,25,0.9)',
+        border:'1.5px solid rgba(255,100,100,0.4)', borderRadius:6, padding:12
+      }}>
+        <div style={{ color:'#ff8888', fontSize:12, fontWeight:700, marginBottom:8 }}>📍 上海·浦东新区</div>
+        {[['当前时间','14:32 CST'],['天气','晴 28°C'],['距离','1,200 km'],['状态','已定位']].map(([k,v],i)=>(
+          <div key={i} style={{ display:'flex', justifyContent:'space-between', borderBottom:'1px solid rgba(255,255,255,0.06)', padding:'3px 0' }}>
+            <span style={{ color:'rgba(255,255,255,0.35)', fontSize:10 }}>{k}</span>
+            <span style={{ color:'rgba(255,255,255,0.7)', fontSize:10 }}>{v}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Voice — right lower */}
+      <div style={{
+        position:'absolute', right:14, bottom:70, zIndex:10, width:210,
+        background:'rgba(5,10,25,0.85)', border:'1.5px solid rgba(74,122,200,0.5)',
+        borderRadius:8, padding:'12px 12px',
+        display:'flex', flexDirection:'column', alignItems:'center', gap:8
+      }}>
+        <MicButton active={true} size={44} />
+        <WaveBars count={16} height={36} color='rgba(100,180,255,0.8)' minH={4} />
+        <div style={{ color:'rgba(160,200,255,0.7)', fontSize:10, textAlign:'center' }}>"定位上海浦东..."</div>
+      </div>
+
+      <div style={{ position:'relative', zIndex:10 }}>
+        <InputBar placeholder='"定位上海浦东"' />
+      </div>
+
+      {/* zoom annotation */}
+      <div style={{ position:'absolute', top:60, left:'50%', transform:'translateX(-50%)', zIndex:11, fontFamily:'Caveat', fontSize:10, color:'rgba(255,150,100,0.6)' }}>
+        地球 zoom in → 铺满背景
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════
+   STATE 3 — Chat Panel Open
+═══════════════════════════════════════ */
+function StateChatOpen() {
+  const msgs = [
+    { role:'ai', text:'您好！有什么我可以帮您的？' },
+    { role:'user', text:'查一下今天北京天气' },
+    { role:'ai', text:'北京今日晴，气温 18~26°C，空气优，适合出行 🌤' },
+    { role:'user', text:'帮我找一下附近的咖啡店' },
+    { role:'ai', text:'已为您找到 12 家附近咖啡店，正在打开地图...' },
+    { role:'user', text:'今天有什么热点新闻？' },
+    { role:'ai', text:'为您整理了 3 条热点：①AI大模型更新 ②科技峰会开幕 ③GDP超预期' },
+  ];
+
+  return (
+    <div style={{ width:900, height:540, background:'#060912', position:'relative', overflow:'hidden', border:'2px solid #222', borderRadius:4 }}>
+      {/* Globe bg dimmed */}
+      <div style={{ position:'absolute', top:'40%', left:'50%', transform:'translate(-50%,-50%)', opacity:0.07 }}>
+        <Globe size={480} />
+      </div>
+      <div style={{ position:'absolute', inset:0, background:'rgba(4,6,14,0.6)', zIndex:1 }} />
+
+      <div style={{ position:'relative', zIndex:10 }}>
+        <StatusBar />
+      </div>
+
+      {/* Background components — dimmed */}
+      <div style={{
+        position:'absolute', top:52, left:20, right:230, bottom:60, zIndex:2,
+        display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:8, padding:8,
+        opacity:0.25, filter:'blur(1px)'
+      }}>
+        <DynCard icon="📰" title="热点新闻" w={2} color="rgba(180,60,60,0.1)" borderColor="rgba(200,80,80,0.2)">
+          <div style={{ color:'rgba(255,255,255,0.3)', fontSize:10 }}>内容已折叠...</div>
+        </DynCard>
+        <DynCard icon="☀️" title="天气">
+          <div style={{ color:'#ffe0a0', fontSize:18, fontWeight:700 }}>22°C</div>
+        </DynCard>
+      </div>
+
+      {/* Chat panel — slides up from bottom */}
+      <div style={{
+        position:'absolute', left:20, right:230, bottom:60, height:340, zIndex:10,
+        background:'rgba(6,10,24,0.97)',
+        border:'1.5px solid rgba(74,122,200,0.4)',
+        borderRadius:'10px 10px 0 0',
+        display:'flex', flexDirection:'column',
+        boxShadow:'0 -20px 60px rgba(0,0,0,0.8)',
+        animation:'fadeSlideUp 0.35s ease both'
+      }}>
+        {/* Chat header */}
+        <div style={{ padding:'10px 16px', borderBottom:'1px solid rgba(74,122,200,0.2)', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ color:'rgba(120,180,255,0.8)', fontSize:13, fontWeight:600 }}>💬 与 AI 对话</span>
+          <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+            <span style={{ color:'rgba(255,255,255,0.2)', fontSize:9 }}>7 条消息</span>
+            <div style={{ width:16, height:16, border:'1px solid rgba(255,255,255,0.2)', borderRadius:2, display:'flex', alignItems:'center', justifyContent:'center', cursor:'pointer' }}>
+              <svg width="8" height="8" viewBox="0 0 10 10"><line x1="1" y1="1" x2="9" y2="9" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5"/><line x1="9" y1="1" x2="1" y2="9" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5"/></svg>
+            </div>
+          </div>
+        </div>
+        {/* Messages */}
+        <div style={{ flex:1, overflowY:'auto', padding:'12px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+          {msgs.map((m,i)=>(
+            <div key={i} style={{ display:'flex', justifyContent:m.role==='user'?'flex-end':'flex-start' }}>
+              <div style={{
+                maxWidth:'72%', padding:'6px 11px',
+                borderRadius: m.role==='user' ? '10px 2px 10px 10px' : '2px 10px 10px 10px',
+                background: m.role==='user' ? 'rgba(40,80,180,0.6)' : 'rgba(30,40,70,0.8)',
+                border: `1px solid ${m.role==='user'?'rgba(74,122,255,0.4)':'rgba(74,122,200,0.2)'}`,
+                color: m.role==='user' ? 'rgba(200,220,255,0.9)' : 'rgba(255,255,255,0.65)',
+                fontSize:11, lineHeight:1.5
+              }}>{m.text}</div>
+            </div>
+          ))}
+        </div>
+        {/* Input inside chat */}
+        <div style={{ padding:'8px 14px', borderTop:'1px solid rgba(74,122,200,0.15)', display:'flex', gap:8 }}>
+          <div style={{
+            flex:1, background:'rgba(255,255,255,0.05)',
+            border:'1.5px solid rgba(74,122,255,0.5)',
+            borderRadius:20, padding:'7px 16px',
+            color:'rgba(255,255,255,0.5)', fontSize:12,
+            boxShadow:'0 0 12px rgba(74,122,255,0.15)'
+          }}>输入消息...</div>
+          <div style={{ width:34, height:34, borderRadius:'50%', background:'rgba(40,80,180,0.8)', border:'1.5px solid rgba(74,122,255,0.5)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24"><path d="M22 2L11 13" stroke="white" strokeWidth="2.5"/><path d="M22 2L15 22l-4-9-9-4 20-7z" stroke="white" strokeWidth="2.5" fill="none"/></svg>
+          </div>
+        </div>
+      </div>
+
+      {/* Voice — right lower */}
+      <div style={{
+        position:'absolute', right:16, bottom:70, zIndex:10, width:210,
+        background:'rgba(5,10,25,0.85)', border:'1.5px solid rgba(74,122,200,0.3)',
+        borderRadius:8, padding:'12px 10px',
+        display:'flex', flexDirection:'column', alignItems:'center', gap:8
+      }}>
+        <MicButton active={false} size={44} />
+        <WaveBars count={16} height={28} color='rgba(74,140,255,0.3)' minH={2} />
+        <div style={{ color:'rgba(255,255,255,0.15)', fontSize:10 }}>语音助手待机</div>
+      </div>
+
+      {/* Annotation */}
+      <div style={{ position:'absolute', left:'50%', transform:'translateX(-50%)', bottom:402, zIndex:11, fontFamily:'Caveat', fontSize:10, color:'rgba(74,150,255,0.5)', whiteSpace:'nowrap' }}>
+        ↑ 输入框聚焦 → 聊天面板从底部展开
+      </div>
+      <div style={{ position:'absolute', bottom:50, left:'50%', transform:'translateX(-50%)', zIndex:11, fontFamily:'Caveat', fontSize:9, color:'rgba(255,255,255,0.15)', whiteSpace:'nowrap' }}>
+        背景组件自动模糊退后
+      </div>
+    </div>
+  );
+}
+
+/* ─── App ─── */
+function App() {
+  return (
+    <DesignCanvas title="ACUI — 三种核心状态">
+      <DCSection id="s1" title="状态①  默认 · 地球慢旋 + 动态组件">
+        <DCArtboard id="s1a" label="空闲状态 / 组件常驻 / 声波待机" width={900} height={540}>
+          <StateDefault />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="s2" title="状态②  地图激活 · 地球 Zoom In">
+        <DCArtboard id="s2a" label="用户询问地点 → 地球放大 + 定位HUD" width={900} height={540}>
+          <StateMapActive />
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="s3" title="状态③  聊天展开 · 输入框聚焦">
+        <DCArtboard id="s3a" label="输入框聚焦 → 聊天记录从底部滑出" width={900} height={540}>
+          <StateChatOpen />
+        </DCArtboard>
+      </DCSection>
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<div id="root"></div>
+</body>
+</html>

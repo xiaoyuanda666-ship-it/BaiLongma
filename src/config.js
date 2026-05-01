@@ -2,7 +2,10 @@ import fs from 'fs'
 import { paths } from './paths.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
+export const MINIMAX_PROVIDER = 'minimax'
+
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash'
+export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
 
 export const DEEPSEEK_MODELS = [
   {
@@ -27,20 +30,44 @@ export const DEEPSEEK_MODELS = [
   },
 ]
 
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
-const DEEPSEEK_ENV_VAR = 'DEEPSEEK_API_KEY'
-const SUPPORTED_MODEL_IDS = new Set(DEEPSEEK_MODELS.map(item => item.id))
+export const MINIMAX_MODELS = [
+  {
+    id: 'MiniMax-M2.7',
+    label: 'MiniMax-M2.7',
+    deprecated: false,
+  },
+  {
+    id: 'MiniMax-M1',
+    label: 'MiniMax-M1',
+    deprecated: false,
+  },
+]
 
-function normalizeModel(model) {
+const PROVIDER_CONFIG = {
+  [DEEPSEEK_PROVIDER]: {
+    baseURL: 'https://api.deepseek.com',
+    envVar: 'DEEPSEEK_API_KEY',
+    models: DEEPSEEK_MODELS,
+    defaultModel: DEFAULT_DEEPSEEK_MODEL,
+  },
+  [MINIMAX_PROVIDER]: {
+    baseURL: 'https://api.minimax.chat/v1',
+    envVar: 'MINIMAX_API_KEY',
+    models: MINIMAX_MODELS,
+    defaultModel: DEFAULT_MINIMAX_MODEL,
+  },
+}
+
+function normalizeModel(model, provider = DEEPSEEK_PROVIDER) {
+  const pConfig = PROVIDER_CONFIG[provider] || PROVIDER_CONFIG[DEEPSEEK_PROVIDER]
   const value = String(model || '').trim()
-  if (SUPPORTED_MODEL_IDS.has(value)) return value
-  return DEFAULT_DEEPSEEK_MODEL
+  const validIds = new Set(pConfig.models.map(m => m.id))
+  if (validIds.has(value)) return value
+  return pConfig.defaultModel
 }
 
 function isThinkingEnabledForModel(model) {
-  const normalized = normalizeModel(model)
-  if (normalized === 'deepseek-chat') return false
-  return true
+  return normalizeModel(model) !== 'deepseek-chat'
 }
 
 function readStoredConfig() {
@@ -49,7 +76,7 @@ function readStoredConfig() {
     const raw = fs.readFileSync(paths.configFile, 'utf-8')
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') return null
-    if (parsed.provider && parsed.provider !== DEEPSEEK_PROVIDER) return null
+    if (!parsed.provider || !PROVIDER_CONFIG[parsed.provider]) return null
     if (!parsed.apiKey || typeof parsed.apiKey !== 'string') return null
     return parsed
   } catch {
@@ -68,19 +95,31 @@ function shouldAllowEnvFallback() {
 }
 
 function loadFromEnv() {
-  const apiKey = process.env[DEEPSEEK_ENV_VAR]
-  if (!apiKey) return null
-  return {
-    apiKey,
-    model: normalizeModel(process.env.DEEPSEEK_MODEL),
+  const deepseekKey = process.env['DEEPSEEK_API_KEY']
+  if (deepseekKey) {
+    return {
+      provider: DEEPSEEK_PROVIDER,
+      apiKey: deepseekKey,
+      model: normalizeModel(process.env.DEEPSEEK_MODEL, DEEPSEEK_PROVIDER),
+    }
   }
+  const minimaxKey = process.env['MINIMAX_API_KEY']
+  if (minimaxKey) {
+    return {
+      provider: MINIMAX_PROVIDER,
+      apiKey: minimaxKey,
+      model: normalizeModel(process.env.MINIMAX_MODEL, MINIMAX_PROVIDER),
+    }
+  }
+  return null
 }
 
-function applyDeepSeekConfig(apiKey, model = DEFAULT_DEEPSEEK_MODEL) {
-  config.provider = DEEPSEEK_PROVIDER
-  config.model = normalizeModel(model)
+function applyConfig(provider, apiKey, model) {
+  const pConfig = PROVIDER_CONFIG[provider]
+  config.provider = provider
+  config.model = normalizeModel(model, provider)
   config.apiKey = apiKey
-  config.baseURL = DEEPSEEK_BASE_URL
+  config.baseURL = pConfig.baseURL
   config.needsActivation = false
 }
 
@@ -95,63 +134,73 @@ export const config = {
 
 const stored = readStoredConfig()
 if (stored) {
-  applyDeepSeekConfig(stored.apiKey, stored.model)
+  applyConfig(stored.provider, stored.apiKey, stored.model)
 } else if (shouldAllowEnvFallback()) {
   const fromEnv = loadFromEnv()
-  if (fromEnv) applyDeepSeekConfig(fromEnv.apiKey, fromEnv.model)
+  if (fromEnv) applyConfig(fromEnv.provider, fromEnv.apiKey, fromEnv.model)
 }
 
-export async function activate({ apiKey, model }) {
+export async function activate({ provider = DEEPSEEK_PROVIDER, apiKey, model }) {
+  const p = String(provider || DEEPSEEK_PROVIDER).toLowerCase()
+  const pConfig = PROVIDER_CONFIG[p]
+  if (!pConfig) {
+    throw new Error(`不支持的 provider: "${p}"，可选: ${Object.keys(PROVIDER_CONFIG).join(', ')}`)
+  }
+
   const normalizedKey = String(apiKey || '').trim()
-  const normalizedModel = normalizeModel(model)
+  const normalizedModel = normalizeModel(model, p)
   if (normalizedKey.length < 8) {
-    throw new Error('DeepSeek Key 无效')
+    throw new Error(`${p} Key 无效`)
   }
 
   const { default: OpenAI } = await import('openai')
-  const client = new OpenAI({ apiKey: normalizedKey, baseURL: DEEPSEEK_BASE_URL })
+  const client = new OpenAI({ apiKey: normalizedKey, baseURL: pConfig.baseURL })
 
   try {
-    await client.chat.completions.create({
+    const pingParams = {
       model: normalizedModel,
       messages: [{ role: 'user', content: 'ping' }],
       max_tokens: 1,
       stream: false,
-      reasoning_effort: 'high',
-      extra_body: {
+    }
+    if (p === DEEPSEEK_PROVIDER) {
+      pingParams.reasoning_effort = 'high'
+      pingParams.extra_body = {
         thinking: { type: isThinkingEnabledForModel(normalizedModel) ? 'enabled' : 'disabled' }
-      },
-    })
+      }
+    }
+    await client.chat.completions.create(pingParams)
   } catch (err) {
     const message = err?.message || String(err)
     if (/401|unauthoriz|invalid.*api.*key|authentication/i.test(message)) {
-      throw new Error('DeepSeek Key 校验失败，请确认 key 是否正确')
+      throw new Error(`${p} Key 校验失败，请确认 key 是否正确`)
     }
-    throw new Error(`DeepSeek 验证失败: ${message}`)
+    throw new Error(`${p} 验证失败: ${message}`)
   }
 
-  applyDeepSeekConfig(normalizedKey, normalizedModel)
+  applyConfig(p, normalizedKey, normalizedModel)
   writeStoredConfig({
-    provider: DEEPSEEK_PROVIDER,
+    provider: p,
     apiKey: normalizedKey,
     model: normalizedModel,
     activatedAt: new Date().toISOString(),
   })
 
   return {
-    provider: DEEPSEEK_PROVIDER,
+    provider: p,
     model: normalizedModel,
-    models: DEEPSEEK_MODELS,
+    models: pConfig.models,
   }
 }
 
 export function getActivationStatus() {
+  const pConfig = config.provider ? PROVIDER_CONFIG[config.provider] : null
   return {
     activated: !config.needsActivation,
     provider: config.provider,
     model: config.model,
-    models: DEEPSEEK_MODELS,
-    defaultModel: DEFAULT_DEEPSEEK_MODEL,
+    models: pConfig ? pConfig.models : DEEPSEEK_MODELS,
+    defaultModel: pConfig ? pConfig.defaultModel : DEFAULT_DEEPSEEK_MODEL,
   }
 }
 
@@ -166,8 +215,40 @@ export function deactivate() {
   config.needsActivation = true
 }
 
+export function switchModel(model) {
+  if (!config.apiKey) throw new Error('尚未激活，无法切换模型')
+  const normalized = normalizeModel(model, config.provider)
+  config.model = normalized
+  try {
+    const existing = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))
+    writeStoredConfig({ ...existing, model: normalized })
+  } catch {}
+  return { provider: config.provider, model: normalized }
+}
+
+export function getMinimaxKey() {
+  try {
+    const raw = fs.readFileSync(paths.configFile, 'utf-8')
+    const parsed = JSON.parse(raw)
+    return typeof parsed?.minimax_api_key === 'string' ? parsed.minimax_api_key : null
+  } catch { return null }
+}
+
+export function setMinimaxKey(key) {
+  const trimmed = String(key || '').trim()
+  let existing = {}
+  try { existing = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8')) } catch {}
+  if (trimmed) {
+    writeStoredConfig({ ...existing, minimax_api_key: trimmed })
+  } else {
+    const { minimax_api_key: _removed, ...rest } = existing
+    writeStoredConfig(rest)
+  }
+}
+
 export const __internals = {
   DEEPSEEK_MODELS,
+  MINIMAX_MODELS,
   normalizeModel,
   isThinkingEnabledForModel,
 }

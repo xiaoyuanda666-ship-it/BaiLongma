@@ -1,3 +1,10 @@
+// Windows: 把控制台代码页切到 UTF-8，避免中文 stdout 显示为乱码
+if (process.platform === 'win32') {
+  try {
+    require('child_process').execSync('chcp 65001', { stdio: 'ignore', windowsHide: true })
+  } catch (_) {}
+}
+
 const { app, BrowserWindow, shell, dialog, Menu, ipcMain } = require('electron')
 const path = require('path')
 const net = require('net')

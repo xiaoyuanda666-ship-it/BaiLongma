@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "1.4.1",
+  "version": "1.7.1",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -12,25 +12,31 @@
     "start": "electron .",
     "start:backend": "node --env-file=.env src/index.js",
     "dev": "node --env-file=.env --watch src/index.js",
-    "build": "electron-builder --win",
+    "build": "electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --win",
     "publish": "electron-builder --win --publish always",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "smoke:tools": "node scripts/smoke-tools.mjs",
+    "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
+    "smoke:social": "node scripts/smoke-social.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
+    "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
     "openai": "^6.34.0",
     "playwright": "^1.59.1",
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "com.xiaoyuanda.bailongma",
     "productName": "Bailongma",
-    "artifactName": "${productName} Setup ${version}.${ext}",
+    "artifactName": "${productName}-Setup-1.7.001.${ext}",
+    "npmRebuild": false,
     "asar": true,
     "asarUnpack": [
       "**/node_modules/better-sqlite3/**",
@@ -65,7 +71,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

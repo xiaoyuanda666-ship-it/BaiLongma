@@ -8,7 +8,29 @@ import {
   getRecentConversationTimeline,
   getRecentActionLogs,
   getValidPrefetchCache,
+  getUnconsumedUISignals,
+  markUISignalsConsumed,
 } from '../db.js'
+import { getActiveUICards } from '../events.js'
+
+function summarizeUISignals(signals = []) {
+  if (!signals.length) return ''
+  const now = Date.now()
+  const lines = signals.map(s => {
+    const age = Math.max(0, Math.round((now - s.ts) / 1000))
+    let payload = {}
+    try { payload = JSON.parse(s.payload || '{}') } catch {}
+    const target = s.target ? `（${s.target}）` : ''
+    let desc = s.type
+    if (s.type === 'card.mounted')        desc = `卡片显示完成${target}`
+    else if (s.type === 'card.dismissed') desc = `用户关闭了卡片${target}（${payload.by || '未知'}，停留 ${Math.round((payload.dwell_ms||0)/1000)}s）`
+    else if (s.type === 'card.dwell')     desc = `卡片停留 ${Math.round((payload.dwell_ms||0)/1000)}s${target}`
+    else if (s.type === 'card.action')    desc = `用户在卡片上操作 ${payload.action || ''}${target}`
+    else if (s.type === 'card.error')     desc = `卡片错误：${payload.message || ''}${target}`
+    return `- ${age}s 前：${desc}`
+  })
+  return `过去一分钟界面行为（这只是上下文，不要因此主动开口）：\n${lines.join('\n')}`
+}
 
 // 消息格式解析
 // 格式：[ID:xxxxxx] 2026-04-13 10:00:00 [渠道] 内容
@@ -182,11 +204,26 @@ export async function runInjector({ message, state, hint = '' }) {
     'delete_file', 'make_dir', 'exec_command', 'kill_process', 'list_processes',
     'set_tick_interval', 'manage_reminder', 'manage_prefetch_task',
   ]
+  const { listCapabilities } = await import('../providers/registry.js')
+  const mmCaps = listCapabilities()
+  if (mmCaps.includes('tts'))    baseTools.push('speak')
+  if (mmCaps.includes('lyrics')) baseTools.push('generate_lyrics')
+  if (mmCaps.includes('music'))  baseTools.push('generate_music')
+  if (mmCaps.includes('image'))  baseTools.push('generate_image')
   if (senderId || state?.prev_recall) baseTools.push('search_memory')
   const tools = [...new Set(baseTools)]
 
   const actionLog = getRecentActionLogs(10)
   const prefetchedItems = getValidPrefetchCache()
+
+  const uiSignals = getUnconsumedUISignals(60_000)
+  const uiSignalSummary = summarizeUISignals(uiSignals)
+  if (uiSignals.length) markUISignalsConsumed(uiSignals.map(s => s.id))
+
+  const activeUICards = getActiveUICards()
+
+  // Phase 1：ACUI 工具默认可用（组件少、token 成本低）；后续组件多了再上按需注入
+  tools.push('ui_show', 'ui_update', 'ui_hide', 'ui_show_inline', 'ui_register')
 
   return {
     memories,
@@ -197,10 +234,12 @@ export async function runInjector({ message, state, hint = '' }) {
     constraints,
     thought: null,
     taskKnowledge,
-    tools,
+    tools: [...new Set(tools)],
     lastToolResult,
     actionLog,
     prefetchedItems,
+    uiSignalSummary,
+    activeUICards,
   }
 }
 
@@ -251,6 +290,13 @@ export function formatPrefetchedItems(prefetchedItems = []) {
     return `【${item.source}】（${fetchedTime} 已查好）\n${item.content}`
   }).join('\n\n')
   return body + '\n\n以上数据已预查好，数据别出错，语言自己组织，不要每次都一个句式。'
+}
+
+// 当前屏幕上的存活 ACUI 卡片列表
+export function formatActiveUICards(cards = []) {
+  if (!cards?.length) return ''
+  const lines = cards.map(c => `  - id="${c.id}"  组件=${c.component}`)
+  return `【当前屏幕存活卡片】\n${lines.join('\n')}\n如需关闭请用 ui_hide 并传入对应 id；如需更新内容请用 ui_update。`
 }
 
 // 任务知识库：显示完整 content + detail

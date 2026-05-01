@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ACUI — Video Card</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #06080f; min-height: 100vh; font-family: 'Inter', sans-serif; overflow: hidden; }
+
+  /* ── Entrance animations ── */
+  @keyframes anim-flash {
+    0%   { opacity:0; transform:scale(1.08); filter:brightness(3); }
+    8%   { opacity:1; filter:brightness(1.5); }
+    16%  { opacity:0.4; filter:brightness(2); }
+    24%  { opacity:1; filter:brightness(1); transform:scale(1); }
+    100% { opacity:1; transform:scale(1); filter:brightness(1); }
+  }
+  @keyframes anim-slide-up {
+    0%   { opacity:0; transform:translateY(40px) scale(0.95); }
+    100% { opacity:1; transform:translateY(0) scale(1); }
+  }
+  @keyframes anim-slide-right {
+    0%   { opacity:0; transform:translateX(-50px); }
+    100% { opacity:1; transform:translateX(0); }
+  }
+  @keyframes anim-fade {
+    0%   { opacity:0; }
+    100% { opacity:1; }
+  }
+  @keyframes anim-zoom {
+    0%   { opacity:0; transform:scale(0.5); }
+    70%  { transform:scale(1.04); }
+    100% { opacity:1; transform:scale(1); }
+  }
+  @keyframes anim-glitch {
+    0%   { opacity:0; clip-path:inset(50% 0 50% 0); }
+    15%  { clip-path:inset(20% 0 60% 0); transform:translateX(-4px); }
+    30%  { clip-path:inset(60% 0 10% 0); transform:translateX(4px); }
+    50%  { clip-path:inset(0% 0 0% 0); opacity:1; transform:translateX(0); }
+    100% { clip-path:inset(0% 0 0% 0); opacity:1; }
+  }
+  @keyframes exitAnim {
+    to { opacity:0; transform:scale(0.92); }
+  }
+  @keyframes cornerPulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+</style>
+</head>
+<body>
+
+<!-- Demo UI -->
+<div id="demo-ui" style="position:fixed;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:24px;">
+
+  <!-- Video card container — AI controls this -->
+  <div id="video-stage" style="position:relative;width:100%;height:100%;pointer-events:none;"></div>
+
+  <!-- Control panel (simulates AI Agent commands) -->
+  <div id="ctrl" style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(10,12,20,0.95);border:1px solid rgba(255,255,255,0.1);border-radius:16px;padding:16px 20px;display:flex;flex-direction:column;gap:12px;min-width:560px;backdrop-filter:blur(12px);z-index:100;">
+    <div style="color:rgba(255,255,255,0.35);font-size:10px;letter-spacing:0.08em;">AI AGENT 控制台</div>
+
+    <!-- Source -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span style="color:rgba(255,255,255,0.3);font-size:11px;width:60px;">来源</span>
+      <div style="display:flex;gap:6px;" id="src-btns"></div>
+    </div>
+
+    <!-- Entrance -->
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <span style="color:rgba(255,255,255,0.3);font-size:11px;width:60px;">出场</span>
+      <div style="display:flex;gap:6px;" id="anim-btns"></div>
+    </div>
+
+    <!-- Size + Position -->
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+      <span style="color:rgba(255,255,255,0.3);font-size:11px;width:60px;">位置/尺寸</span>
+      <div style="display:flex;gap:6px;" id="pos-btns"></div>
+    </div>
+
+    <!-- Volume + Actions -->
+    <div style="display:flex;gap:10px;align-items:center;">
+      <span style="color:rgba(255,255,255,0.3);font-size:11px;width:60px;">音量</span>
+      <input type="range" id="vol-slider" min="0" max="100" value="80" style="width:100px;accent-color:#3b82f6;cursor:pointer;">
+      <span id="vol-label" style="color:rgba(255,255,255,0.5);font-size:11px;width:28px;">80%</span>
+      <button id="btn-dismiss" class="cbtn" style="margin-left:auto;">✕ 关闭卡片</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .cbtn { padding:5px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:transparent;color:rgba(255,255,255,0.5);font-size:11px;font-family:'Inter',sans-serif;cursor:pointer;transition:all 0.15s; }
+  .cbtn:hover { border-color:rgba(255,255,255,0.3);color:#fff; }
+  .cbtn.active { background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.4);color:#fff; }
+</style>
+
+<script>
+/* ══════════════════════════════════════
+   VideoCard Controller
+   Exposed as window.VideoCard for AI Agent
+══════════════════════════════════════ */
+const VideoCard = (() => {
+  let card = null;
+  let iframe = null;
+  let currentConfig = {};
+
+  // Platform embed builders
+  const PLATFORMS = {
+    youtube: {
+      label: 'YouTube',
+      color: '#ff0000',
+      embed: (id, vol, autoplay) =>
+        `https://www.youtube.com/embed/${id}?autoplay=${autoplay?1:0}&rel=0&mute=${vol===0?1:0}&volume=${vol}`,
+      thumb: (id) => `https://img.youtube.com/vi/${id}/hqdefault.jpg`,
+    },
+    bilibili: {
+      label: 'bilibili',
+      color: '#00a1d6',
+      embed: (id, vol, autoplay) =>
+        `https://player.bilibili.com/player.html?bvid=${id}&autoplay=${autoplay?1:0}&high_quality=1`,
+      thumb: () => null,
+    },
+    twitter: {
+      label: 'X (Twitter)',
+      color: '#e7e9ea',
+      // Twitter uses their embed widget — we load the tweet in an iframe wrapper
+      embed: (id, vol, autoplay) =>
+        `https://platform.twitter.com/embed/Tweet.html?id=${id}&theme=dark`,
+      thumb: () => null,
+    },
+  };
+
+  // Entrance animation durations
+  const ANIM_DUR = {
+    flash: 600, 'slide-up': 450, 'slide-right': 450, fade: 500, zoom: 500, glitch: 700,
+  };
+
+  // Position/size presets
+  const PRESETS = {
+    center:      { w:480, h:270, x:'50%', y:'50%', tx:'-50%', ty:'-50%' },
+    'top-right': { w:360, h:202, x:'calc(100% - 24px)', y:'24px', tx:'-100%', ty:'0' },
+    'bottom-left':{ w:360, h:202, x:'24px', y:'calc(100% - 230px)', tx:'0', ty:'0' },
+    fullscreen:  { w:'min(90vw,960px)', h:'min(50.625vw,540px)', x:'50%', y:'50%', tx:'-50%', ty:'-50%' },
+    pip:         { w:240, h:135, x:'calc(100% - 16px)', y:'calc(100% - 280px)', tx:'-100%', ty:'0' },
+  };
+
+  function buildCard(cfg) {
+    const { platform, id, anim='fade', preset='center', volume=80, autoplay=true } = cfg;
+    const p = PLATFORMS[platform];
+    if (!p) return;
+
+    // Remove existing
+    dismiss(false);
+
+    const ps = PRESETS[preset] || PRESETS.center;
+    const dur = ANIM_DUR[anim] || 500;
+
+    card = document.createElement('div');
+    card.id = 'vc-card';
+    Object.assign(card.style, {
+      position: 'absolute',
+      left: ps.x, top: ps.y,
+      transform: `translate(${ps.tx}, ${ps.ty})`,
+      width: ps.w, height: ps.h,
+      borderRadius: '12px',
+      overflow: 'hidden',
+      boxShadow: `0 24px 64px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.07)`,
+      animation: `anim-${anim} ${dur}ms cubic-bezier(0.16,1,0.3,1) both`,
+      pointerEvents: 'all',
+      transition: 'width 0.4s ease, height 0.4s ease, left 0.4s ease, top 0.4s ease, transform 0.4s ease',
+    });
+
+    // Corner accent (platform color)
+    const corner = document.createElement('div');
+    Object.assign(corner.style, {
+      position: 'absolute', top:0, left:0, right:0, height:'2px',
+      background: `linear-gradient(to right, ${p.color}, transparent)`,
+      zIndex: 10, pointerEvents:'none',
+      animation: 'cornerPulse 2s ease-in-out infinite',
+    });
+    card.appendChild(corner);
+
+    // Close button
+    const closeBtn = document.createElement('div');
+    Object.assign(closeBtn.style, {
+      position:'absolute', top:8, right:8, zIndex:20,
+      width:24, height:24, borderRadius:'50%',
+      background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)',
+      border:'1px solid rgba(255,255,255,0.15)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      cursor:'pointer', color:'rgba(255,255,255,0.6)', fontSize:11,
+      fontFamily:'Inter,sans-serif',
+      transition:'all 0.15s',
+    });
+    closeBtn.textContent = '✕';
+    closeBtn.onclick = () => dismiss();
+    closeBtn.onmouseenter = () => { closeBtn.style.background='rgba(0,0,0,0.9)'; closeBtn.style.color='#fff'; };
+    closeBtn.onmouseleave = () => { closeBtn.style.background='rgba(0,0,0,0.6)'; closeBtn.style.color='rgba(255,255,255,0.6)'; };
+    card.appendChild(closeBtn);
+
+    // iframe
+    iframe = document.createElement('iframe');
+    Object.assign(iframe.style, {
+      width:'100%', height:'100%', border:'none', display:'block',
+      background:'#000',
+    });
+    iframe.src = p.embed(id, volume, autoplay);
+    iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture';
+    iframe.allowFullscreen = true;
+    card.appendChild(iframe);
+
+    document.getElementById('video-stage').appendChild(card);
+    currentConfig = { ...cfg };
+  }
+
+  function dismiss(animate=true) {
+    if (!card) return;
+    if (animate) {
+      card.style.animation = `exitAnim 0.25s ease forwards`;
+      setTimeout(() => { card?.remove(); card = null; iframe = null; }, 260);
+    } else {
+      card.remove(); card = null; iframe = null;
+    }
+  }
+
+  function resize(preset) {
+    if (!card) return;
+    const ps = PRESETS[preset];
+    if (!ps) return;
+    Object.assign(card.style, {
+      width: ps.w, height: ps.h,
+      left: ps.x, top: ps.y,
+      transform: `translate(${ps.tx}, ${ps.ty})`,
+    });
+    currentConfig.preset = preset;
+  }
+
+  function setVolume(vol) {
+    // Volume control via postMessage for YouTube
+    if (iframe && currentConfig.platform === 'youtube') {
+      try {
+        iframe.contentWindow.postMessage(JSON.stringify({
+          event:'command', func:'setVolume', args:[vol]
+        }), '*');
+      } catch(e) {}
+    }
+    currentConfig.volume = vol;
+  }
+
+  // Expose public API
+  return { show: buildCard, dismiss, resize, setVolume, presets: Object.keys(PRESETS), platforms: Object.keys(PLATFORMS) };
+})();
+
+window.VideoCard = VideoCard;
+
+/* ══════════════════════════════════════
+   Demo Control Panel
+══════════════════════════════════════ */
+const SOURCES = [
+  { label:'YouTube', platform:'youtube', id:'dQw4w9WgXcQ' },
+  { label:'YouTube 2', platform:'youtube', id:'jNQXAC9IVRw' },
+  { label:'bilibili', platform:'bilibili', id:'BV1GJ411x7h7' },
+  { label:'X 视频', platform:'twitter', id:'1897284610266546524' },
+];
+const ANIMS = ['flash','slide-up','slide-right','fade','zoom','glitch'];
+const POSITIONS = [
+  { label:'居中', preset:'center' },
+  { label:'全屏', preset:'fullscreen' },
+  { label:'右上角', preset:'top-right' },
+  { label:'左下角', preset:'bottom-left' },
+  { label:'画中画', preset:'pip' },
+];
+
+let curSrc = SOURCES[0];
+let curAnim = 'flash';
+let curVol = 80;
+
+function btn(text, onClick, active=false) {
+  const b = document.createElement('button');
+  b.className = 'cbtn' + (active?' active':'');
+  b.textContent = text;
+  b.onclick = onClick;
+  return b;
+}
+
+function setActive(container, clicked) {
+  container.querySelectorAll('.cbtn').forEach(b => b.classList.remove('active'));
+  clicked.classList.add('active');
+}
+
+// Source buttons
+const srcC = document.getElementById('src-btns');
+SOURCES.forEach((s, i) => {
+  const b = btn(s.label, (e) => {
+    curSrc = s;
+    setActive(srcC, e.target);
+    VideoCard.show({ platform:s.platform, id:s.id, anim:curAnim, preset:'center', volume:curVol, autoplay:true });
+  }, i===0);
+  srcC.appendChild(b);
+});
+
+// Anim buttons
+const animC = document.getElementById('anim-btns');
+ANIMS.forEach((a, i) => {
+  const b = btn(a, (e) => {
+    curAnim = a;
+    setActive(animC, e.target);
+    VideoCard.show({ platform:curSrc.platform, id:curSrc.id, anim:a, preset:'center', volume:curVol, autoplay:true });
+  }, i===0);
+  animC.appendChild(b);
+});
+
+// Position buttons
+const posC = document.getElementById('pos-btns');
+POSITIONS.forEach((p, i) => {
+  const b = btn(p.label, (e) => {
+    setActive(posC, e.target);
+    if (document.getElementById('vc-card')) {
+      VideoCard.resize(p.preset);
+    } else {
+      VideoCard.show({ platform:curSrc.platform, id:curSrc.id, anim:curAnim, preset:p.preset, volume:curVol, autoplay:true });
+    }
+  }, i===0);
+  posC.appendChild(b);
+});
+
+// Volume
+const volSlider = document.getElementById('vol-slider');
+const volLabel  = document.getElementById('vol-label');
+volSlider.oninput = () => {
+  curVol = parseInt(volSlider.value);
+  volLabel.textContent = curVol + '%';
+  VideoCard.setVolume(curVol);
+};
+
+// Dismiss
+document.getElementById('btn-dismiss').onclick = () => VideoCard.dismiss();
+
+// Auto-show on load
+setTimeout(() => {
+  VideoCard.show({ platform:'youtube', id:'dQw4w9WgXcQ', anim:'flash', preset:'center', volume:80, autoplay:true });
+}, 300);
+</script>
+</body>
+</html>

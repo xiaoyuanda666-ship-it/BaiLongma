@@ -407,6 +407,23 @@ export const TOOL_SCHEMAS = {
     }
   },
 
+  generate_image: {
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description: '根据文字描述生成一张图片。图片生成每日限额 50 次。',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string', description: '图片内容描述，越详细越好' },
+          aspect_ratio: { type: 'string', description: '宽高比，可选值：1:1（默认）、16:9、4:3、3:4、9:16' },
+          n: { type: 'number', description: '生成数量，1-4，默认 1' },
+        },
+        required: ['prompt']
+      }
+    }
+  },
+
   search_memory: {
     type: 'function',
     function: {
@@ -488,6 +505,171 @@ export const TOOL_SCHEMAS = {
         properties: {
           reason: { type: 'string', description: '可选：简短理由。' }
         }
+      }
+    }
+  },
+
+  ui_show: {
+    type: 'function',
+    function: {
+      name: 'ui_show',
+      description: '在用户界面上推送一张可视化卡片。仅当 UI 表达比纯文字更简洁、更直观时使用——能用一句话说清的事别开卡片。可用组件清单见标记为 skill.ui 的技能记忆；当前内置：WeatherCard。',
+      parameters: {
+        type: 'object',
+        properties: {
+          component: { type: 'string', description: '组件类型名，必须在注册表内（如 WeatherCard）' },
+          props:     { type: 'object', description: '组件参数，需符合该组件的 propsSchema' },
+          hint: {
+            type: 'object',
+            description: '可选展示提示，控制卡片的形态。所有字段都有合理默认值。',
+            properties: {
+              placement: { type: 'string', enum: ['notification', 'center', 'floating'], description: 'notification=右上滑入堆叠（通知性，默认）；center=居中带遮罩（重要/需确认）；floating=自由浮动可拖动（工具类/长留）' },
+              size:      { description: '尺寸：sm | md | lg | xl，或 { w, h } 像素对象。默认 md。', oneOf: [{ type: 'string', enum: ['sm', 'md', 'lg', 'xl'] }, { type: 'object', properties: { w: { type: ['number', 'string'] }, h: { type: ['number', 'string'] } } }] },
+              draggable: { type: 'boolean', description: '是否可拖动。floating 默认 true，其他默认 false。' },
+              modal:     { type: 'boolean', description: '是否带半透明遮罩。center 默认 true。' },
+              enter:     { type: 'string', description: '入场动画，默认按 placement 推断' },
+              exit:      { type: 'string', description: '出场动画，默认按 placement 推断' }
+            }
+          }
+        },
+        required: ['component', 'props']
+      }
+    }
+  },
+
+  ui_hide: {
+    type: 'function',
+    function: {
+      name: 'ui_hide',
+      description: '关闭一张已显示的卡片（会跑出场动画）。一般情况下让用户自己关，仅在卡片信息已失效时主动调用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'ui_show 返回的卡片实例 id' }
+        },
+        required: ['id']
+      }
+    }
+  },
+
+  ui_update: {
+    type: 'function',
+    function: {
+      name: 'ui_update',
+      description: '更新一张已显示卡片的内容（不会重放入场动画）。常用：用户问别的城市的天气时改 props，而不是开新卡。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:    { type: 'string', description: 'ui_show 返回的卡片实例 id' },
+          props: { type: 'object', description: '新的 props，会与原 props 浅合并' }
+        },
+        required: ['id', 'props']
+      }
+    }
+  },
+
+  ui_show_inline: {
+    type: 'function',
+    function: {
+      name: 'ui_show_inline',
+      description: '当现有组件无法满足表达需求时，临场写一个组件并立刻显示。两种模式：inline-template（仅 HTML+CSS，安全简单）、inline-script（完整 Web Component class，有交互/状态/动画）。优先选 inline-template，能不写 JS 就别写。验证可用且用户停留 dwell 良好后可调 ui_register 把它转正成永久组件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode:     { type: 'string', enum: ['inline-template', 'inline-script'], description: 'inline-template=纯模板，inline-script=完整 Web Component' },
+          template: { type: 'string', description: 'mode=inline-template 必填。纯 HTML 结构字符串，用 ${propName} 占位。绝对不要在 template 里写 <style> 标签——CSS 必须放在 styles 参数里，否则 CSS 代码会被当文字渲染出来。' },
+          styles:   { type: 'string', description: 'mode=inline-template 可选但强烈建议填写。所有 CSS 写在这里（不带 <style> 标签，只写规则），系统自动注入 Shadow DOM。不要把 CSS 放进 template。' },
+          code:     { type: 'string', description: 'mode=inline-script 必填。须以 export default class extends HTMLElement 开头，含 set props(v) 方法' },
+          props:    { type: 'object', description: '组件参数对象。模板没用到字段时可省略，会兜底成空对象。' },
+          hint: {
+            type: 'object',
+            description: '可选展示提示，与 ui_show 的 hint 字段含义一致：placement / size / draggable / modal / enter / exit',
+            properties: {
+              placement: { type: 'string', enum: ['notification', 'center', 'floating'] },
+              size:      { description: 'sm | md | lg | xl 或 { w, h }', oneOf: [{ type: 'string', enum: ['sm', 'md', 'lg', 'xl'] }, { type: 'object' }] },
+              draggable: { type: 'boolean' },
+              modal:     { type: 'boolean' },
+              enter:     { type: 'string' },
+              exit:      { type: 'string' }
+            }
+          }
+        },
+        required: ['mode']
+      }
+    }
+  },
+
+  manage_app: {
+    type: 'function',
+    function: {
+      name: 'manage_app',
+      description: '管理已生成的交互式应用（游戏/工具）：保存为永久应用、重新打开、列出、删除。inline-script 组件在生成时代码已自动落盘为草稿，用 save 提升为正式应用后可随时 open 恢复。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['save', 'open', 'list', 'delete'],
+            description: 'save=把 inline-script 草稿保存为永久应用；open=重新挂载已保存的应用（自动恢复上次状态）；list=列出所有已保存应用；delete=删除应用'
+          },
+          name: {
+            type: 'string',
+            description: '应用名，英文小写 snake_case，作为存储目录名，如 chess / todo_app。save / open / delete 必填。'
+          },
+          label: {
+            type: 'string',
+            description: '可选：中文显示名，如"中国象棋"。save 时填写。'
+          },
+          draft_id: {
+            type: 'string',
+            description: 'save 时必填：ui_show_inline 返回的组件实例 id（scratch-xxx）'
+          },
+          state: {
+            type: 'object',
+            description: '可选：保存或打开时附带的状态。save 时传当前游戏状态；open 时传则覆盖磁盘上的已存状态。'
+          },
+          hint: {
+            type: 'object',
+            description: '可选：UI 展示参数（placement / size / draggable），save 时写入 meta，open 时复用。'
+          }
+        },
+        required: ['action']
+      }
+    }
+  },
+
+  ui_patch: {
+    type: 'function',
+    function: {
+      name: 'ui_patch',
+      description: '向已挂载的应用组件发送操作指令或状态更新。组件内通过 this._app.onPatch() 监听。适用于游戏回合、状态机、画布更新等需要 agent 主动推送变化的场景。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id:   { type: 'string', description: 'ui_show_inline 或 ui_show 返回的组件实例 id' },
+          op:   { type: 'string', description: '操作名，由组件内部定义，如 applyMove、setState、nextRound' },
+          data: { type: 'object', description: '操作数据，由组件内部解释' },
+        },
+        required: ['id', 'op']
+      }
+    }
+  },
+
+  ui_register: {
+    type: 'function',
+    function: {
+      name: 'ui_register',
+      description: '把一个已经验证可用的内联组件转为永久组件：写 .js 文件 + 更新 registry + 写 ui-components.json + seed 一条 skill.ui 技能记忆。一般在内联组件成功使用 ≥2 次、用户没有立刻关闭、有 dwell 信号时调用。注册后，下次同类需求直接走 ui_show 就能复用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          component_name: { type: 'string', description: 'PascalCase 组件名，未占用，如 TodoCard / VideoPlayer' },
+          code:           { type: 'string', description: '完整 Web Component class 代码，须含 static tagName / static propsSchema / static enter / static exit 字段，并以 customElements.define 注册收尾' },
+          props_schema:   { type: 'object', description: '与 code 内 propsSchema 一致的对象，用于后端校验镜像（{ field: { type, required } }）' },
+          use_case:       { type: 'string', description: '什么时候该用这个组件——会写入 skill.ui 记忆作为命中条件' },
+          example_call:   { type: 'string', description: 'ui_show 形式的调用示例' }
+        },
+        required: ['component_name', 'code', 'props_schema', 'use_case', 'example_call']
       }
     }
   },

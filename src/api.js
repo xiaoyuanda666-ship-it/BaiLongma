@@ -3,14 +3,19 @@ import fs from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
+import { WebSocketServer } from 'ws'
 import { pushMessage } from './queue.js'
-import { getDB, getConfig, setConfig } from './db.js'
-import { emitEvent, addSSEClient, removeSSEClient } from './events.js'
+import { getDB, getConfig, setConfig, insertUISignal } from './db.js'
+import { emitEvent, addSSEClient, removeSSEClient, addACUIClient, removeACUIClient, removeActiveUICard } from './events.js'
 import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 import { paths } from './paths.js'
-import { config, activate as activateLLM, getActivationStatus } from './config.js'
+import { config, activate as activateLLM, getActivationStatus, switchModel, getMinimaxKey, setMinimaxKey, DEEPSEEK_MODELS, MINIMAX_MODELS } from './config.js'
+import { replaceProvider } from './providers/registry.js'
+import { persistAppState } from './capabilities/executor.js'
+import { MinimaxProvider } from './providers/minimax.js'
+import { handleSocialWebhook, isSocialWebhookPath } from './social/webhooks.js'
 
 export { emitEvent }
 
@@ -23,8 +28,70 @@ const WEBSITE_PATH       = paths.websiteHtml
 const SYSTEM_PROMPT_PATH = paths.systemPromptHtml
 const ACTIVATION_PATH    = paths.activationHtml
 const BRAIN_UI_ASSET_ROOT = paths.brainUiAssetRoot
+const D3_VENDOR_PATH     = path.join(paths.resourcesDir, 'node_modules', 'd3', 'dist', 'd3.min.js')
 const SANDBOX_PATH       = paths.sandboxDir
 const DEFAULT_AGENT_NAME = 'Longma'
+const DEFAULT_API_HOST = '127.0.0.1'
+
+function getApiHost() {
+  return String(globalThis.process?.env?.BAILONGMA_HOST || DEFAULT_API_HOST).trim() || DEFAULT_API_HOST
+}
+
+function isLoopbackAddress(address = '') {
+  const value = String(address || '').toLowerCase()
+  return value === '127.0.0.1'
+    || value === '::1'
+    || value === '::ffff:127.0.0.1'
+    || value === 'localhost'
+}
+
+function isLoopbackRequest(req) {
+  return isLoopbackAddress(req.socket?.remoteAddress)
+}
+
+function isLoopbackOrigin(origin = '') {
+  if (!origin || origin === 'null') return true
+  try {
+    const parsed = new URL(origin)
+    return ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+function getAuthToken() {
+  return String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
+}
+
+function hasValidAuthToken(req, url) {
+  const expected = getAuthToken()
+  if (!expected) return false
+  const header = req.headers.authorization || ''
+  const bearer = header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  const queryToken = url.searchParams.get('token')
+  return bearer === expected || queryToken === expected
+}
+
+function requireLocalOrToken(req, res, url) {
+  if (isLoopbackRequest(req) || hasValidAuthToken(req, url)) return true
+  jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+  return false
+}
+
+function isSensitivePath(pathname) {
+  return pathname === '/activate'
+    || pathname === '/settings'
+    || pathname.startsWith('/settings/')
+    || pathname.startsWith('/admin/')
+    || pathname.startsWith('/memories/')
+}
+
+function isPathInside(parentDir, candidatePath) {
+  const parent = path.resolve(parentDir)
+  const candidate = path.resolve(candidatePath)
+  const relative = path.relative(parent, candidate)
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))
+}
 
 function jsonResponse(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
@@ -48,6 +115,13 @@ function contentTypeFor(filePath) {
 
 function getAgentName() {
   return (getConfig('agent_name') || '').trim() || DEFAULT_AGENT_NAME
+}
+
+function stripAssistantHistoryLabels(content) {
+  return String(content || '')
+    .trim()
+    .replace(/^(?:\s*\[assistant(?:\s+to\s+[^\]\r\n]+)?(?:\s+\d{4}-\d{2}-\d{2}T[^\]\r\n]+)?\]\s*)+/giu, '')
+    .trim()
 }
 
 function extractAgentRename(content) {
@@ -173,13 +247,31 @@ function extractAgentRename(content) {
 
 export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = null } = {}) {
   const onActivatedCallback = onActivated
+  const host = getApiHost()
   const server = http.createServer((req, res) => {
     const base = `http://localhost:${port}`
     const url = new URL(req.url, base)
+    const origin = req.headers.origin
 
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    if (isSocialWebhookPath(url.pathname)) {
+      return handleSocialWebhook(req, res, url)
+    }
+
+    if (origin && !isLoopbackOrigin(origin)) {
+      return jsonResponse(res, 403, { ok: false, error: 'forbidden origin' })
+    }
+
+    if (!isLoopbackRequest(req) && !hasValidAuthToken(req, url)) {
+      return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+    }
+
+    if (isLoopbackOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin || 'null')
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+
+    if (req.method !== 'OPTIONS' && isSensitivePath(url.pathname) && !requireLocalOrToken(req, res, url)) return
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
@@ -266,7 +358,11 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         ORDER BY id DESC
         LIMIT ?
       `).all(limit)
-      jsonResponse(res, 200, rows.reverse())
+      jsonResponse(res, 200, rows.reverse().map(row => (
+        row.role === 'jarvis'
+          ? { ...row, content: stripAssistantHistoryLabels(row.content) }
+          : row
+      )))
       return
     }
 
@@ -368,14 +464,72 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       req.on('end', async () => {
         try {
           const body = Buffer.concat(chunks).toString('utf-8')
-          const { apiKey, model } = JSON.parse(body || '{}')
-          const info = await activateLLM({ apiKey, model })
+          const { apiKey, model, provider } = JSON.parse(body || '{}')
+          const info = await activateLLM({ provider, apiKey, model })
           emitEvent('activated', info)
           // 通知 index.js 启动主循环
           if (typeof onActivatedCallback === 'function') {
             try { onActivatedCallback() } catch (err) { console.error('[API] onActivated 回调出错:', err) }
           }
           jsonResponse(res, 200, { ok: true, ...info })
+        } catch (err) {
+          jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // GET /settings — 返回当前 LLM + MiniMax 配置状态
+    if (req.method === 'GET' && url.pathname === '/settings') {
+      const status = getActivationStatus()
+      const minimaxKey = getMinimaxKey()
+      jsonResponse(res, 200, {
+        llm: {
+          activated: status.activated,
+          provider: status.provider,
+          model: status.model,
+          models: status.models,
+        },
+        providers: {
+          deepseek: { models: DEEPSEEK_MODELS },
+          minimax: { models: MINIMAX_MODELS },
+        },
+        minimax: {
+          configured: !!(globalThis.process?.env?.MINIMAX_API_KEY || minimaxKey),
+        },
+      })
+      return
+    }
+
+    // POST /settings/model — 仅切换模型（不需重新输入 Key）
+    if (req.method === 'POST' && url.pathname === '/settings/model') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', () => {
+        try {
+          const { model } = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          const result = switchModel(model)
+          emitEvent('model_switched', result)
+          jsonResponse(res, 200, { ok: true, ...result })
+        } catch (err) {
+          jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // POST /settings/minimax — 设置 MiniMax API Key
+    if (req.method === 'POST' && url.pathname === '/settings/minimax') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', () => {
+        try {
+          const { apiKey } = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          const trimmed = String(apiKey || '').trim()
+          if (!trimmed) throw new Error('API Key 不能为空')
+          setMinimaxKey(trimmed)
+          replaceProvider(new MinimaxProvider({ apiKey: trimmed }))
+          jsonResponse(res, 200, { ok: true, configured: true })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
         }
@@ -482,12 +636,28 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    if (req.method === 'GET' && url.pathname === '/vendor/d3/d3.min.js') {
+      try {
+        const stat = fs.statSync(D3_VENDOR_PATH)
+        res.writeHead(200, {
+          'Content-Type': contentTypeFor(D3_VENDOR_PATH),
+          'Content-Length': stat.size,
+          'Cache-Control': 'public, max-age=31536000, immutable',
+        })
+        fs.createReadStream(D3_VENDOR_PATH).pipe(res)
+      } catch {
+        res.writeHead(404)
+        res.end('d3.min.js not found')
+      }
+      return
+    }
+
     if (req.method === 'GET' && url.pathname.startsWith('/src/ui/brain-ui/')) {
       const relativePath = decodeURIComponent(url.pathname.slice('/src/ui/brain-ui/'.length))
       const assetRoot = path.resolve(BRAIN_UI_ASSET_ROOT)
       const assetPath = path.resolve(BRAIN_UI_ASSET_ROOT, relativePath)
 
-      if (!assetPath.startsWith(assetRoot + path.sep)) {
+      if (!isPathInside(assetRoot, assetPath)) {
         res.writeHead(403)
         res.end('forbidden')
         return
@@ -583,12 +753,97 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     jsonResponse(res, 404, { error: 'not found' })
   })
 
-  server.listen(port, '0.0.0.0', () => {
-    console.log(`[API] 监听 http://127.0.0.1:${port}`)
+  // ACUI ws 通道：双向控制 + 感知
+  const acuiWss = new WebSocketServer({ noServer: true })
+  acuiWss.on('connection', (ws) => {
+    addACUIClient(ws)
+    try { ws.send(JSON.stringify({ v: 1, kind: 'acui:hello' })) } catch {}
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString())
+        if (msg?.kind === 'ui.signal') {
+          const id = insertUISignal({
+            type: msg.type,
+            target: msg.target || null,
+            payload: msg.payload || {},
+            ts: msg.ts || Date.now(),
+          })
+          emitEvent('ui_signal', { id, type: msg.type, target: msg.target, payload: msg.payload })
+          // card.mounted：检查 render_preview，CSS/HTML 泄漏时才通知 agent
+          if (msg.type === 'card.mounted') {
+            const preview = msg.payload?.render_preview || ''
+            if (preview && /font-size|rgba\(|<span|<\/[a-z]|px;|z-index|text-shadow/.test(preview)) {
+              pushMessage('SYSTEM',
+                `[渲染异常 app=${msg.target || 'unknown'}]\n组件挂载后文本内容疑似包含未渲染的 HTML/CSS，请立刻检查代码并用 ui_hide + ui_show_inline 重新生成：\n${preview.slice(0, 200)}`,
+                'APP_SIGNAL')
+            }
+          }
+          // card.dismissed：从服务端存活表移除
+          if (msg.type === 'card.dismissed') {
+            removeActiveUICard(msg.target)
+          }
+          // 只有用户主动交互（card.action）才推入 agent 队列
+          // card.dismissed 等其他生命周期信号不触发 agent
+          if (msg.type === 'card.action') {
+            const appId = msg.target || 'ui'
+            const action = msg.payload?.action || 'unknown'
+            const payload = msg.payload?.payload || msg.payload || {}
+            // app:saveState 是组件自动上报的状态快照，直接落盘，不触发 agent
+            if (action === 'app:saveState') {
+              persistAppState(appId, payload)
+            } else {
+              const signalContent = `[App信号 app=${appId} action=${action}]\n${JSON.stringify(payload, null, 2)}`
+              pushMessage(`APP:${appId}`, signalContent, 'APP_SIGNAL')
+            }
+          }
+        } else if (msg?.kind === 'pong') {
+          // ignore
+        }
+      } catch (e) {
+        // 拒绝非 JSON 帧
+      }
+    })
+
+    ws.on('close', () => removeACUIClient(ws))
+    ws.on('error', () => removeACUIClient(ws))
+  })
+
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, `http://localhost:${port}`)
+    if (url.pathname === '/acui') {
+      const origin = req.headers.origin
+      if (origin && !isLoopbackOrigin(origin)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      if (!isLoopbackRequest(req) && !hasValidAuthToken(req, url)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      acuiWss.handleUpgrade(req, socket, head, (ws) => acuiWss.emit('connection', ws, req))
+    } else {
+      socket.destroy()
+    }
+  })
+
+  // 心跳：每 30s 给所有 ACUI 客户端发 ping
+  const acuiHeartbeat = setInterval(() => {
+    for (const client of acuiWss.clients) {
+      try { client.send(JSON.stringify({ v: 1, kind: 'ping' })) } catch {}
+    }
+  }, 30000)
+  acuiHeartbeat.unref?.()
+
+  server.listen(port, host, () => {
+    console.log(`[API] 监听 http://${host}:${port}`)
     console.log(`[API]   POST /message  — 发消息给意识体`)
     console.log(`[API]   GET  /events   — SSE 实时流（接收意识体消息）`)
     console.log(`[API]   GET  /memories — 查询记忆`)
     console.log(`[API]   GET  /status   — 状态`)
+    console.log(`[API]   WS   /acui     — ACUI 双向通道（控制 + 感知）`)
   })
 
   return server

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ACUI — 声波点云球</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap');
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #060a14; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Inter', sans-serif; }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes blink  { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  @keyframes dot    { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+  .btn {
+    padding: 5px 14px; border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.15); background: transparent;
+    color: rgba(255,255,255,0.35); font-size: 11px; font-family: 'Inter',sans-serif;
+    cursor: pointer; transition: all 0.2s; letter-spacing: 0.04em;
+  }
+  .btn:hover  { border-color:rgba(255,255,255,0.3); color:rgba(255,255,255,0.65); }
+  .btn.active { background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.4); color:#fff; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+/* ─── Config ─── */
+const CFG = {
+  idle:        { label:'待机',       amp:0.004,spd:0.12, r:[60,80,90],    g:[70,85,95],    b:[90,100,115],  glow:'rgba(80,90,100,0.08)',  txt:'环境监听中',  tc:'rgba(120,130,140,0.5)'  },
+  listening:   { label:'检测到声音', amp:0.45, spd:3.00, r:[30,120,220],  g:[100,180,255], b:[220,240,255], glow:'rgba(60,160,255,0.75)', txt:'正在聆听...',  tc:'rgba(120,200,255,0.95)' },
+  recognizing: { label:'识别中',     amp:0.80, spd:5.00, r:[50,140,255],  g:[130,210,255], b:[230,245,255], glow:'rgba(80,190,255,0.95)', txt:'识别中',       tc:'rgba(160,220,255,1.0)'  },
+  processing:  { label:'AI处理',     amp:0.15, spd:1.10, r:[100,60,200],  g:[80,60,180],   b:[220,190,255], glow:'rgba(130,90,255,0.55)', txt:'AI 思考中',    tc:'rgba(185,155,255,0.95)' },
+};
+
+/* ─── Fibonacci sphere points ─── */
+function fibSphere(n, radius=1) {
+  const pts = [];
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = golden * i;
+    pts.push({ x: Math.cos(theta) * r * radius, y: y * radius, z: Math.sin(theta) * r * radius });
+  }
+  return pts;
+}
+
+const BASE_PTS = fibSphere(1800, 1.0);
+const BASE_PTS2 = fibSphere(600, 0.88); // inner sparse layer
+
+/* ─── Noise ─── */
+function sn(x, y, z, t) {
+  return (
+    Math.sin(x * 2.3 + t * 1.1) * Math.cos(y * 1.9 + t * 0.8) * 0.38 +
+    Math.sin(y * 3.1 + t * 1.4) * Math.cos(z * 2.7 + t * 0.6) * 0.30 +
+    Math.sin(z * 1.7 + t * 0.9) * Math.cos(x * 3.3 + t * 1.2) * 0.30 +
+    Math.sin(x * 5.1 + y * 4.3 + t * 2.1) * 0.14
+  );
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function lerpArr(a, b, t) { return a.map((v, i) => lerp(v, b[i], t)); }
+
+/* ─── Canvas renderer ─── */
+function VoiceBall() {
+  const [sk, setSk] = useState('idle');
+  const [micActive, setMicActive] = useState(false);
+  const skRef  = useRef('idle');
+  const canRef = useRef(null);
+  const rafRef = useRef(null);
+  const stRef  = useRef({
+    amp: CFG.idle.amp, spd: CFG.idle.spd,
+    col: [CFG.idle.r, CFG.idle.g, CFG.idle.b],
+    t: 0, rotY: 0, rotX: 0.25,
+  });
+
+  useEffect(() => { skRef.current = sk; }, [sk]);
+
+  const micRef = useRef(null);
+
+  const startMic = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const actx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = actx.createMediaStreamSource(stream);
+      const analyser = actx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      src.connect(analyser);
+      micRef.current = { analyser, dataArray, stream };
+      setMicActive(true);
+      setSk('listening');
+    } catch(e) {
+      alert('无法获取麦克风权限：' + e.message);
+    }
+  };
+
+  const stopMic = () => {
+    if (micRef.current?.stream) {
+      micRef.current.stream.getTracks().forEach(t => t.stop());
+      micRef.current = null;
+    }
+    setMicActive(false);
+    setSk('idle');
+  };
+
+  useEffect(() => {
+    const canvas = canRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const cx = W / 2, cy = H / 2;
+    const scale = W * 0.30;
+
+    const draw = () => {
+      const cfg = CFG[skRef.current];
+      const s = stRef.current;
+      const ls = 0.025;
+      s.amp = lerp(s.amp, cfg.amp, ls * 8);
+      s.spd = lerp(s.spd, cfg.spd, ls * 6);
+      s.col = [
+        lerpArr(s.col[0], cfg.r, ls * 1.5),
+        lerpArr(s.col[1], cfg.g, ls * 1.5),
+        lerpArr(s.col[2], cfg.b, ls * 1.5),
+      ];
+      // Read mic volume and drive amp
+      if (micRef.current) {
+        const { analyser, dataArray } = micRef.current;
+        analyser.getByteFrequencyData(dataArray);
+        // Simple: average all bins, normalize 0-1
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const avg = sum / dataArray.length;
+        const vol = avg / 255;
+
+        if (vol > 0.02) {
+          s.amp = lerp(s.amp, 0.08 + vol * 1.2, 0.4);
+          s.spd = lerp(s.spd, 1.0 + vol * 5.0, 0.2);
+          setSk(vol > 0.15 ? 'recognizing' : 'listening');
+        } else {
+          s.amp = lerp(s.amp, 0.004, 0.10);
+          s.spd = lerp(s.spd, 0.12, 0.10);
+          setSk('idle');
+        }
+      }
+
+      s.t    += 0.016 * s.spd;
+      s.rotY += 0.008;
+      s.rotX  = 0.22 + Math.sin(s.t * 0.15) * 0.06;
+
+      // Clear
+      ctx.clearRect(0, 0, W, H);
+
+      // Precompute rotation matrix (Y then X)
+      const cy_ = Math.cos(s.rotY), sy = Math.sin(s.rotY);
+      const cx_ = Math.cos(s.rotX), sx = Math.sin(s.rotX);
+
+      // Project + sort by z
+      const project = (pt, orig) => {
+        const d = 1.0 + sn(orig.x, orig.y, orig.z, s.t) * s.amp;
+        const px = orig.x * d, py = orig.y * d, pz = orig.z * d;
+        // Rotate Y
+        const rx  =  px * cy_ + pz * sy;
+        const ry0 = py;
+        const rz  = -px * sy + pz * cy_;
+        // Rotate X
+        const ry  = ry0 * cx_ - rz * sx;
+        const rz2 = ry0 * sx  + rz * cx_;
+        return { sx: cx + rx * scale, sy: cy - ry * scale, z: rz2 };
+      };
+
+      const allPts = [
+        ...BASE_PTS.map(p  => ({ p, orig: p,  inner: false })),
+        ...BASE_PTS2.map(p => ({ p, orig: p,  inner: true  })),
+      ].map(({ p, orig, inner }) => {
+        const proj = project(p, orig);
+        return { ...proj, inner };
+      });
+
+      // Sort back-to-front
+      allPts.sort((a, b) => a.z - b.z);
+
+      // Draw
+      for (const pt of allPts) {
+        const depth = (pt.z + 1.5) / 3.0; // 0..1
+        const t = depth;
+        const r = Math.round(lerp(s.col[0][0], s.col[0][2], t));
+        const g = Math.round(lerp(s.col[1][0], s.col[1][2], t));
+        const b = Math.round(lerp(s.col[2][0], s.col[2][2], t));
+        const alpha = 0.25 + depth * 0.75;
+        const dotR  = pt.inner
+          ? (0.4 + depth * 0.5)
+          : (0.6 + depth * 0.8 + s.amp * 2);
+
+        ctx.beginPath();
+        ctx.arc(pt.sx, pt.sy, dotR, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`;
+        ctx.fill();
+      }
+
+      rafRef.current = requestAnimationFrame(draw);
+    };
+
+    draw();
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  const cfg = CFG[sk];
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:16 }}>
+      {/* Canvas + glow */}
+      <div style={{ position:'relative', width:420, height:420 }}>
+        <div style={{
+          position:'absolute', top:'50%', left:'50%',
+          transform:'translate(-50%,-50%)',
+          width:240, height:240, borderRadius:'50%',
+          background: cfg.glow, filter:'blur(36px)',
+          transition:'background 1s ease',
+          pointerEvents:'none',
+        }} />
+        <canvas ref={canRef} width={420} height={420}
+          style={{ position:'relative', display:'block', width:420, height:420, cursor:'pointer' }}
+          onClick={() => { if(micActive) stopMic(); else startMic(); }} />
+      </div>
+
+
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<VoiceBall />);
+</script>
+</body>
+</html>

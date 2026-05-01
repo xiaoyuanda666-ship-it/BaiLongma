@@ -147,7 +147,7 @@ body {
   flex-direction: column;
   overflow: hidden auto;
   overscroll-behavior: contain;
-  transition: background 0.6s ease, border-color 0.6s ease;
+  transition: background 0.6s ease, border-color 0.6s ease, transform 0.38s cubic-bezier(0.4,0,0.2,1);
 }
 
 #panel-l1 { left: 20px; }
@@ -634,6 +634,7 @@ body {
   right: 402px;
   bottom: 24px;
   z-index: 4;
+  transition: left 0.38s cubic-bezier(0.4,0,0.2,1), right 0.38s cubic-bezier(0.4,0,0.2,1);
   display: flex;
   flex-direction: column;
   border-radius: 14px;
@@ -1033,14 +1034,300 @@ body {
   background: transparent;
 }
 
+/* ── Settings button ── */
+.settings-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+.settings-btn:hover { color: var(--ink); background: var(--line); }
+
+/* ── Settings modal ── */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.settings-overlay[hidden] { display: none; }
+
+.settings-modal {
+  width: 360px;
+  max-width: calc(100vw - 40px);
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg1);
+  backdrop-filter: blur(24px);
+  padding: 0 0 6px;
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-title {
+  font-size: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink2);
+}
+
+.settings-close {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 16px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.settings-close:hover { color: var(--ink); }
+
+.settings-section {
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-section:last-child { border-bottom: none; }
+
+.settings-section-label {
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--warm);
+  margin-bottom: 12px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.settings-label {
+  font-size: 11px;
+  color: var(--ink2);
+  min-width: 68px;
+  flex-shrink: 0;
+}
+
+.settings-value {
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--ink);
+}
+
+.settings-select,
+.settings-input {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg0);
+  color: var(--ink);
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.settings-select:focus,
+.settings-input:focus { border-color: var(--cool); }
+
+.settings-row-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.settings-save-btn {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.settings-save-btn:hover { background: var(--line); }
+.settings-save-btn:disabled { opacity: 0.45; cursor: default; }
+
+.settings-feedback {
+  font-size: 11px;
+  color: var(--cool);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+.settings-feedback.error { color: var(--warm); }
+
+.settings-config-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.settings-config-type {
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--ink2);
+  width: 32px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.settings-config-info {
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--ink);
+  flex: 1;
+}
+
+.settings-config-dot {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.settings-config-dot.active  { color: var(--cool); }
+.settings-config-dot.inactive { color: var(--dim); }
+
+/* ═══════════════ 面板折叠 tab 按钮 ═══════════════ */
+
+.panel-tab {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  width: 20px;
+  height: 60px;
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--line-strong);
+  color: var(--dim);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+  transition:
+    left 0.38s cubic-bezier(0.4,0,0.2,1),
+    right 0.38s cubic-bezier(0.4,0,0.2,1),
+    color 0.18s ease,
+    background 0.18s ease,
+    border-color 0.18s ease,
+    background 0.6s ease;
+}
+
+.panel-tab:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 85%, var(--cool) 15%);
+  border-color: color-mix(in srgb, var(--cool) 40%, transparent);
+}
+
+/* 左面板 tab：紧贴面板右边缘，右侧圆角 */
+.panel-tab-left {
+  left: 382px;
+  border-radius: 0 8px 8px 0;
+  border-left: none;
+}
+
+/* 右面板 tab：紧贴面板左边缘，左侧圆角 */
+.panel-tab-right {
+  right: 382px;
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+
+/* 箭头：CSS content 根据状态自动切换方向 */
+.panel-tab-left::before  { content: "‹"; }
+.panel-tab-right::before { content: "›"; }
+
+/* ═══════════════ 折叠状态 ═══════════════ */
+
+body.l1-collapsed #panel-l1 {
+  transform: translateX(calc(-100% - 20px));
+}
+body.l1-collapsed .panel-tab-left {
+  left: 0;
+}
+body.l1-collapsed .panel-tab-left::before {
+  content: "›";
+}
+body.l1-collapsed .console {
+  left: 24px;
+}
+
+body.l2-collapsed #panel-l2 {
+  transform: translateX(calc(100% + 20px));
+}
+body.l2-collapsed .panel-tab-right {
+  right: 0;
+}
+body.l2-collapsed .panel-tab-right::before {
+  content: "‹";
+}
+body.l2-collapsed .console {
+  right: 24px;
+}
+
 @media (max-width: 1180px) {
   .panel { width: 300px; }
   #panel-l2 { right: 20px; }
   .console { left: 340px; right: 340px; }
+  .panel-tab-left  { left: 320px; }
+  .panel-tab-right { right: 320px; }
+  body.l1-collapsed .console { left: 24px; }
+  body.l2-collapsed .console { right: 24px; }
 }
 
 @media (max-width: 900px) {
   .panel { width: 260px; }
   .console { left: 300px; right: 300px; }
+  .panel-tab-left  { left: 280px; }
+  .panel-tab-right { right: 280px; }
+  body.l1-collapsed .console { left: 16px; }
+  body.l2-collapsed .console { right: 16px; }
+}
+
+@media (max-width: 780px) {
+  .panel { display: none; }
+  .panel-tab { display: none; }
+  .console { left: 16px; right: 16px; }
+  .theme-switcher { bottom: 16px; right: 16px; }
 }
 

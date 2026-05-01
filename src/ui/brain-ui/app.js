@@ -1,6 +1,10 @@
 ﻿import { renderBrainUiApp } from "./app-shell.js";
+import { API } from "./api-client.js";
+import { bootstrapACUI } from "./acui/bootstrap.js";
+import { initChat } from "./chat.js";
+import { initPanelCollapse } from "./panel-collapse.js";
+import { ThoughtStream } from "./thought-stream.js";
 renderBrainUiApp(document.body);
-const API = "http://localhost:3721";
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";
@@ -31,9 +35,13 @@ const updateCardEl = document.getElementById("update-card");
 const updateCloseBtn = document.getElementById("update-close-btn");
 
 let agentName = DEFAULT_AGENT_NAME;
-let inputLocked = false;
 let removeUpdaterStatusListener = null;
 let currentUiZoom = DEFAULT_UI_ZOOM;
+let chat = null;
+
+function addMsg(...args) { return chat?.addMsg(...args); }
+function openChat(...args) { return chat?.openChat(...args); }
+function isTyping() { return chat?.isTyping() || false; }
 
 function defaultInputPlaceholder() {
   return `向 ${agentName} 发送消息…`;
@@ -145,7 +153,7 @@ function setAgentName(nextName) {
   if (brandNameEl) brandNameEl.textContent = `${normalized} AI Agent`;
   if (graphEl) graphEl.setAttribute("aria-label", `${normalized} memory graph`);
   const input = document.getElementById("msg-input");
-  if (input && !inputLocked) input.placeholder = defaultInputPlaceholder();
+  if (input && !chat?.isComposerLocked?.()) input.placeholder = defaultInputPlaceholder();
   document.querySelectorAll(".msg-jarvis .msg-label").forEach((el) => {
     el.textContent = normalized;
   });
@@ -506,7 +514,7 @@ const sim = d3.forceSimulation()
   .force("y", d3.forceY(H / 2 - 10))
   .force("radial", d3.forceRadial(180, W / 2, H / 2 - 10))
   .force("collision", d3.forceCollide())
-  .alphaDecay(0.02)
+  .alphaDecay(0.028)
   .velocityDecay(0.3)
   .on("tick", tick);
 
@@ -671,8 +679,6 @@ function tick() {
   nodeSel
     .attr("cx", d => d.x)
     .attr("cy", d => d.y);
-
-  refreshNodeVisuals();
 }
 
 function computeDegrees() {
@@ -1022,52 +1028,8 @@ function addNewNodes(memories) {
   highlightNodes(newNids, 10000);
 }
 
-setInterval(() => naturalTwitch(), 3000);
+setInterval(() => naturalTwitch(), 6000);
 setInterval(() => { nodeData.forEach(n => { if (n._strength) n._strength *= 0.97; }); }, 2500);
-
-const TOOL_ZH = {
-  send_message: "发送消息",
-  express: "表达",
-  read_file: "读取文件",
-  write_file: "写入文件",
-  delete_file: "删除文件",
-  make_dir: "创建目录",
-  list_dir: "查看目录",
-  exec_command: "执行命令",
-  kill_process: "终止进程",
-  list_processes: "列出进程",
-  web_search: "搜索网页",
-  fetch_url: "抓取网页",
-  browser_read: "浏览器读取网页",
-  search_memory: "检索记忆",
-  set_tick_interval: "调整节奏",
-  speak: "朗读",
-  generate_lyrics: "生成歌词",
-  generate_music: "生成音乐",
-  generate_image: "生成图片",
-};
-
-const TOOL_ICON = {
-  send_message: "💬",
-  express: "🗣️",
-  read_file: "📄",
-  write_file: "✏️",
-  delete_file: "🗑️",
-  make_dir: "📁",
-  list_dir: "📂",
-  exec_command: "⚡",
-  kill_process: "🛑",
-  list_processes: "📋",
-  web_search: "🔎",
-  fetch_url: "🌐",
-  browser_read: "🧭",
-  search_memory: "🔍",
-  set_tick_interval: "⏱️",
-  speak: "🔊",
-  generate_lyrics: "🎵",
-  generate_music: "🎼",
-  generate_image: "🎨",
-};
 
 function parseUserMessageInput(raw) {
   const text = String(raw || "");
@@ -1085,330 +1047,14 @@ function formatMsgTime(stamp) {
   return null;
 }
 
-function isFailureResult(resultStr) {
-  const t = (resultStr || "").trim();
-  if (!t) return false;
-  return /^(错误|失败|异常)[：:]/.test(t) || /^Error\b/i.test(t) || /^ERROR\b/.test(t);
-}
-
-class ThoughtStream {
-  constructor(innerId, color, options = {}) {
-    this.el = document.getElementById(innerId);
-    this.scroller = this.el?.parentElement || null;
-    this.color = color;
-    this.thinkingLabel = options.thinkingLabel || "思考中";
-    this.thinkingDoneLabel = options.thinkingDoneLabel || null;
-    this.toolDetailLength = options.toolDetailLength || 160;
-    this.startedAt = Date.now();
-    this.curLine = null;
-    this.thinkingEl = null;
-    this.lastToolEl = null;
-    this.statusEl = null;
-    this.hadToolCall = false;
-    this.toolFailed = false;
-  }
-
-  tStamp() {
-    const d = new Date();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    const ss = String(d.getSeconds()).padStart(2, "0");
-    return `${hh}:${mm}:${ss}`;
-  }
-
-  trim() {
-    if (!this.scroller) return;
-    while (this.el.children.length > 1 && this.scroller.scrollHeight > this.scroller.clientHeight + 4) {
-      this.el.firstChild?.remove();
-    }
-  }
-
-  newLine(type = "stream", options = {}) {
-    // 关闭上一条工具的旋转动画
-    this.finalizeLastTool();
-    this.thinkingLine = null;
-    this.statusEl = null;
-    this.hadToolCall = false;
-    this.toolFailed = false;
-
-    this.curLine = document.createElement("div");
-    this.curLine.className = "stream-line";
-
-    const color = readCSSVar(`--${this.color}`);
-    const timeLabel = options.time || this.tStamp();
-
-    const header = document.createElement("div");
-    header.className = "line-header";
-    header.innerHTML = `
-      <span class="line-dot" style="background:${color}"></span>
-      <span class="line-type" style="color:${color}"></span>
-      <span class="line-time"></span>
-    `;
-    header.querySelector(".line-type").textContent = type;
-    header.querySelector(".line-time").textContent = timeLabel;
-    this.curLine.appendChild(header);
-
-    if (options.content) {
-      const textEl = document.createElement("div");
-      textEl.className = "line-text";
-      textEl.textContent = options.content;
-      this.curLine.appendChild(textEl);
-    }
-
-    this.thinkingEl = null;
-
-    this.el.appendChild(this.curLine);
-    this.trim();
-    this.scrollToLatest();
-  }
-
-  scrollToLatest() {
-    if (!this.scroller) return;
-    requestAnimationFrame(() => {
-      this.scroller.scrollTop = this.scroller.scrollHeight;
-    });
-  }
-
-  setStatus(text, kind = "busy") {
-    if (!this.curLine) this.newLine(this.thinkingLabel);
-    const header = this.curLine.querySelector(".line-header");
-    if (!header) return;
-    if (!this.statusEl || !this.statusEl.parentElement) {
-      this.statusEl = document.createElement("span");
-      this.statusEl.className = "line-status";
-      const timeEl = header.querySelector(".line-time");
-      header.insertBefore(this.statusEl, timeEl || null);
-    }
-    this.statusEl.className = `line-status ${kind}`.trim();
-    this.statusEl.textContent = text;
-  }
-
-  clearStatus() {
-    if (this.statusEl && this.statusEl.parentElement) {
-      this.statusEl.remove();
-    }
-    this.statusEl = null;
-  }
-
-  // 开启一轮思考：若本轮已有思考行，则复用该行并恢复动画
-  startThinkingSession() {
-    if (this.thinkingLine && this.thinkingLine.parentElement) {
-      this.curLine = this.thinkingLine;
-      const typeSpan = this.curLine.querySelector(".line-type");
-      if (typeSpan) typeSpan.textContent = this.thinkingLabel;
-      const timeSpan = this.curLine.querySelector(".line-time");
-      if (timeSpan) timeSpan.textContent = this.tStamp();
-    } else {
-      this.newLine(this.thinkingLabel);
-      this.thinkingLine = this.curLine;
-    }
-    this.clearStatus();
-    this.startThinking();
-  }
-
-  // 思考中动画：仅显示动画圆点；标签通过 line-type 呈现
-  startThinking() {
-    if (!this.curLine) {
-      this.newLine(this.thinkingLabel);
-      this.thinkingLine = this.curLine;
-    }
-    if (this.thinkingEl) return;
-    const el = document.createElement("div");
-    el.className = "line-thinking";
-    el.style.color = readCSSVar(`--${this.color}`);
-    el.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
-    this.curLine.appendChild(el);
-    this.thinkingEl = el;
-    this.scrollToLatest();
-  }
-
-  stopThinking() {
-    if (this.thinkingEl) {
-      this.thinkingEl.classList.add("done");
-      if (this.thinkingDoneLabel) {
-        const line = this.thinkingEl.parentElement;
-        const typeSpan = line && line.querySelector(".line-type");
-        if (typeSpan) typeSpan.textContent = this.thinkingDoneLabel;
-      }
-    }
-    this.thinkingEl = null;
-    this.clearStatus();
-  }
-
-  parseJsonResult(result) {
-    try {
-      const parsed = JSON.parse(String(result || ""));
-      return parsed && typeof parsed === "object" ? parsed : null;
-    } catch {
-      return null;
-    }
-  }
-
-  hostFromUrl(url) {
-    try {
-      return new URL(String(url || "")).hostname.replace(/^www\./, "");
-    } catch {
-      return "";
-    }
-  }
-
-  compactText(text, max = 180) {
-    const compact = String(text || "").replace(/\s+/g, " ").trim();
-    return compact.length > max ? compact.slice(0, max) + "…" : compact;
-  }
-
-  formatWebSearchDetail(payload) {
-    const results = Array.isArray(payload.results) ? payload.results : [];
-    if (payload.ok === false) {
-      return `搜索失败：${payload.error || "没有拿到结果"}。关键词：${payload.query || "未提供"}`;
-    }
-
-    const lines = [`关键词：${payload.query || "未提供"}；找到 ${results.length} 条结果。`];
-    results.slice(0, 3).forEach((item, index) => {
-      const host = this.hostFromUrl(item.url);
-      const title = this.compactText(item.title || item.url || "未命名结果", 70);
-      const snippet = this.compactText(item.snippet || "", 90);
-      lines.push(`${index + 1}. ${title}${host ? `（${host}）` : ""}${snippet ? `：${snippet}` : ""}`);
-    });
-    return lines.join(" ");
-  }
-
-  formatFetchUrlDetail(payload) {
-    const host = this.hostFromUrl(payload.url);
-    if (payload.ok === false) {
-      const status = payload.status ? `HTTP ${payload.status}` : (payload.error || "请求失败");
-      if (payload.error === "no readable content extracted") {
-        return `未读到正文：页面能打开${host ? `（${host}）` : ""}，但只拿到空白、等待页或反爬验证内容。建议换一个可直接访问的来源。`;
-      }
-      return `读取失败：${status}${host ? `；来源：${host}` : ""}。${payload.hint ? this.compactText(payload.hint, 90) : "可以换一个可访问来源。"}`;
-    }
-
-    const title = this.compactText(payload.title || host || payload.url || "网页", 80);
-    const content = this.compactText(payload.content || "", 220);
-    return `已读取：${title}${host ? `（${host}）` : ""}。${content || "页面能打开，但没有提取到可用正文。"}`;
-  }
-
-  formatBrowserReadDetail(payload) {
-    const host = this.hostFromUrl(payload.final_url || payload.url);
-    if (payload.ok === false) {
-      if (payload.error === "no readable content rendered") {
-        return `浏览器已打开页面${host ? `（${host}）` : ""}，但仍未读到正文；可能需要登录、验证码或阻止自动化访问。建议换来源。`;
-      }
-      return `浏览器读取失败${host ? `（${host}）` : ""}：${this.compactText(payload.error || "页面无法渲染", 120)}`;
-    }
-
-    const title = this.compactText(payload.title || host || payload.final_url || payload.url || "网页", 80);
-    const content = this.compactText(payload.content || "", 240);
-    return `浏览器已读取：${title}${host ? `（${host}）` : ""}。${content || "页面已渲染，但没有提取到可用正文。"}`;
-  }
-
-  formatToolDetail(name, result) {
-    const parsed = this.parseJsonResult(result);
-    if (parsed?.tool === "web_search" || name === "web_search") return this.formatWebSearchDetail(parsed || {});
-    if (parsed?.tool === "fetch_url" || name === "fetch_url") return this.formatFetchUrlDetail(parsed || {});
-    if (parsed?.tool === "browser_read" || name === "browser_read") return this.formatBrowserReadDetail(parsed || {});
-
-    const trimmed = String(result ?? "").trim();
-    return this.compactText(trimmed.replace(/\s+/g, " "), this.toolDetailLength);
-  }
-
-  finalizeLastTool() {
-    if (this.lastToolEl) {
-      this.lastToolEl.classList.add("done");
-      this.lastToolEl = null;
-    }
-  }
-
-  // 显示中文工具名 + 图标 + 成功/失败状态 + 结果摘要
-  tool(name, args, result, ok = undefined) {
-    if (!this.curLine) this.newLine("工具调用");
-    this.finalizeLastTool();
-
-    const zh = TOOL_ZH[name] || name;
-    const icon = TOOL_ICON[name] || "🔧";
-    const resultStr = result == null ? "" : String(result);
-    const failure = ok === false || (ok !== true && isFailureResult(resultStr));
-    this.hadToolCall = true;
-    this.toolFailed = this.toolFailed || failure;
-    const statusCls = failure ? "failed" : "success";
-    const statusIcon = failure ? "✗" : "✓";
-    const statusLabel = failure ? "失败" : "成功";
-
-    const toolEl = document.createElement("div");
-    toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = readCSSVar(`--${this.color}`);
-
-    const iconSpan = document.createElement("span");
-    iconSpan.className = "tool-icon";
-    iconSpan.textContent = icon;
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "tool-name";
-    nameSpan.textContent = zh;
-    const statusSpan = document.createElement("span");
-    statusSpan.className = `tool-status ${statusCls}`;
-    statusSpan.textContent = `${statusIcon} ${statusLabel}`;
-    toolEl.appendChild(iconSpan);
-    toolEl.appendChild(nameSpan);
-    toolEl.appendChild(statusSpan);
-    this.curLine.appendChild(toolEl);
-
-    const detailText = this.formatToolDetail(name, resultStr);
-    if (detailText) {
-      const detail = document.createElement("div");
-      detail.className = "line-tool-detail";
-      detail.textContent = detailText;
-      this.curLine.appendChild(detail);
-    }
-
-    this.scrollToLatest();
-    this.lastToolEl = null;
-  }
-
-  appendToolCycleEnd() {
-    if (!this.curLine) return;
-
-    const toolEl = document.createElement("div");
-    const statusCls = this.toolFailed ? "failed" : "ended";
-    toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = readCSSVar(`--${this.color}`);
-
-    const iconSpan = document.createElement("span");
-    iconSpan.className = "tool-icon";
-    iconSpan.textContent = this.toolFailed ? "⚠" : "◎";
-
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "tool-name";
-    nameSpan.textContent = this.hadToolCall ? "工具调用结束" : "本轮结束";
-
-    const statusSpan = document.createElement("span");
-    statusSpan.className = `tool-status ${statusCls}`;
-    statusSpan.textContent = this.toolFailed ? "已结束" : "完成";
-
-    toolEl.appendChild(iconSpan);
-    toolEl.appendChild(nameSpan);
-    toolEl.appendChild(statusSpan);
-    this.curLine.appendChild(toolEl);
-    this.scrollToLatest();
-  }
-
-  end() {
-    this.stopThinking();
-    this.finalizeLastTool();
-    this.clearStatus();
-    this.appendToolCycleEnd();
-    this.curLine = null;
-    this.thinkingLine = null;
-    this.hadToolCall = false;
-    this.toolFailed = false;
-  }
-}
-
 const L1 = new ThoughtStream("si-l1", "cool", {
+  readCSSVar,
   thinkingLabel: "正在思考中",
   thinkingDoneLabel: "思考完成",
   toolDetailLength: 140,
 });
 const L2 = new ThoughtStream("si-l2", "warm", {
+  readCSSVar,
   thinkingLabel: "思考中",
   thinkingDoneLabel: "思考完成",
   toolDetailLength: 220,
@@ -1554,416 +1200,13 @@ function handle({ type, data = {} }) {
   }
 }
 
-const chatHistory = document.getElementById("chat-history");
-const chatMessages = document.getElementById("chat-messages");
-const msgInput = document.getElementById("msg-input");
-const chatArea = document.getElementById("chat-area");
-const sendBtn = document.getElementById("send-btn");
-
-let closeTimer = null;
-let hasPendingJarvisMessage = false;
-let pendingMessageDismissed = false;
-let audioCtx = null;
-let warmupTimer = null;
-
-function setComposerLocked(locked, reason = "") {
-  inputLocked = locked;
-  msgInput.disabled = locked;
-  sendBtn.disabled = locked;
-  msgInput.placeholder = locked ? (reason || "系统正在准备中…") : defaultInputPlaceholder();
-}
-
-function releaseWarmupLock() {
-  if (warmupTimer) {
-    clearTimeout(warmupTimer);
-    warmupTimer = null;
-  }
-  try { sessionStorage.removeItem(ACTIVATION_WARMUP_KEY); } catch {}
-  setComposerLocked(false);
-}
-
-function applyActivationWarmupLock() {
-  let until = 0;
-  try {
-    until = Number(sessionStorage.getItem(ACTIVATION_WARMUP_KEY) || 0);
-  } catch {}
-
-  const remaining = until - Date.now();
-  if (remaining <= 0) {
-    releaseWarmupLock();
-    return;
-  }
-
-  const seconds = Math.max(1, Math.ceil(remaining / 1000));
-  setComposerLocked(true, `系统刚激活，正在准备模型…约 ${seconds}s`);
-  if (warmupTimer) clearTimeout(warmupTimer);
-  warmupTimer = setTimeout(releaseWarmupLock, remaining);
-}
-
-function isHoveringChat() {
-  return chatArea.matches(":hover") || chatHistory.matches(":hover") || chatMessages.matches(":hover");
-}
-
-function ensureAudioContext() {
-  if (!audioCtx) {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
-    try { audioCtx = new AudioCtx(); } catch { return null; }
-  }
-  return audioCtx;
-}
-
-function unlockAudioOnFirstGesture() {
-  const unlock = () => {
-    const ctx = ensureAudioContext();
-    if (ctx && ctx.state === "suspended") {
-      ctx.resume().catch(() => {});
-    }
-    window.removeEventListener("pointerdown", unlock, true);
-    window.removeEventListener("keydown", unlock, true);
-    window.removeEventListener("touchstart", unlock, true);
-  };
-  window.addEventListener("pointerdown", unlock, true);
-  window.addEventListener("keydown", unlock, true);
-  window.addEventListener("touchstart", unlock, true);
-}
-
-async function playJarvisAlert() {
-  const ctx = ensureAudioContext();
-  if (!ctx) return;
-  try { if (ctx.state === "suspended") await ctx.resume(); } catch { return; }
-  if (ctx.state !== "running") return;
-  const now = ctx.currentTime;
-  const master = ctx.createGain();
-  master.gain.setValueAtTime(0.0001, now);
-  master.gain.exponentialRampToValueAtTime(0.3, now + 0.02);
-  master.gain.exponentialRampToValueAtTime(0.18, now + 0.28);
-  master.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
-  master.connect(ctx.destination);
-
-  const oscA = ctx.createOscillator();
-  oscA.type = "sine";
-  oscA.frequency.setValueAtTime(740, now);
-  oscA.frequency.exponentialRampToValueAtTime(880, now + 0.18);
-  oscA.connect(master);
-
-  const oscB = ctx.createOscillator();
-  oscB.type = "triangle";
-  oscB.frequency.setValueAtTime(1110, now + 0.12);
-  oscB.frequency.exponentialRampToValueAtTime(1320, now + 0.34);
-  oscB.connect(master);
-
-  oscA.start(now); oscA.stop(now + 0.32);
-  oscB.start(now + 0.12); oscB.stop(now + 0.5);
-
-  oscA.addEventListener("ended", () => oscA.disconnect(), { once: true });
-  oscB.addEventListener("ended", () => oscB.disconnect(), { once: true });
-  setTimeout(() => master.disconnect(), 700);
-}
-
-function isTyping() {
-  return document.activeElement === msgInput || msgInput.value.trim().length > 0;
-}
-
-async function fetchChatHistory() {
-  try {
-    const res = await fetch(`${API}/conversations?limit=${MAX_CHAT_HISTORY}`);
-    if (!res.ok) return [];
-    const rows = await res.json();
-    if (!Array.isArray(rows)) return [];
-    return rows
-      .filter(r => r && (r.role === "user" || r.role === "jarvis") && typeof r.content === "string")
-      .map(r => {
-        if (r.role === "user" && r.from_id && r.from_id !== "ID:000001") {
-          return { role: "external", text: r.content, label: r.from_id };
-        }
-        return { role: r.role, text: r.content };
-      });
-  } catch { return []; }
-}
-
-function openChat(autoClose = false) {
-  chatHistory.classList.add("open");
-  if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-  if (autoClose && (!hasPendingJarvisMessage || pendingMessageDismissed) && !isTyping()) scheduleClose(4500);
-}
-
-function closeChat() {
-  if ((hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
-  chatHistory.classList.remove("open");
-}
-
-function scheduleClose(ms = 100) {
-  if ((hasPendingJarvisMessage && !pendingMessageDismissed) || isTyping() || isHoveringChat()) return;
-  if (closeTimer) clearTimeout(closeTimer);
-  closeTimer = setTimeout(closeChat, ms);
-}
-
-chatArea.addEventListener("mouseenter", () => {
-  if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-  openChat();
-});
-chatArea.addEventListener("mouseleave", () => scheduleClose());
-msgInput.addEventListener("focus", () => openChat());
-msgInput.addEventListener("blur", () => { if (!isTyping()) scheduleClose(); });
-msgInput.addEventListener("input", () => {
-  if (isTyping()) openChat();
-  else if (!hasPendingJarvisMessage || pendingMessageDismissed) scheduleClose();
-});
-
-function escapeHtml(text) {
-  return String(text ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-function escapeAttr(text) {
-  return escapeHtml(text).replace(/`/g, "&#96;");
-}
-
-function safeHref(rawUrl) {
-  const url = String(rawUrl ?? "").trim();
-  if (!url) return "";
-  if (/^(https?:|mailto:)/i.test(url)) return url;
-  if (url.startsWith("/") || url.startsWith("#")) return url;
-  return "";
-}
-
-function renderInlineMarkdown(text) {
-  const codeTokens = [];
-  let html = String(text ?? "").replace(/`([^`]+)`/g, (_, code) => {
-    const token = `%%CODETOKEN${codeTokens.length}%%`;
-    codeTokens.push(`<code>${escapeHtml(code)}</code>`);
-    return token;
-  });
-
-  html = escapeHtml(html);
-  html = html.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_, label, href) => {
-    const safeUrl = safeHref(href);
-    if (!safeUrl) return label;
-    return `<a href="${escapeAttr(safeUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  });
-  html = html.replace(/(\*\*|__)(.+?)\1/g, "<strong>$2</strong>");
-  html = html.replace(/(\*|_)(.+?)\1/g, "<em>$2</em>");
-
-  codeTokens.forEach((token, index) => {
-    html = html.replaceAll(`%%CODETOKEN${index}%%`, token);
-  });
-
-  return html;
-}
-
-function renderMarkdown(text) {
-  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
-  const parts = [];
-  let paragraph = [];
-  let listType = null;
-  let listItems = [];
-  let quoteLines = [];
-  let codeFence = null;
-  let codeLines = [];
-
-  function flushParagraph() {
-    if (!paragraph.length) return;
-    parts.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
-    paragraph = [];
-  }
-
-  function flushList() {
-    if (!listType || !listItems.length) return;
-    const tag = listType === "ol" ? "ol" : "ul";
-    parts.push(`<${tag}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</${tag}>`);
-    listType = null;
-    listItems = [];
-  }
-
-  function flushQuote() {
-    if (!quoteLines.length) return;
-    parts.push(`<blockquote>${quoteLines.map(line => renderInlineMarkdown(line)).join("<br>")}</blockquote>`);
-    quoteLines = [];
-  }
-
-  function flushCode() {
-    if (codeFence === null) return;
-    const langClass = codeFence ? ` class="language-${escapeAttr(codeFence)}"` : "";
-    parts.push(`<pre><code${langClass}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-    codeFence = null;
-    codeLines = [];
-  }
-
-  for (const line of lines) {
-    const fenceMatch = line.match(/^```([\w-]+)?\s*$/);
-    if (fenceMatch) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      if (codeFence !== null) flushCode();
-      else codeFence = fenceMatch[1] || "";
-      continue;
-    }
-
-    if (codeFence !== null) {
-      codeLines.push(line);
-      continue;
-    }
-
-    if (!line.trim()) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      continue;
-    }
-
-    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
-    if (headingMatch) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const level = headingMatch[1].length;
-      parts.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
-      continue;
-    }
-
-    const quoteMatch = line.match(/^>\s?(.*)$/);
-    if (quoteMatch) {
-      flushParagraph();
-      flushList();
-      quoteLines.push(quoteMatch[1]);
-      continue;
-    }
-    flushQuote();
-
-    const ulMatch = line.match(/^[-*+]\s+(.+)$/);
-    if (ulMatch) {
-      flushParagraph();
-      if (listType && listType !== "ul") flushList();
-      listType = "ul";
-      listItems.push(ulMatch[1]);
-      continue;
-    }
-
-    const olMatch = line.match(/^\d+\.\s+(.+)$/);
-    if (olMatch) {
-      flushParagraph();
-      if (listType && listType !== "ol") flushList();
-      listType = "ol";
-      listItems.push(olMatch[1]);
-      continue;
-    }
-
-    flushList();
-    paragraph.push(line);
-  }
-
-  flushParagraph();
-  flushList();
-  flushQuote();
-  flushCode();
-
-  return parts.join("");
-}
-
-function createMarkdownBody(text) {
-  const body = document.createElement("div");
-  body.className = "msg-body";
-  body.innerHTML = renderMarkdown(text);
-  return body;
-}
-
-function addMsg(role, text, options = {}) {
-  const { alert = role === "jarvis", pending = true, label } = options;
-  const defaultLabel = role === "user" ? "You" : role === "jarvis" ? agentName : "Peer";
-  const labelText = label || defaultLabel;
-  const div = document.createElement("div");
-  div.className = `msg msg-${role}`;
-  const labelSpan = document.createElement("span");
-  labelSpan.className = "msg-label";
-  labelSpan.textContent = labelText;
-  div.appendChild(labelSpan);
-  div.appendChild(createMarkdownBody(text));
-  chatMessages.appendChild(div);
-
-  while (chatMessages.children.length > MAX_CHAT_HISTORY) {
-    chatMessages.removeChild(chatMessages.firstChild);
-  }
-
-  if (role === "jarvis") {
-    hasPendingJarvisMessage = pending;
-    pendingMessageDismissed = !pending;
-    if (alert) playJarvisAlert();
-    if (pending) openChat();
-  } else if (role === "user") {
-    hasPendingJarvisMessage = false;
-    pendingMessageDismissed = false;
-  }
-
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
-
-async function restoreChatHistory() {
-  const history = await fetchChatHistory();
-  history.forEach(i => addMsg(i.role, i.text, { persist: false, alert: false, pending: false, label: i.label }));
-  if (history.length) {
-    pendingMessageDismissed = true;
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-}
-
-async function send() {
-  if (inputLocked) return;
-  const text = msgInput.value.trim();
-  if (!text) return;
-  msgInput.value = "";
-  addMsg("user", text);
-  openChat();
-  scheduleClose(1000);
-
-  try {
-    await fetch(`${API}/message`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text, from_id: "ID:000001" }),
-    });
-  } catch (error) {
-    console.warn("[send]", error.message);
-    addMsg("jarvis", "消息发送失败，请检查本地服务是否启动。");
-    openChat(true);
-  }
-}
-
-sendBtn.addEventListener("click", send);
 resetViewBtn.addEventListener("click", resetZoom);
-msgInput.addEventListener("keydown", event => {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    send();
-  }
-});
 
 document.querySelectorAll(".panel, .console, .theme-switcher, .reset-view").forEach(el => {
   el.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
 });
 
 physicsControl.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
-
-document.addEventListener("pointerdown", event => {
-  if (chatArea.contains(event.target)) return;
-  if (hasPendingJarvisMessage && !isTyping()) {
-    pendingMessageDismissed = true;
-    closeChat();
-    return;
-  }
-  if (!isTyping()) {
-    if (closeTimer) {
-      clearTimeout(closeTimer);
-      closeTimer = null;
-    }
-    chatHistory.classList.remove("open");
-  }
-});
 
 window.addEventListener("resize", () => {
   W = window.innerWidth;
@@ -1977,8 +1220,12 @@ window.addEventListener("resize", () => {
   sim.alpha(5).restart();
 });
 
+let _lastVisualRefresh = 0;
 d3.timer(() => {
   if (glowSet.size === 0 && usePulseSet.size === 0) return;
+  const now = Date.now();
+  if (now - _lastVisualRefresh < 48) return;
+  _lastVisualRefresh = now;
   refreshNodeVisuals();
 });
 
@@ -1987,16 +1234,26 @@ initUiZoom();
 readPhysicsSettings();
 updatePhysicsReadout();
 refreshThemeColors();
-applyActivationWarmupLock();
+chat = initChat({
+  apiBase: API,
+  maxHistory: MAX_CHAT_HISTORY,
+  activationWarmupKey: ACTIVATION_WARMUP_KEY,
+  getAgentName: () => agentName,
+  defaultInputPlaceholder,
+});
+chat.applyActivationWarmupLock();
 loadMemories();
 setInterval(() => {
   loadMemories();
 }, 5 * 60 * 1000);
 connectSSE();
 loadAgentProfile();
-restoreChatHistory();
+chat.restoreChatHistory();
 initUpdaterUi();
-unlockAudioOnFirstGesture();
+chat.unlockAudioOnFirstGesture();
+
+bootstrapACUI();
+initPanelCollapse();
 
 window.addEventListener("beforeunload", () => {
   if (typeof removeUpdaterStatusListener === "function") {
@@ -2004,3 +1261,168 @@ window.addEventListener("beforeunload", () => {
     removeUpdaterStatusListener = null;
   }
 });
+
+// ── Settings modal ──
+(function initSettings() {
+  const settingsBtn     = document.getElementById("settings-btn");
+  const overlay         = document.getElementById("settings-overlay");
+  const closeBtn        = document.getElementById("settings-close");
+  const currentModel    = document.getElementById("settings-current-model");
+  const providerSelect  = document.getElementById("settings-provider-select");
+  const modelSelect     = document.getElementById("settings-model-select");
+  const llmKeyInput     = document.getElementById("settings-llm-key");
+  const saveLlmBtn      = document.getElementById("settings-save-llm");
+  const llmFeedback     = document.getElementById("settings-llm-feedback");
+  const minimaxStatus   = document.getElementById("settings-minimax-status");
+  const minimaxKeyInput = document.getElementById("settings-minimax-key");
+  const saveMinimaxBtn  = document.getElementById("settings-save-minimax");
+  const minimaxFeedback = document.getElementById("settings-minimax-feedback");
+
+  if (!settingsBtn || !overlay) return;
+
+  let cachedProviders = null;
+
+  function showFeedback(el, msg, isError = false) {
+    el.textContent = msg;
+    el.className = "settings-feedback" + (isError ? " error" : "");
+    setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
+  }
+
+  function refreshConfigSummary({ llm, minimax }) {
+    const cfgLlm = document.getElementById("settings-cfg-llm");
+    const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
+    const cfgMedia = document.getElementById("settings-cfg-media");
+    const cfgMediaDot = document.getElementById("settings-cfg-media-dot");
+
+    if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"}`;
+    if (cfgLlmDot) {
+      cfgLlmDot.textContent = "●";
+      cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
+      cfgLlmDot.title = llm.activated ? "运行中" : "未激活";
+    }
+    if (cfgMedia) cfgMedia.textContent = `minimax · ${minimax.configured ? "已配置" : "未配置"}`;
+    if (cfgMediaDot) {
+      cfgMediaDot.textContent = "●";
+      cfgMediaDot.className = `settings-config-dot ${minimax.configured ? "active" : "inactive"}`;
+    }
+  }
+
+  function populateModelSelect(models, currentModel) {
+    if (!modelSelect || !models) return;
+    modelSelect.innerHTML = models
+      .map(m => `<option value="${m.id}"${m.deprecated ? " data-deprecated" : ""}>${m.label}</option>`)
+      .join("");
+    if (currentModel) modelSelect.value = currentModel;
+  }
+
+  async function loadSettings() {
+    try {
+      const data = await fetch(`${API}/settings`).then(r => r.json());
+      const { llm, minimax, providers } = data;
+
+      if (providers) cachedProviders = providers;
+
+      refreshConfigSummary({ llm, minimax });
+
+      if (currentModel) currentModel.textContent = llm.model || "—";
+
+      if (providerSelect && llm.provider) {
+        providerSelect.value = llm.provider;
+      }
+
+      populateModelSelect(llm.models, llm.model);
+
+      if (minimaxStatus) {
+        minimaxStatus.textContent = minimax.configured ? "✓ 已配置" : "未配置";
+        minimaxStatus.style.color = minimax.configured ? "var(--cool)" : "var(--dim)";
+      }
+    } catch {}
+  }
+
+  function openSettings() {
+    overlay.hidden = false;
+    loadSettings();
+  }
+
+  function closeSettings() {
+    overlay.hidden = true;
+    llmKeyInput.value = "";
+    minimaxKeyInput.value = "";
+    llmFeedback.textContent = "";
+    minimaxFeedback.textContent = "";
+  }
+
+  settingsBtn.addEventListener("click", openSettings);
+  closeBtn.addEventListener("click", closeSettings);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeSettings(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) closeSettings(); });
+
+  if (providerSelect) {
+    providerSelect.addEventListener("change", () => {
+      const provider = providerSelect.value;
+      if (cachedProviders && cachedProviders[provider]) {
+        populateModelSelect(cachedProviders[provider].models, null);
+      }
+    });
+  }
+
+  saveLlmBtn.addEventListener("click", async () => {
+    const model = modelSelect.value;
+    const apiKey = llmKeyInput.value.trim();
+    const provider = providerSelect ? providerSelect.value : "deepseek";
+    saveLlmBtn.disabled = true;
+    try {
+      let res, data;
+      if (apiKey) {
+        res = await fetch(`${API}/activate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider, apiKey, model }),
+        });
+      } else {
+        res = await fetch(`${API}/settings/model`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model }),
+        });
+      }
+      data = await res.json();
+      if (data.ok) {
+        showFeedback(llmFeedback, "已保存");
+        llmKeyInput.value = "";
+        loadSettings();
+      } else {
+        showFeedback(llmFeedback, data.error || "保存失败", true);
+      }
+    } catch (err) {
+      showFeedback(llmFeedback, "请求失败", true);
+    } finally {
+      saveLlmBtn.disabled = false;
+    }
+  });
+
+  saveMinimaxBtn.addEventListener("click", async () => {
+    const apiKey = minimaxKeyInput.value.trim();
+    if (!apiKey) { showFeedback(minimaxFeedback, "Key 不能为空", true); return; }
+    saveMinimaxBtn.disabled = true;
+    try {
+      const res = await fetch(`${API}/settings/minimax`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showFeedback(minimaxFeedback, "已保存");
+        minimaxKeyInput.value = "";
+        loadSettings();
+      } else {
+        showFeedback(minimaxFeedback, data.error || "保存失败", true);
+      }
+    } catch {
+      showFeedback(minimaxFeedback, "请求失败", true);
+    } finally {
+      saveMinimaxBtn.disabled = false;
+    }
+  });
+})();
