@@ -120,3 +120,10 @@ export function stopVoiceServer() {
   statusMessage = '已停止'
   return getVoiceStatus()
 }
+
+export function restartVoiceServer(model = 'small') {
+  stopVoiceServer()
+  // 给进程一点时间完全退出，再用新模型启动
+  setTimeout(() => startVoiceServer({ model }), 500)
+  return getVoiceStatus()
+}

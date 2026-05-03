@@ -20,7 +20,7 @@ import { seedSandboxOnce } from './paths.js'
 import { ensureSkillMemories } from './memory/seed-skills.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
-import { startVoiceServer, stopVoiceServer } from './voice/manager.js'
+import { stopVoiceServer } from './voice/manager.js'
 
 // 首次启动时把资源目录里的 sandbox 种子文件拷到用户数据目录（Electron 安装场景）
 seedSandboxOnce()
@@ -929,14 +929,8 @@ async function main() {
   })
   startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
-  // 自动启动语音服务（turbo 模型 = large-v3-turbo，~809MB，首次运行自动下载）
-  // 用 try-catch 隔离，确保语音服务失败不影响主程序
-  try {
-    startVoiceServer({ model: 'turbo' })
-    process.on('exit', () => { try { stopVoiceServer() } catch {} })
-  } catch (err) {
-    console.warn('[Voice] 语音服务启动失败（不影响主程序）:', err.message)
-  }
+  // 语音服务不再自动启动，由用户在设置 → 语音识别 → 本地 Whisper 中手动开启
+  globalThis.process.on('exit', () => { try { stopVoiceServer() } catch {} })
 
   // 启动 TUI
   startTUI('ID:000001')

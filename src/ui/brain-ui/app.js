@@ -17,7 +17,8 @@ const MIN_UI_ZOOM = 0.8;
 const MAX_UI_ZOOM = 1.8;
 const UI_ZOOM_STEP = 0.1;
 const UI_ZOOM_WHEEL_STEP = 0.05;
-const MEMORY_GRAPH_ENABLED = false;
+const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
+const MEMORY_GRAPH_ENABLED = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) === "true";
 
 const themeSwitcher = document.getElementById("theme-switcher");
 const resetViewBtn = document.getElementById("reset-view-btn");
@@ -1274,6 +1275,7 @@ chat = initChat({
 });
 chat.applyActivationWarmupLock();
 if (MEMORY_GRAPH_ENABLED) {
+  if (graphEl) graphEl.style.display = "block";
   loadMemories();
   setInterval(() => {
     loadMemories();
@@ -1491,16 +1493,60 @@ window.addEventListener("beforeunload", () => {
   const VOICE_LANG_KEY       = "bailongma-voice-lang";
   const VOICE_AUTO_SEND_KEY  = "bailongma-voice-auto-send";
   const VOICE_THRESHOLD_KEY  = "bailongma-voice-threshold";
+  const VOICE_MODE_KEY       = "bailongma-voice-mode";
+  const VOICE_PROVIDER_KEY   = "bailongma-voice-provider";
 
-  function loadVoiceSettings() {
+  function applyVoiceModeUI(mode) {
+    const localSection = document.getElementById("voice-local-section");
+    const cloudSection = document.getElementById("voice-cloud-section");
+    if (localSection) localSection.style.display = mode === "local" ? "" : "none";
+    if (cloudSection) cloudSection.style.display = mode === "cloud" ? "" : "none";
+  }
+
+  function applyVoiceProviderUI(provider) {
+    const panels = { aliyun: "voice-cred-aliyun", tencent: "voice-cred-tencent", xunfei: "voice-cred-xunfei" };
+    for (const [key, id] of Object.entries(panels)) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = key === provider ? "" : "none";
+    }
+  }
+
+  const voiceModeSelect    = document.getElementById("voice-mode-select");
+  const voiceProviderSelect = document.getElementById("voice-provider-select");
+  if (voiceModeSelect) {
+    voiceModeSelect.addEventListener("change", () => applyVoiceModeUI(voiceModeSelect.value));
+  }
+  if (voiceProviderSelect) {
+    voiceProviderSelect.addEventListener("change", () => applyVoiceProviderUI(voiceProviderSelect.value));
+  }
+
+  async function loadVoiceSettings() {
     const langSelect = document.getElementById("voice-lang-select");
     const autoSend   = document.getElementById("voice-auto-send");
     if (langSelect) langSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
     if (autoSend) autoSend.checked = localStorage.getItem(VOICE_AUTO_SEND_KEY) !== "false";
-    // threshold 滑块
     const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
     if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
     if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
+
+    const savedMode = localStorage.getItem(VOICE_MODE_KEY) || "browser";
+    const savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
+    if (voiceModeSelect) voiceModeSelect.value = savedMode;
+    if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
+    applyVoiceModeUI(savedMode);
+    applyVoiceProviderUI(savedProvider);
+
+    // 从后端加载 whisper model 及凭证状态
+    try {
+      const resp = await fetch("http://127.0.0.1:3721/settings/voice");
+      if (resp.ok) {
+        const data = await resp.json();
+        const vc = data?.voice || {};
+        const modelEl = document.getElementById("voice-whisper-model");
+        if (modelEl && vc.whisperModel) modelEl.value = vc.whisperModel;
+      }
+    } catch {}
+    refreshWhisperSvcStatus?.();
   }
 
   if (voiceThreshSlider && voiceThreshVal) {
@@ -1509,17 +1555,153 @@ window.addEventListener("beforeunload", () => {
     });
   }
 
+  let whisperReloadPoller = null;
+  function pollWhisperReload(statusEl, statusRow) {
+    if (whisperReloadPoller) return;
+    if (statusRow) statusRow.style.display = "";
+    if (statusEl) statusEl.textContent = "加载中…";
+    whisperReloadPoller = setInterval(async () => {
+      try {
+        const resp = await fetch("http://127.0.0.1:3721/voice/status");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const s = data?.voice?.status;
+        if (statusEl) statusEl.textContent = s === "running" ? "就绪" : s === "error" ? "加载失败" : "加载中…";
+        if (s === "running" || s === "error" || s === "stopped") {
+          clearInterval(whisperReloadPoller);
+          whisperReloadPoller = null;
+          if (s === "running") setTimeout(() => { if (statusRow) statusRow.style.display = "none"; }, 3000);
+        }
+      } catch {}
+    }, 2000);
+  }
+
   if (saveVoiceBtn) {
-    saveVoiceBtn.addEventListener("click", () => {
+    saveVoiceBtn.addEventListener("click", async () => {
       const lang      = document.getElementById("voice-lang-select")?.value || "zh-CN";
       const autoSend  = document.getElementById("voice-auto-send")?.checked ?? true;
       const threshold = parseFloat(voiceThreshSlider?.value ?? "0.008");
-      localStorage.setItem(VOICE_LANG_KEY, lang);
-      localStorage.setItem(VOICE_AUTO_SEND_KEY, String(autoSend));
-      localStorage.setItem(VOICE_THRESHOLD_KEY, String(threshold));
-      showFeedback(voiceFeedback, "已保存，下次启动语音后生效");
-      // 广播给 voice-panel.js
+      const mode      = voiceModeSelect?.value || "local";
+      const provider  = voiceProviderSelect?.value || "aliyun";
+
+      localStorage.setItem(VOICE_LANG_KEY,      lang);
+      localStorage.setItem(VOICE_AUTO_SEND_KEY,  String(autoSend));
+      localStorage.setItem(VOICE_THRESHOLD_KEY,  String(threshold));
+      localStorage.setItem(VOICE_MODE_KEY,       mode);
+      localStorage.setItem(VOICE_PROVIDER_KEY,   provider);
+
       window.dispatchEvent(new CustomEvent("bailongma:voice-threshold", { detail: { threshold } }));
+      window.dispatchEvent(new CustomEvent("bailongma:voice-mode", { detail: { mode } }));
+
+      // 将凭证 + whisper 模型发送到后端
+      const body = {};
+      const whisperModel = document.getElementById("voice-whisper-model")?.value;
+      if (whisperModel) body.whisperModel = whisperModel;
+      const aliyunKey = document.getElementById("voice-aliyun-key")?.value?.trim();
+      if (aliyunKey) body.aliyunApiKey = aliyunKey;
+      const tencentSid = document.getElementById("voice-tencent-sid")?.value?.trim();
+      if (tencentSid) body.tencentSecretId = tencentSid;
+      const tencentSkey = document.getElementById("voice-tencent-skey")?.value?.trim();
+      if (tencentSkey) body.tencentSecretKey = tencentSkey;
+      const tencentAppid = document.getElementById("voice-tencent-appid")?.value?.trim();
+      if (tencentAppid) body.tencentAppId = tencentAppid;
+      const xunfeiAppid = document.getElementById("voice-xunfei-appid")?.value?.trim();
+      if (xunfeiAppid) body.xunfeiAppId = xunfeiAppid;
+      const xunfeiApikey = document.getElementById("voice-xunfei-apikey")?.value?.trim();
+      if (xunfeiApikey) body.xunfeiApiKey = xunfeiApikey;
+
+      if (Object.keys(body).length > 0) {
+        try {
+          saveVoiceBtn.disabled = true;
+          const resp = await fetch("http://127.0.0.1:3721/settings/voice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (!resp.ok) throw new Error("保存失败");
+          // 若更换了 whisper 模型，轮询加载状态
+          if (body.whisperModel) {
+            const statusEl  = document.getElementById("voice-whisper-status");
+            const statusRow = document.getElementById("voice-whisper-status-row");
+            pollWhisperReload(statusEl, statusRow);
+          }
+          // 清空密钥输入框（避免再次保存时误传旧值）
+          ["voice-aliyun-key","voice-tencent-sid","voice-tencent-skey","voice-xunfei-apikey"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = "";
+          });
+          showFeedback(voiceFeedback, "已保存");
+        } catch { showFeedback(voiceFeedback, "保存失败", true); }
+        finally { saveVoiceBtn.disabled = false; }
+      } else {
+        showFeedback(voiceFeedback, "已保存");
+      }
+    });
+  }
+
+  // ── 记忆节点图开关 ──
+  const memoryGraphToggle = document.getElementById("settings-memory-graph-toggle");
+  const memoryGraphFeedback = document.getElementById("settings-memory-graph-feedback");
+  if (memoryGraphToggle) {
+    memoryGraphToggle.checked = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) === "true";
+    memoryGraphToggle.addEventListener("change", () => {
+      localStorage.setItem(MEMORY_GRAPH_STORAGE_KEY, String(memoryGraphToggle.checked));
+      if (memoryGraphFeedback) {
+        memoryGraphFeedback.textContent = "下次刷新页面后生效";
+        memoryGraphFeedback.className = "settings-feedback";
+        setTimeout(() => { memoryGraphFeedback.textContent = ""; }, 3000);
+      }
+    });
+  }
+
+  // ── 本地 Whisper 服务手动启动 ──
+  const startWhisperBtn = document.getElementById("voice-start-whisper-btn");
+  const whisperSvcStatus = document.getElementById("voice-whisper-svc-status");
+
+  async function refreshWhisperSvcStatus() {
+    if (!whisperSvcStatus) return;
+    try {
+      const resp = await fetch("http://127.0.0.1:3721/voice/status");
+      if (!resp.ok) { whisperSvcStatus.textContent = "未运行"; whisperSvcStatus.dataset.state = "stopped"; return; }
+      const data = await resp.json();
+      const s = data?.voice?.status || "stopped";
+      const labels = { running: "运行中", starting: "加载中…", stopped: "未运行", error: "错误" };
+      whisperSvcStatus.textContent = labels[s] || s;
+      whisperSvcStatus.dataset.state = s;
+      if (startWhisperBtn) startWhisperBtn.disabled = s === "running" || s === "starting";
+    } catch {
+      whisperSvcStatus.textContent = "未运行";
+      whisperSvcStatus.dataset.state = "stopped";
+      if (startWhisperBtn) startWhisperBtn.disabled = false;
+    }
+  }
+
+  if (startWhisperBtn) {
+    startWhisperBtn.addEventListener("click", async () => {
+      const modelEl = document.getElementById("voice-whisper-model");
+      const model = modelEl?.value || "small";
+      startWhisperBtn.disabled = true;
+      if (whisperSvcStatus) { whisperSvcStatus.textContent = "启动中…"; whisperSvcStatus.dataset.state = "starting"; }
+      try {
+        const resp = await fetch("http://127.0.0.1:3721/voice/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model }),
+        });
+        if (!resp.ok) throw new Error("启动失败");
+        const statusEl  = document.getElementById("voice-whisper-status");
+        const statusRow = document.getElementById("voice-whisper-status-row");
+        pollWhisperReload(statusEl, statusRow);
+        // 同步更新服务状态指示
+        const poll = setInterval(async () => {
+          await refreshWhisperSvcStatus();
+          const s = whisperSvcStatus?.dataset?.state;
+          if (s === "running" || s === "error" || s === "stopped") clearInterval(poll);
+        }, 2000);
+      } catch {
+        if (whisperSvcStatus) { whisperSvcStatus.textContent = "启动失败"; whisperSvcStatus.dataset.state = "error"; }
+        startWhisperBtn.disabled = false;
+      }
     });
   }
 

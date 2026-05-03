@@ -170,6 +170,15 @@ const createSettingsModal = () => `
             <div class="settings-section-label">主题</div>
             ${createThemeSwitcher()}
           </div>
+          <div class="settings-section">
+            <div class="settings-section-label">记忆节点图</div>
+            <p class="settings-hint">开启后在背景显示记忆节点力导向图，会占用额外 CPU/GPU 资源，低配设备建议关闭。修改后需刷新页面生效。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-memory-graph-toggle">显示记忆节点图</label>
+              <input id="settings-memory-graph-toggle" type="checkbox" style="width:auto;flex:none;">
+              <span class="settings-feedback" id="settings-memory-graph-feedback" style="margin-left:8px;"></span>
+            </div>
+          </div>
         </div>
 
         <!-- ── LLM 模型 tab ── -->
@@ -320,8 +329,85 @@ const createSettingsModal = () => `
         <!-- ── 语音 tab ── -->
         <div class="settings-tab" data-tab="voice">
           <div class="settings-section">
-            <div class="settings-section-label">语音输入</div>
-            <p class="settings-hint">点击下方麦克风按钮后，识别结果自动填入对话框并发送。</p>
+            <div class="settings-section-label">识别模式</div>
+            <div class="settings-row">
+              <label class="settings-label" for="voice-mode-select">模式选择</label>
+              <select class="settings-select" id="voice-mode-select">
+                <option value="browser">浏览器内置（默认）</option>
+                <option value="local">本地 Whisper（离线高精度）</option>
+                <option value="cloud">云端 API</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-section" id="voice-local-section">
+            <div class="settings-section-label">本地模式配置</div>
+            <p class="settings-hint">本地 Whisper 服务需手动启动，会占用较多 CPU 资源（低配笔记本会发热），建议按需开启。切换模型后需重新加载（10–60 秒）。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="voice-whisper-model">Whisper 模型</label>
+              <select class="settings-select" id="voice-whisper-model">
+                <option value="tiny">tiny（最快，精度低）</option>
+                <option value="base">base</option>
+                <option value="small">small（推荐）</option>
+                <option value="medium">medium</option>
+                <option value="large">large（最慢，精度高）</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label">服务状态</label>
+              <span id="voice-whisper-svc-status" style="color:var(--ink2);font-size:13px;" data-state="stopped">未运行</span>
+              <button class="settings-save-btn" id="voice-start-whisper-btn" type="button" style="margin-left:8px;padding:2px 10px;font-size:12px;">启动服务</button>
+            </div>
+            <div class="settings-row" id="voice-whisper-status-row" style="display:none;">
+              <label class="settings-label">加载进度</label>
+              <span id="voice-whisper-status" style="color:var(--ink2);font-size:13px;">就绪</span>
+            </div>
+          </div>
+
+          <div class="settings-section" id="voice-cloud-section" style="display:none;">
+            <div class="settings-section-label">云端模式配置</div>
+            <div class="settings-row">
+              <label class="settings-label" for="voice-provider-select">服务商</label>
+              <select class="settings-select" id="voice-provider-select">
+                <option value="aliyun">阿里云百炼（推荐）</option>
+                <option value="tencent">腾讯云 ASR</option>
+                <option value="xunfei">科大讯飞 RTASR</option>
+              </select>
+            </div>
+            <div id="voice-cred-aliyun">
+              <div class="settings-row">
+                <label class="settings-label" for="voice-aliyun-key">阿里云 API Key</label>
+                <input class="settings-input" type="password" id="voice-aliyun-key" placeholder="留空则不修改">
+              </div>
+            </div>
+            <div id="voice-cred-tencent" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="voice-tencent-sid">SecretId</label>
+                <input class="settings-input" type="password" id="voice-tencent-sid" placeholder="留空则不修改">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="voice-tencent-skey">SecretKey</label>
+                <input class="settings-input" type="password" id="voice-tencent-skey" placeholder="留空则不修改">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="voice-tencent-appid">AppId</label>
+                <input class="settings-input" type="text" id="voice-tencent-appid" placeholder="腾讯云 AppId">
+              </div>
+            </div>
+            <div id="voice-cred-xunfei" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="voice-xunfei-appid">AppId</label>
+                <input class="settings-input" type="text" id="voice-xunfei-appid" placeholder="讯飞 AppId">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="voice-xunfei-apikey">ApiKey</label>
+                <input class="settings-input" type="password" id="voice-xunfei-apikey" placeholder="留空则不修改">
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-label">通用设置</div>
             <div class="settings-row">
               <label class="settings-label" for="voice-lang-select">识别语言</label>
               <select class="settings-select" id="voice-lang-select">
@@ -334,6 +420,7 @@ const createSettingsModal = () => `
               <input id="voice-auto-send" type="checkbox" checked style="width:auto;flex:none;">
             </div>
           </div>
+
           <div class="settings-section">
             <div class="settings-section-label">语音灵敏度</div>
             <p class="settings-hint">调节麦克风触发阈值。越低越灵敏，越高越需要大声说话。默认 0.008。</p>
@@ -343,6 +430,7 @@ const createSettingsModal = () => `
               <span id="settings-voice-threshold-val" style="min-width:3.5em;text-align:right;color:var(--ink2);font-size:13px;">0.008</span>
             </div>
           </div>
+
           <div class="settings-section settings-section-action">
             <button class="settings-save-btn" id="settings-save-voice" type="button">保存</button>
             <span class="settings-feedback" id="settings-voice-feedback"></span>

@@ -34,12 +34,15 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function lerpArr(a, b, t) { return a.map((v, i) => lerp(v, b[i], t)); }
 
 // ─── 状态配置 ───
+// idle = 麦克风关闭（灰色）  listening = 麦克风开启待命（白色）
+// recognizing = 正在识别（蓝色）  done = 识别完成（绿色，2s 后回 listening）
 const STATE_CFG = {
-  idle:        { amp: 0.004, spd: 0.12, r: [60,80,90],    g: [70,85,95],    b: [90,100,115]  },
-  listening:   { amp: 0.45,  spd: 3.00, r: [30,120,220],  g: [100,180,255], b: [220,240,255] },
-  recognizing: { amp: 0.80,  spd: 5.00, r: [50,140,255],  g: [130,210,255], b: [230,245,255] },
+  idle:        { amp: 0.003, spd: 0.10, r: [50,68,80],    g: [50,68,80],    b: [55,73,85]   },
+  listening:   { amp: 0.055, spd: 0.75, r: [185,215,245], g: [185,215,245], b: [195,225,255] },
+  recognizing: { amp: 0.55,  spd: 4.50, r: [25,75,165],   g: [95,155,230],  b: [195,230,255] },
+  done:        { amp: 0.10,  spd: 1.20, r: [30,105,65],   g: [145,200,135], b: [45,90,60]   },
   processing:  { amp: 0.15,  spd: 1.10, r: [100,60,200],  g: [80,60,180],   b: [220,190,255] },
-  error:       { amp: 0.10,  spd: 0.70, r: [120,210,255], g: [10,25,40],    b: [10,25,40]    },
+  error:       { amp: 0.10,  spd: 0.70, r: [200,240,255], g: [20,30,40],    b: [20,30,40]   },
   event:       { amp: 0.60,  spd: 4.00, r: [255,200,50],  g: [200,160,30],  b: [50,80,150]   },
 };
 
@@ -59,7 +62,10 @@ const SOUND_EVENT_ICONS = {
 
 const VOICE_WS_PORT = 3723;
 const VOICE_WS_URL  = `ws://127.0.0.1:${VOICE_WS_PORT}`;
+const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
 const VOICE_THRESHOLD_KEY = 'bailongma-voice-threshold';
+const VOICE_MODE_KEY     = 'bailongma-voice-mode';
+const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
 
 // 从 localStorage 读取灵敏度阈值，支持运行时动态修改
 function getVoiceThreshold() {
@@ -105,8 +111,18 @@ export function initVoicePanel({
   };
   let rafId = null;
   let eventFlashCount = 0;
+  let doneTimer = null;
 
   function setStatus(newSk) { sk = newSk; }
+
+  function triggerDone() {
+    setStatus('done');
+    if (doneTimer) clearTimeout(doneTimer);
+    doneTimer = setTimeout(() => {
+      doneTimer = null;
+      if (sk === 'done') setStatus(micActive ? 'listening' : 'idle');
+    }, 2000);
+  }
 
   function drawFrame() {
     resizeCanvasToDisplay();
@@ -130,7 +146,7 @@ export function initVoicePanel({
         s.amp = lerp(s.amp, 0.08 + vol * 1.2, 0.4);
         s.spd = lerp(s.spd, 1.0 + vol * 5.0, 0.2);
         if (sk !== 'recognizing' && sk !== 'event') setStatus(vol > 0.15 ? 'recognizing' : 'listening');
-      } else if (sk !== 'idle' && sk !== 'event' && sk !== 'processing') {
+      } else if (sk !== 'idle' && sk !== 'event' && sk !== 'processing' && sk !== 'done') {
         setStatus('idle');
       }
     }
@@ -198,6 +214,10 @@ export function initVoicePanel({
   let whisperAudioCtx = null;
   let whisperProcessor = null;
   let whisperWs = null;
+  // Cloud 专用
+  let cloudAudioCtx = null;
+  let cloudProcessor = null;
+  let cloudWs = null;
   // Browser 模式
   let recognition = null;
 
@@ -206,24 +226,21 @@ export function initVoicePanel({
   let mode = 'browser';
 
   async function detectMode() {
+    const stored = localStorage.getItem(VOICE_MODE_KEY);
+    if (stored === 'cloud') { mode = 'cloud'; return; }
+    if (stored === 'browser') { mode = 'browser'; return; }
+
+    // local：尝试连接本地 Whisper 服务，若未运行则回退到 browser
     try {
       const resp = await fetch('http://127.0.0.1:3721/voice/status');
       if (resp.ok) {
         const data = await resp.json();
         const voiceStatus = data?.voice?.status;
-        if (voiceStatus === 'running') {
-          // 服务已完全就绪（模型加载完毕、WebSocket 监听中）
-          mode = 'whisper';
-          return;
-        }
-        if (voiceStatus === 'starting') {
-          // 模型仍在加载，不尝试 WebSocket 连接，直接回退 browser
-          mode = 'browser';
-          return;
-        }
+        if (voiceStatus === 'running') { mode = 'whisper'; return; }
+        if (voiceStatus === 'starting') { mode = 'browser'; return; }
       }
     } catch {}
-    // 状态 API 不可达时（独立启动场景）：直接探测 WebSocket 端口是否可达
+    // 状态 API 不可达时：直接探测 WebSocket 端口
     try {
       const ws = new WebSocket(`ws://127.0.0.1:${VOICE_WS_PORT}`);
       await new Promise((resolve) => {
@@ -295,6 +312,7 @@ export function initVoicePanel({
       if (final) {
         const input = getChatInput?.();
         if (input) input.value = final;
+        triggerDone();
         if (getAutoSend?.()) {
           setStatus('processing');
           setTimeout(sendRecognizedVoiceText, 100);
@@ -365,6 +383,7 @@ export function initVoicePanel({
           if (msg.is_final) {
             const input = getChatInput?.();
             if (input) input.value = text;
+            triggerDone();
             if (getAutoSend?.()) {
               setStatus('processing');
               setTimeout(sendRecognizedVoiceText, 100);
@@ -465,17 +484,93 @@ export function initVoicePanel({
     } catch {}
     whisperWs = null;
 
-    try {
-      whisperProcessor?.disconnect();
-    } catch {}
+    try { whisperProcessor?.disconnect(); } catch {}
     whisperProcessor = null;
 
+    try { if (whisperAudioCtx) { whisperAudioCtx.close(); whisperAudioCtx = null; } } catch {}
+  }
+
+  // ─── Cloud ASR 模式（后端代理） ───
+  function startCloudStream(stream) {
+    const targetSR = 16000;
+    if (micData?.actx?.sampleRate !== targetSR) {
+      cloudAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: targetSR });
+      const src = cloudAudioCtx.createMediaStreamSource(stream);
+      setupCloudProcessor(src, cloudAudioCtx);
+    } else {
+      setupCloudProcessor(micData.src, micData.actx);
+    }
+
+    cloudWs = new WebSocket(CLOUD_WS_URL);
+    cloudWs.binaryType = 'arraybuffer';
+
+    cloudWs.onopen = () => {
+      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      const lang = getLang?.()?.split('-')[0] || 'zh';
+      cloudWs.send(JSON.stringify({ type: 'config', provider, lang }));
+      setStatus('listening');
+      if (transcript) transcript.textContent = '';
+    };
+
+    cloudWs.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'transcript') {
+          const text = (msg.text || '').trim();
+          if (!text) return;
+          if (transcript) transcript.textContent = text;
+          if (msg.is_final) {
+            const input = getChatInput?.();
+            if (input) input.value = text;
+            triggerDone();
+            if (getAutoSend?.()) {
+              setStatus('processing');
+              setTimeout(sendRecognizedVoiceText, 100);
+            }
+          }
+        } else if (msg.type === 'error') {
+          setStatus('error');
+          if (transcript) transcript.textContent = msg.message || '云端识别错误';
+        }
+      } catch {}
+    };
+
+    cloudWs.onerror = () => { setStatus('error'); };
+    cloudWs.onclose = () => { if (micActive) setStatus('idle'); };
+  }
+
+  function setupCloudProcessor(srcNode, audioCtx) {
+    const bufferSize = 4096;
+    cloudProcessor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+    srcNode.connect(cloudProcessor);
+    cloudProcessor.connect(audioCtx.destination);
+
+    cloudProcessor.onaudioprocess = (e) => {
+      if (!cloudWs || cloudWs.readyState !== WebSocket.OPEN) return;
+      const f32 = e.inputBuffer.getChannelData(0);
+      const i16 = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        i16[i] = Math.max(-32768, Math.min(32767, f32[i] * 32768));
+      }
+      cloudWs.send(i16.buffer);
+    };
+  }
+
+  function stopCloudStream() {
     try {
-      if (whisperAudioCtx) {
-        whisperAudioCtx.close();
-        whisperAudioCtx = null;
+      if (cloudWs && cloudWs.readyState === WebSocket.OPEN) {
+        cloudWs.send(JSON.stringify({ type: 'flush' }));
+        setTimeout(() => { try { cloudWs?.close(); } catch {} }, 200);
+      } else {
+        cloudWs?.close();
       }
     } catch {}
+    cloudWs = null;
+
+    try { cloudProcessor?.disconnect(); } catch {}
+    cloudProcessor = null;
+
+    try { if (cloudAudioCtx) { cloudAudioCtx.close(); cloudAudioCtx = null; } } catch {}
   }
 
   // ─── 统一开关 ───
@@ -491,6 +586,8 @@ export function initVoicePanel({
 
       if (mode === 'whisper') {
         startWhisperStream(stream);
+      } else if (mode === 'cloud') {
+        startCloudStream(stream);
       } else {
         startBrowserRecognition();
       }
@@ -500,12 +597,15 @@ export function initVoicePanel({
   }
 
   function stopVoiceInput({ keepIntent = false, reason = '' } = {}) {
+    if (doneTimer) { clearTimeout(doneTimer); doneTimer = null; }
     micActive = false;
     if (!keepIntent) userWantedMic = false;
     btn?.classList.toggle('active', Boolean(keepIntent && userWantedMic));
 
     if (mode === 'whisper') {
       stopWhisperStream();
+    } else if (mode === 'cloud') {
+      stopCloudStream();
     } else {
       stopBrowserRecognition();
     }
@@ -530,6 +630,8 @@ export function initVoicePanel({
     }
     if (mode === 'whisper') {
       startWhisperStream(stream);
+    } else if (mode === 'cloud') {
+      startCloudStream(stream);
     } else {
       startBrowserRecognition();
     }
@@ -567,6 +669,27 @@ export function initVoicePanel({
     const t = Number(event.detail?.threshold);
     if (!isNaN(t) && t > 0) {
       nearFieldGate.noiseFloor = t * 0.375;
+    }
+  });
+
+  // 语音模式切换（local/cloud），下次点击麦克风时生效
+  window.addEventListener('bailongma:voice-mode', (event) => {
+    const newMode = event.detail?.mode;
+    if (newMode === 'cloud' || newMode === 'local') {
+      localStorage.setItem(VOICE_MODE_KEY, newMode);
+    }
+    // 若麦克风正在运行，停止后重新启动以切换模式
+    if (micActive) {
+      stopVoiceInput({ keepIntent: true });
+      setTimeout(async () => {
+        await detectMode();
+        micActive = true;
+        const stream = await startMic();
+        if (!stream) { micActive = false; userWantedMic = false; btn?.classList.remove('active'); return; }
+        if (mode === 'whisper') startWhisperStream(stream);
+        else if (mode === 'cloud') startCloudStream(stream);
+        else startBrowserRecognition();
+      }, 200);
     }
   });
 

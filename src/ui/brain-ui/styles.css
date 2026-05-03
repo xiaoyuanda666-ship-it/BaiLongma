@@ -1373,6 +1373,11 @@ body {
 .voice-status.recognizing { color: #a0e0ff; }
 .voice-status.processing  { color: #b898f8; }
 
+#voice-whisper-svc-status[data-state="running"]  { color: #6fcf97; }
+#voice-whisper-svc-status[data-state="starting"] { color: #f2c94c; }
+#voice-whisper-svc-status[data-state="error"]    { color: var(--warm); }
+#voice-whisper-svc-status[data-state="stopped"]  { color: var(--ink2); }
+
 .voice-transcript {
   font-size: 11px;
   color: var(--ink2);

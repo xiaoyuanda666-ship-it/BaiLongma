@@ -255,4 +255,16 @@ app.whenReady().then(async () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
     mainWindow.setFullScreen(!mainWindow.isFullScreen())
   })
+
+  // 开发快捷键
+  if (IS_DEV) {
+    globalShortcut.register('F12', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.toggleDevTools()
+    })
+    globalShortcut.register('CommandOrControl+R', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      mainWindow.webContents.reload()
+    })
+  }
 })

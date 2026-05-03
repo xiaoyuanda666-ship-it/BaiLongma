@@ -335,6 +335,32 @@ export function setSocialConfig(updates) {
   writeStoredConfig({ ...existing, social: next })
 }
 
+const VOICE_CONFIG_KEYS = ['whisperModel', 'aliyunApiKey', 'tencentSecretId', 'tencentSecretKey', 'tencentAppId', 'xunfeiAppId', 'xunfeiApiKey', 'xunfeiApiSecret']
+
+export function getVoiceConfig() {
+  let stored = {}
+  try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+  const result = { whisperModel: stored.whisperModel || 'small' }
+  for (const key of VOICE_CONFIG_KEYS.slice(1)) {
+    result[key] = { configured: !!(stored[key]) }
+  }
+  return result
+}
+
+export function setVoiceConfig(updates) {
+  let existing = {}
+  try { existing = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8')) } catch {}
+  const current = existing.voice || {}
+  const next = { ...current }
+  for (const [key, val] of Object.entries(updates)) {
+    if (!VOICE_CONFIG_KEYS.includes(key)) continue
+    const trimmed = String(val || '').trim()
+    if (trimmed) next[key] = trimmed
+    else delete next[key]
+  }
+  writeStoredConfig({ ...existing, voice: next })
+}
+
 export const __internals = {
   DEEPSEEK_MODELS,
   MINIMAX_MODELS,

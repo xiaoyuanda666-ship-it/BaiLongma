@@ -12,14 +12,15 @@ import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 import { paths } from './paths.js'
-import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, DEEPSEEK_MODELS, MINIMAX_MODELS } from './config.js'
+import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getVoiceConfig, setVoiceConfig, DEEPSEEK_MODELS, MINIMAX_MODELS } from './config.js'
 import { restartConnector } from './social/index.js'
 import { replaceProvider } from './providers/registry.js'
 import { persistAppState } from './capabilities/executor.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { handleSocialWebhook, isSocialWebhookPath } from './social/webhooks.js'
 import { getClawbotQR, logoutClawbot } from './social/wechat-clawbot.js'
-import { startVoiceServer, stopVoiceServer, getVoiceStatus } from './voice/manager.js'
+import { startVoiceServer, stopVoiceServer, getVoiceStatus, restartVoiceServer } from './voice/manager.js'
+import { createCloudASRSession } from './voice/cloud-asr.js'
 
 export { emitEvent }
 
@@ -972,7 +973,75 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    // GET /settings/voice — 读取语音配置（凭证只返回 configured 状态）
+    if (req.method === 'GET' && url.pathname === '/settings/voice') {
+      jsonResponse(res, 200, { ok: true, voice: getVoiceConfig() })
+      return
+    }
+
+    // POST /settings/voice — 保存语音配置 { whisperModel?, aliyunApiKey?, ... }
+    if (req.method === 'POST' && url.pathname === '/settings/voice') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          setVoiceConfig(body)
+          // 若更换了 Whisper 模型，热重启语音服务
+          if (body.whisperModel) restartVoiceServer(body.whisperModel)
+          jsonResponse(res, 200, { ok: true, voice: getVoiceConfig() })
+        } catch (err) {
+          jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
     jsonResponse(res, 404, { error: 'not found' })
+  })
+
+  // Cloud ASR ws 通道：前端 PCM → 后端代理 → 云端 ASR
+  const cloudWss = new WebSocketServer({ noServer: true })
+  cloudWss.on('connection', (ws) => {
+    let session = null
+    let configured = false
+
+    ws.on('message', (raw) => {
+      // 第一帧必须是 JSON config 帧
+      if (!configured) {
+        try {
+          const msg = JSON.parse(raw.toString())
+          if (msg.type !== 'config') return
+          // 从 config.json 读取凭证原始值
+          let rawCfg = {}
+          try { rawCfg = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
+          session = createCloudASRSession(
+            { provider: msg.provider || 'aliyun', lang: msg.lang || 'zh', ...rawCfg },
+            (text, isFinal) => {
+              try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal })) } catch {}
+            },
+            (errMsg) => {
+              try { ws.send(JSON.stringify({ type: 'error', message: errMsg })) } catch {}
+            },
+            () => { try { ws.close() } catch {} }
+          )
+          configured = true
+        } catch {}
+        return
+      }
+      // 后续帧为 PCM 二进制
+      if (raw instanceof Buffer) {
+        session?.sendAudio(raw)
+      } else {
+        try {
+          const msg = JSON.parse(raw.toString())
+          if (msg.type === 'flush') session?.flush()
+        } catch {}
+      }
+    })
+
+    ws.on('close', () => { session?.close(); session = null })
+    ws.on('error', () => { session?.close(); session = null })
   })
 
   // ACUI ws 通道：双向控制 + 感知
@@ -1046,6 +1115,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
         return
       }
       acuiWss.handleUpgrade(req, socket, head, (ws) => acuiWss.emit('connection', ws, req))
+    } else if (url.pathname === '/voice/cloud') {
+      cloudWss.handleUpgrade(req, socket, head, (ws) => cloudWss.emit('connection', ws, req))
     } else {
       socket.destroy()
     }
