@@ -41,6 +41,8 @@ function initSchema() {
   try { db.exec(`ALTER TABLE memories ADD COLUMN mem_id TEXT`) } catch {}
   try { db.exec(`ALTER TABLE memories ADD COLUMN links TEXT DEFAULT '[]'`) } catch {}
   try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_mem_id ON memories(mem_id) WHERE mem_id IS NOT NULL`) } catch {}
+  // 迁移：conversations 加 channel 列
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -895,14 +897,14 @@ export function getImpressiveBySource(entityId, limit = 5) {
 // ── 对话记录 ──
 
 // 写入一条对话记录
-export function insertConversation({ role, from_id, to_id = null, content, timestamp }) {
+export function insertConversation({ role, from_id, to_id = null, content, timestamp, channel = '' }) {
   const db = getDB()
   const fromId = normalizeConversationPartyId(from_id)
   const toId = normalizeConversationPartyId(to_id)
   db.prepare(`
-    INSERT INTO conversations (role, from_id, to_id, content, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(role, fromId, toId, content, timestamp)
+    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(role, fromId, toId, content, timestamp, channel || '')
 }
 
 // 获取某个对话对象的最近 N 条消息（用户消息 + Jarvis 回复，按时序）

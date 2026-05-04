@@ -12,7 +12,8 @@ import { getQuotaStatus } from './quota.js'
 import { isRunning, stopLoop, startLoop } from './control.js'
 import { buildHeartbeatSystemPromptPreview } from './system-prompt-preview.js'
 import { paths } from './paths.js'
-import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getVoiceConfig, setVoiceConfig, DEEPSEEK_MODELS, MINIMAX_MODELS } from './config.js'
+import { config, activate as activateLLM, getActivationStatus, switchModel, setTemperature, getMinimaxKey, setMinimaxKey, getSocialConfig, setSocialConfig, getVoiceConfig, setVoiceConfig, getTTSConfig, setTTSConfig, getTTSCredentials, DEEPSEEK_MODELS, MINIMAX_MODELS } from './config.js'
+import { streamTTS, TTS_PROVIDERS, TTS_VOICES } from './voice/tts-providers.js'
 import { restartConnector } from './social/index.js'
 import { replaceProvider } from './providers/registry.js'
 import { persistAppState } from './capabilities/executor.js'
@@ -992,6 +993,68 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           jsonResponse(res, 200, { ok: true, voice: getVoiceConfig() })
         } catch (err) {
           jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // GET /settings/tts — 读取 TTS 配置状态（不返回明文密钥）
+    if (req.method === 'GET' && url.pathname === '/settings/tts') {
+      jsonResponse(res, 200, { ok: true, tts: getTTSConfig(), providers: TTS_PROVIDERS, voices: TTS_VOICES })
+      return
+    }
+
+    // POST /settings/tts — 保存 TTS 配置
+    if (req.method === 'POST' && url.pathname === '/settings/tts') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          setTTSConfig(body)
+          jsonResponse(res, 200, { ok: true, tts: getTTSConfig() })
+        } catch (err) {
+          jsonResponse(res, 400, { ok: false, error: err.message })
+        }
+      })
+      return
+    }
+
+    // POST /tts/stream — 流式 TTS 合成，返回 audio/mpeg 流
+    if (req.method === 'POST' && url.pathname === '/tts/stream') {
+      const chunks = []
+      req.on('data', chunk => chunks.push(chunk))
+      req.on('end', async () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
+          const { text } = body
+          if (!text?.trim()) { jsonResponse(res, 400, { ok: false, error: '缺少 text 参数' }); return }
+          const creds = getTTSCredentials()
+          const audioStream = await streamTTS({
+            text: text.slice(0, 500),
+            provider: creds.provider,
+            voiceId:  body.voiceId || creds.voiceId || undefined,
+            keys: {
+              minimaxKey:    creds.minimaxKey,
+              openaiKey:     creds.openaiKey,
+              openaiBaseURL: creds.openaiBaseURL,
+              elevenLabsKey: creds.elevenLabsKey,
+              volcanoAppId:  creds.volcanoAppId,
+              volcanoToken:  creds.volcanoToken,
+            },
+          })
+          res.writeHead(200, {
+            'Content-Type': 'audio/mpeg',
+            'Transfer-Encoding': 'chunked',
+            'Cache-Control': 'no-cache',
+            'Access-Control-Allow-Origin': '*',
+          })
+          audioStream.pipe(res)
+          audioStream.on('error', () => { try { res.end() } catch {} })
+        } catch (err) {
+          console.warn('[TTS] 流式合成失败:', err.message)
+          if (!res.headersSent) jsonResponse(res, 500, { ok: false, error: err.message })
+          else try { res.end() } catch {}
         }
       })
       return

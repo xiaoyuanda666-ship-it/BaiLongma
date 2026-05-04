@@ -248,7 +248,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'speak',
-      description: '将文字转化为语音，保存为音频文件。这是声音的出口——可以朗读自己的思考、诗句、或任何想用声音表达的内容。文字长度请控制在 500 字以内。',
+      description: '将文字转化为语音，保存为音频文件。仅用于创作性内容（诗句、散文、旁白、歌词朗读等），不要用于普通的对话回复——对话语音回复由系统自动处理，无需调用此工具。文字长度请控制在 500 字以内。',
       parameters: {
         type: 'object',
         properties: {

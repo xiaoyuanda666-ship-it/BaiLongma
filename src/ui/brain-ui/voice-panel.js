@@ -297,11 +297,6 @@ export function initVoicePanel({
     recognition.continuous = false;
     recognition.interimResults = true;
 
-    recognition.onstart = () => {
-      setStatus('listening');
-      if (transcript) transcript.textContent = '';
-    };
-
     recognition.onresult = (e) => {
       let interim = '', final = '';
       for (const result of e.results) {
@@ -325,15 +320,25 @@ export function initVoicePanel({
       if (transcript) transcript.textContent = '';
     };
 
-    recognition.onend = () => {
-      if (!micActive) { setStatus('idle'); return; }
-      if (sk === 'error') {
-        setTimeout(() => { if (micActive) recognition.start(); }, 2000);
-      } else {
-        recognition.start();
-      }
+    let recognitionActive = false;
+
+    recognition.onstart = () => {
+      recognitionActive = true;
+      setStatus('listening');
+      if (transcript) transcript.textContent = '';
     };
 
+    recognition.onend = () => {
+      recognitionActive = false;
+      if (!micActive) { setStatus('idle'); return; }
+      const delay = sk === 'error' ? 2000 : 300;
+      setTimeout(() => {
+        if (!micActive || recognitionActive) return;
+        try { recognition.start(); } catch {}
+      }, delay);
+    };
+
+    recognitionActive = false;
     recognition.start();
   }
 

@@ -1,3 +1,9 @@
 {
-  "clawbot": {}
+  "clawbot": {},
+  "voice": {
+    "whisperModel": "small"
+  },
+  "tts": {
+    "ttsProvider": "minimax"
+  }
 }

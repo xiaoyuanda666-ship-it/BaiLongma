@@ -1225,8 +1225,51 @@ function handle({ type, data = {} }) {
     case "social_status":
       window.dispatchEvent(new CustomEvent("bailongma:social_status", { detail: data }));
       break;
+    case "audio_created":
+      if (data.autoPlay && data.path) {
+        const audioUrl = `${API}/${data.path}`;
+        const audioEl = new Audio(audioUrl);
+        audioEl.play().catch(() => {});
+      }
+      break;
+    case "tts_reply":
+      if (data.text) playTTSReply(data.text);
+      break;
     default:
       break;
+  }
+}
+
+// ── TTS 语音回复播放 ──────────────────────────────────────────────────────────
+let ttsAudioEl = null;
+
+async function playTTSReply(text) {
+  try {
+    const resp = await fetch(`${API}/tts/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) return;
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    if (ttsAudioEl) { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); }
+    ttsAudioEl = new Audio(url);
+    // 播放前暂停语音识别，避免麦克风收到 TTS 音频造成回声
+    window.bailongmaVoice?.suspendForMedia();
+    ttsAudioEl.onended = () => {
+      URL.revokeObjectURL(url);
+      ttsAudioEl = null;
+      // 播放结束后恢复语音识别
+      window.bailongmaVoice?.resumeAfterMedia();
+    };
+    ttsAudioEl.onerror = () => {
+      ttsAudioEl = null;
+      window.bailongmaVoice?.resumeAfterMedia();
+    };
+    ttsAudioEl.play().catch(() => { window.bailongmaVoice?.resumeAfterMedia(); });
+  } catch {
+    window.bailongmaVoice?.resumeAfterMedia();
   }
 }
 
@@ -1289,6 +1332,94 @@ chat.unlockAudioOnFirstGesture();
 
 bootstrapACUI();
 initPanelCollapse();
+
+// ── TTS 设置面板初始化 ────────────────────────────────────────────────────────
+function initTTSSettings() {
+  const providerSel  = document.getElementById("tts-provider-select");
+  const voiceIdInput = document.getElementById("tts-voice-id");
+  const testBtn      = document.getElementById("tts-test-btn");
+  const testStatus   = document.getElementById("tts-test-status");
+  if (!providerSel) return;
+
+  const credSections = {
+    minimax:    document.getElementById("tts-creds-minimax"),
+    openai:     document.getElementById("tts-creds-openai"),
+    elevenlabs: document.getElementById("tts-creds-elevenlabs"),
+    volcano:    document.getElementById("tts-creds-volcano"),
+  };
+
+  function showCredSection(provider) {
+    Object.entries(credSections).forEach(([k, el]) => {
+      if (el) el.style.display = k === provider ? "" : "none";
+    });
+  }
+
+  providerSel.addEventListener("change", () => showCredSection(providerSel.value));
+
+  // 加载现有配置
+  fetch(`${API}/settings/tts`).then(r => r.json()).then(({ tts }) => {
+    if (!tts) return;
+    if (tts.ttsProvider) providerSel.value = tts.ttsProvider;
+    if (tts.ttsVoiceId) voiceIdInput.value = tts.ttsVoiceId;
+    const appidEl = document.getElementById("tts-volcano-appid");
+    if (appidEl && tts.volcanoAppId?.value) appidEl.value = tts.volcanoAppId.value;
+    const baseurlEl = document.getElementById("tts-openai-baseurl");
+    if (baseurlEl && tts.openaiTtsBaseURL) baseurlEl.value = tts.openaiTtsBaseURL;
+    showCredSection(tts.ttsProvider || "minimax");
+  }).catch(() => {});
+
+  showCredSection(providerSel.value);
+
+  // TTS 配置写入 saveVoiceBtn 的保存流程（通过独立请求）
+  const origSaveBtn = document.getElementById("settings-save-voice");
+  if (origSaveBtn) {
+    const origClick = origSaveBtn.onclick;
+    origSaveBtn.addEventListener("click", () => {
+      const ttsBody = { ttsProvider: providerSel.value };
+      const voiceId  = voiceIdInput?.value?.trim();
+      if (voiceId) ttsBody.ttsVoiceId = voiceId;
+      const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
+      if (openaiKey) ttsBody.openaiTtsKey = openaiKey;
+      const baseURL = document.getElementById("tts-openai-baseurl")?.value?.trim();
+      if (baseURL) ttsBody.openaiTtsBaseURL = baseURL;
+      const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
+      if (elevenKey) ttsBody.elevenLabsKey = elevenKey;
+      const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
+      if (volcanoAppId) ttsBody.volcanoAppId = volcanoAppId;
+      const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
+      if (volcanoToken) ttsBody.volcanoToken = volcanoToken;
+
+      fetch(`${API}/settings/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ttsBody),
+      }).then(() => {
+        // 清空密钥输入框
+        ["tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.value = "";
+        });
+      }).catch(() => {});
+    });
+  }
+
+  // 试听按钮
+  if (testBtn) {
+    testBtn.addEventListener("click", async () => {
+      testBtn.disabled = true;
+      if (testStatus) testStatus.textContent = "合成中…";
+      try {
+        await playTTSReply("你好，这是语音合成测试，声音是否清晰自然？");
+        if (testStatus) testStatus.textContent = "播放中";
+        setTimeout(() => { if (testStatus) testStatus.textContent = ""; }, 4000);
+      } catch {
+        if (testStatus) testStatus.textContent = "失败，请检查配置";
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
+}
 
 window.addEventListener("beforeunload", () => {
   if (typeof removeUpdaterStatusListener === "function") {
@@ -1638,6 +1769,9 @@ window.addEventListener("beforeunload", () => {
       }
     });
   }
+
+  // ── TTS 设置 ──
+  initTTSSettings();
 
   // ── 记忆节点图开关 ──
   const memoryGraphToggle = document.getElementById("settings-memory-graph-toggle");

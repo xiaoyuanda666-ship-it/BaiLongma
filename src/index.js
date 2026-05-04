@@ -5,7 +5,7 @@ import { runRecognizer } from './memory/recognizer.js'
 import { runInjector, formatMemoriesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards } from './memory/injector.js'
 import { gatherContext, formatExtraContext } from './context/gatherer.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, markReminderFired, advanceReminderDueAt, getNextPendingReminder, getMemoryCount } from './db.js'
-import { calculateNextDueAt } from './capabilities/executor.js'
+import { calculateNextDueAt, autoSpeakForVoiceReply } from './capabilities/executor.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage, pushMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -204,7 +204,6 @@ function buildToolContextForProcess(msg, injection) {
 }
 
 function formatConversationMessage(row, currentMsg = null) {
-  const timestamp = row.timestamp ? ` ${row.timestamp}` : ''
   if (row.role === 'jarvis') {
     return {
       role: 'assistant',
@@ -218,9 +217,16 @@ function formatConversationMessage(row, currentMsg = null) {
     && row.timestamp === currentMsg.timestamp
     && row.content === currentMsg.content
   const marker = isCurrent ? 'current user message' : 'user message'
+
+  // 时间戳只保留到分钟（去掉秒和时区）
+  const ts = row.timestamp ? row.timestamp.slice(0, 16).replace('T', ' ') : ''
+  const channel = row.channel || (isCurrent && currentMsg?.channel) || ''
+  // TUI/API 是默认渠道，不显示；只显示有意义的渠道
+  const channelLabel = (channel && channel !== 'TUI' && channel !== 'API') ? ` · ${channel}` : ''
+
   return {
     role: 'user',
-    content: `[${marker} from ${row.from_id || 'unknown'}${timestamp}]\n${row.content || ''}`.trim(),
+    content: `[${marker} · ${row.from_id || 'unknown'} · ${ts}${channelLabel}]\n${row.content || ''}`.trim(),
   }
 }
 
@@ -432,6 +438,9 @@ async function process(input, label, msg = null) {
     if (fastUserPath) {
       directions.unshift('当前是外部用户的实时消息。优先尽快理解并通过 send_message 直接回应，不要先做耗时工具调用或深度上下文采集；只有在回复离不开时才调用较重工具。执行过程中，有值得说的进展或发现时随时 send_message 同步——不需要事先请示，能做的直接做，做的过程中有话说就说。')
     }
+    if (msg?.channel === '语音识别') {
+      directions.push('用户本条消息是通过语音输入的，系统会自动将你的回复转为语音播放。请用口语化、简短的方式回复（一两句话为宜），不要使用 Markdown 格式（无列表、无加粗、无标题）。如果内容较多，先口头简要说明，详细内容以文字展示即可。')
+    }
 
     const memoriesText = formatMemoriesForPrompt(injection.memories, injection.recallMemories)
     const directionsText = directions.join('\n')
@@ -568,6 +577,10 @@ async function process(input, label, msg = null) {
             content: cleanedContent,
             timestamp: nowTimestamp(),
           })
+          // 用户用语音输入时，通知前端播放 TTS 语音回复
+          if (msg?.channel === '语音识别') {
+            autoSpeakForVoiceReply(cleanedContent)
+          }
         }
       },
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
@@ -623,6 +636,7 @@ async function process(input, label, msg = null) {
       const timestamp = nowTimestamp()
       const blockedContent = '我刚才没有真正调用工具完成这个操作，所以不能声称已经完成。请重新发送一次，我会先执行对应工具，再基于工具结果回复。'
       console.warn(`[协议兜底] 阻止了一次需要工具但未调用工具的文本回复。from=${msg.fromId}`)
+      if (msg.channel === '语音识别') autoSpeakForVoiceReply(blockedContent)
       emitEvent('message', {
         from: 'consciousness',
         to: msg.fromId,
@@ -651,6 +665,7 @@ async function process(input, label, msg = null) {
     } else if (fallbackContent) {
       const timestamp = nowTimestamp()
       console.warn(`[协议兜底] 模型未调用 send_message，已将正文发给 ${msg.fromId}`)
+      if (msg.channel === '语音识别') autoSpeakForVoiceReply(fallbackContent)
       emitEvent('message', {
         from: 'consciousness',
         to: msg.fromId,

@@ -361,6 +361,58 @@ export function setVoiceConfig(updates) {
   writeStoredConfig({ ...existing, voice: next })
 }
 
+// TTS 配置
+const TTS_CONFIG_KEYS = [
+  'ttsProvider', 'ttsVoiceId',
+  'openaiTtsKey', 'openaiTtsBaseURL',
+  'elevenLabsKey',
+  'volcanoAppId', 'volcanoToken',
+]
+
+export function getTTSConfig() {
+  let stored = {}
+  try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  return {
+    ttsProvider:     stored.ttsProvider  || 'minimax',
+    ttsVoiceId:      stored.ttsVoiceId   || '',
+    openaiTtsBaseURL: stored.openaiTtsBaseURL || '',
+    openaiTtsKey:    { configured: !!(stored.openaiTtsKey) },
+    elevenLabsKey:   { configured: !!(stored.elevenLabsKey) },
+    volcanoAppId:    { configured: !!(stored.volcanoAppId), value: stored.volcanoAppId || '' },
+    volcanoToken:    { configured: !!(stored.volcanoToken) },
+  }
+}
+
+// 读取明文 TTS 凭证（仅供后端调用 TTS API 使用，不暴露给前端）
+export function getTTSCredentials() {
+  let stored = {}
+  try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
+  return {
+    provider:       stored.ttsProvider  || 'minimax',
+    voiceId:        stored.ttsVoiceId   || '',
+    minimaxKey:     process.env.MINIMAX_API_KEY || getMinimaxKey() || (config.provider === 'minimax' ? config.apiKey : '') || '',
+    openaiKey:      stored.openaiTtsKey  || '',
+    openaiBaseURL:  stored.openaiTtsBaseURL || '',
+    elevenLabsKey:  stored.elevenLabsKey || '',
+    volcanoAppId:   stored.volcanoAppId  || '',
+    volcanoToken:   stored.volcanoToken  || '',
+  }
+}
+
+export function setTTSConfig(updates) {
+  let existing = {}
+  try { existing = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8')) } catch {}
+  const current = existing.tts || {}
+  const next = { ...current }
+  for (const [key, val] of Object.entries(updates)) {
+    if (!TTS_CONFIG_KEYS.includes(key)) continue
+    const trimmed = String(val || '').trim()
+    if (trimmed) next[key] = trimmed
+    else delete next[key]
+  }
+  writeStoredConfig({ ...existing, tts: next })
+}
+
 export const __internals = {
   DEEPSEEK_MODELS,
   MINIMAX_MODELS,

@@ -18,6 +18,7 @@ export function initChat({
   let hasPendingJarvisMessage = false;
   let pendingMessageDismissed = false;
   let audioCtx = null;
+  let audioUnlocked = false;
   let warmupTimer = null;
 
   function setComposerLocked(locked, reason = "") {
@@ -60,6 +61,7 @@ export function initChat({
 
   function ensureAudioContext() {
     if (!audioCtx) {
+      if (!audioUnlocked) return null;  // 手势前不创建，避免 Chrome autoplay 警告
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!AudioCtx) return null;
       try { audioCtx = new AudioCtx(); } catch { return null; }
@@ -69,6 +71,9 @@ export function initChat({
 
   function unlockAudioOnFirstGesture() {
     const unlock = () => {
+      if (audioUnlocked) return;
+      audioUnlocked = true;
+      // 首次手势后才创建/恢复 AudioContext，避免 Chrome autoplay 策略警告
       const ctx = ensureAudioContext();
       if (ctx && ctx.state === "suspended") {
         ctx.resume().catch(() => {});

@@ -431,6 +431,65 @@ const createSettingsModal = () => `
             </div>
           </div>
 
+          <div class="settings-section">
+            <div class="settings-section-label">语音合成（TTS）</div>
+            <p class="settings-hint">用语音发消息时，Agent 回复会自动转为语音播放。默认使用 MiniMax（复用已有 Key），也支持 OpenAI、ElevenLabs、火山引擎。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="tts-provider-select">服务商</label>
+              <select class="settings-select" id="tts-provider-select">
+                <option value="openai">OpenAI TTS（流式，$0.015/千字）</option>
+                <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
+                <option value="volcano">火山引擎（中文最佳，有免费额度）</option>
+                <option value="minimax">MiniMax（已有配置）</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="tts-voice-id">声音 ID</label>
+              <input class="settings-input" type="text" id="tts-voice-id" placeholder="留空使用默认声音">
+            </div>
+
+            <div id="tts-creds-minimax" style="display:none;">
+              <p class="settings-hint">复用 LLM 设置中的 MiniMax API Key，无需单独配置。可用声音：male-qn-qingse · male-qn-jingying · female-shaonv · female-yujie · presenter_female 等。</p>
+            </div>
+
+            <div id="tts-creds-openai">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-openai-key">OpenAI API Key</label>
+                <input class="settings-input" type="password" id="tts-openai-key" placeholder="留空则不修改（可与 LLM 共用）">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-openai-baseurl">Base URL（选填）</label>
+                <input class="settings-input" type="text" id="tts-openai-baseurl" placeholder="自定义端点，如 https://api.deepseek.com">
+              </div>
+              <p class="settings-hint">可用声音：nova · shimmer · alloy · echo · fable · onyx</p>
+            </div>
+
+            <div id="tts-creds-elevenlabs" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-elevenlabs-key">ElevenLabs API Key</label>
+                <input class="settings-input" type="password" id="tts-elevenlabs-key" placeholder="留空则不修改">
+              </div>
+              <p class="settings-hint">免费套餐每月 10,000 字符。声音 ID 在 ElevenLabs 控制台获取。</p>
+            </div>
+
+            <div id="tts-creds-volcano" style="display:none;">
+              <div class="settings-row">
+                <label class="settings-label" for="tts-volcano-appid">AppId</label>
+                <input class="settings-input" type="text" id="tts-volcano-appid" placeholder="火山引擎 TTS AppId">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="tts-volcano-token">Access Token</label>
+                <input class="settings-input" type="password" id="tts-volcano-token" placeholder="留空则不修改">
+              </div>
+              <p class="settings-hint">可用声音：BV001_streaming（通用女声）· BV002_streaming（通用男声）等，在火山引擎控制台查看全部。</p>
+            </div>
+
+            <div class="settings-row" style="margin-top:8px;">
+              <button class="settings-save-btn" id="tts-test-btn" type="button" style="padding:4px 12px;font-size:12px;">试听</button>
+              <span id="tts-test-status" style="color:var(--ink2);font-size:12px;margin-left:8px;"></span>
+            </div>
+          </div>
+
           <div class="settings-section settings-section-action">
             <button class="settings-save-btn" id="settings-save-voice" type="button">保存</button>
             <span class="settings-feedback" id="settings-voice-feedback"></span>

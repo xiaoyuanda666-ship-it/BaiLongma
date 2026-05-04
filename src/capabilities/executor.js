@@ -1493,6 +1493,47 @@ async function execSpeak(args) {
   return `语音已生成：${relPath}（时长约 ${result.duration ?? '?'} 秒）`
 }
 
+// 语音消息自动回复 TTS：检测到用户用语音输入时，通知前端播放语音
+// 由 index.js 调用，前端收到 tts_reply 事件后调用 /tts/stream 完成实际合成
+// 对话型内容上限（流畅散文，天气/时间/短回答等）
+const TTS_PROSE_LIMIT = 150
+// 列表型内容判定：换行数 ÷ 总字数 超过此比例视为列表
+const TTS_LIST_DENSITY = 0.05
+
+export function autoSpeakForVoiceReply(text) {
+  if (!text) return
+  const raw = text.trim()
+  if (!raw) return
+
+  // 判断是否列表型（多行条目：热点、搜索结果等）
+  const lineBreaks = (raw.match(/\n/g) || []).length
+  const isList = lineBreaks >= 3 && lineBreaks / raw.length > TTS_LIST_DENSITY
+
+  const plain = raw
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/\*(.+?)\*/g, '$1')
+    .replace(/`(.+?)`/g, '$1')
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+    .replace(/!\[[^\]]*\]\([^\)]+\)/g, '')
+    .replace(/\n+/g, ' ')
+    .trim()
+  if (!plain) return
+
+  let spoken
+  if (!isList && plain.length <= TTS_PROSE_LIMIT) {
+    // 对话型且不超限：完整播放
+    spoken = plain
+  } else {
+    // 列表型或超长：只播第一句 + 提示
+    const sentenceEnd = plain.search(/[。！？!?]/)
+    const firstSentence = sentenceEnd > 0 ? plain.slice(0, sentenceEnd + 1) : plain.slice(0, 60)
+    spoken = firstSentence.trim() + '，详情请看文字。'
+  }
+
+  emitEvent('tts_reply', { text: spoken })
+}
+
 // generate_lyrics：生成歌词
 async function execGenerateLyrics({ prompt, mode }) {
   if (!prompt) return '错误：未提供创作方向'
