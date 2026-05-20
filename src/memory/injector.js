@@ -15,6 +15,7 @@ import { getActiveUICards } from '../events.js'
 import { getInstalledToolNames } from '../capabilities/marketplace/index.js'
 import { PRIMARY_USER_ID } from '../identity.js'
 import { extractKeywords } from './keywords.js'
+import { selectTools } from './tool-router.js'
 
 // 旧 import 路径兼容：focus.js / 其他模块也能从 injector 拿到 extractKeywords
 export { extractKeywords }
@@ -280,27 +281,9 @@ export async function runInjector({ message, state, hint = '' }) {
   const merged = deduplicateMemories([relevantMemories, senderMemories])
   const memories = rerankByImportance(merged).slice(0, mergeCap)
 
-  const baseTools = [
-    'send_message', 'web_search', 'fetch_url', 'browser_read', 'list_dir', 'read_file', 'write_file',
-    'delete_file', 'make_dir', 'exec_command', 'kill_process', 'list_processes',
-    'set_tick_interval', 'media_mode', 'hotspot_mode', 'person_card_mode', 'manage_reminder', 'manage_prefetch_task',
-    'recall_memory', 'set_task', 'music', 'manage_app', 'ui_patch', 'focus_banner', 'set_location', 'set_agent_name',
-    'install_tool', 'uninstall_tool', 'list_tools', 'set_security', 'connect_wechat',
-  ]
-  if (hasTask) {
-    baseTools.push('complete_task', 'update_task_step')
-  }
-  const { listCapabilities } = await import('../providers/registry.js')
-  const mmCaps = listCapabilities()
-  if (mmCaps.includes('tts'))    baseTools.push('speak')
-  if (mmCaps.includes('lyrics')) baseTools.push('generate_lyrics')
-  if (mmCaps.includes('music'))  baseTools.push('generate_music')
-  if (mmCaps.includes('image'))  baseTools.push('generate_image')
-  const isTick = !senderId && /^TICK\s/i.test(message?.trim())
-  if (senderId || state?.prev_recall || isTick) baseTools.push('search_memory')
-  if (state?.startupSelfCheck?.active) baseTools.push('complete_startup_self_check')
-  const tools = [...new Set(baseTools)]
-
+  // —— 按需注入工具（动态上下文记忆池第 4 步）——
+  // 之前把 ~35 个工具全量注入，每轮 6-9K token 大头在这。改成按意图分组：
+  // tool-router.js 看消息正文 + 上下文标志 + ActionLog 保活 + Fallback 安全网。
   const actionLog = getRecentActionLogs(10)
   const prefetchedItems = getValidPrefetchCache()
 
@@ -310,12 +293,23 @@ export async function runInjector({ message, state, hint = '' }) {
 
   const activeUICards = getActiveUICards()
 
-  // Phase 1：ACUI 工具默认可用（组件少、token 成本低）；后续组件多了再上按需注入
-  tools.push('ui_show', 'ui_update', 'ui_hide', 'ui_register')
-
-  // 动态追加已安装工具
+  const { listCapabilities } = await import('../providers/registry.js')
+  const mmCaps = listCapabilities()
   const installedNames = getInstalledToolNames()
-  if (installedNames.length > 0) tools.push(...installedNames)
+  const isTick = !senderId && /^TICK\s/i.test(message?.trim())
+
+  const tools = selectTools({
+    messageBody,
+    isTick,
+    senderId,
+    hasTask,
+    hasRecall: !!state?.prev_recall,
+    mmCaps,
+    recentActionLog: actionLog,
+    installedToolNames: installedNames,
+    startupSelfCheckActive: !!state?.startupSelfCheck?.active,
+    // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
+  })
 
   return {
     memories,
