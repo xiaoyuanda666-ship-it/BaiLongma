@@ -117,7 +117,7 @@ function isFailureResult(resultStr) {
   try {
     const parsed = JSON.parse(t);
     if (parsed && typeof parsed === "object" && parsed.ok === false) return true;
-  } catch {}
+  } catch (err) { console.warn('[ThoughtStream] JSON解析失败:', err?.message) }
   return false;
 }
 

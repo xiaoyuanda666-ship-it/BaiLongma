@@ -269,7 +269,7 @@ async function fetchConfigState() {
       cfgTtsState = td.tts || {}
       if (cfgTtsState.ttsProvider) cfgTtsProvider = cfgTtsState.ttsProvider
     }
-  } catch {}
+  } catch (err) { console.warn('[DocPanel] 加载配置失败:', err?.message) }
 }
 
 function isConfigured(state, key) {

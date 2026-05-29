@@ -45,7 +45,7 @@ export function initChat({
       clearTimeout(warmupTimer);
       warmupTimer = null;
     }
-    try { sessionStorage.removeItem(activationWarmupKey); } catch {}
+    try { sessionStorage.removeItem(activationWarmupKey); } catch (err) { console.warn('[Chat] 释放热启动锁失败:', err?.message) }
     setComposerLocked(false);
   }
 
@@ -53,7 +53,7 @@ export function initChat({
     let until = 0;
     try {
       until = Number(sessionStorage.getItem(activationWarmupKey) || 0);
-    } catch {}
+    } catch (err) { console.warn('[Chat] 获取热启动锁失败:', err?.message) }
 
     const remaining = until - Date.now();
     if (remaining <= 0) {
@@ -242,7 +242,7 @@ export function initChat({
         try {
           const body = await resp.json();
           message = body.error || body.message || message;
-        } catch {}
+        } catch (err) { console.warn('[Chat] 解析错误响应失败:', err?.message) }
         throw new Error(message);
       }
     } catch (error) {

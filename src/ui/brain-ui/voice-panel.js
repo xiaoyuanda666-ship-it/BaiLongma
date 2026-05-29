@@ -421,7 +421,7 @@ export function initVoicePanel({
           setStatus('error');
           if (transcript) transcript.textContent = msg.message || '云端识别错误';
         }
-      } catch {}
+      } catch (err) { console.warn('[VoicePanel] 消息解析失败:', err?.message) }
     };
 
     ws.onerror = () => { if (cloudWs === ws) setStatus('error'); };
@@ -479,21 +479,21 @@ export function initVoicePanel({
   }
 
   function stopCloudStream({ preserveProcessor = false } = {}) {
-    cloudWsIntentional = true; // 标记为主动关闭，防止 onclose 触发重连
+    cloudWsIntentional = true;
     try {
       if (cloudWs && cloudWs.readyState === WebSocket.OPEN) {
         cloudWs.send(JSON.stringify({ type: 'flush' }));
-        setTimeout(() => { try { cloudWs?.close(); } catch {} }, 200);
+        setTimeout(() => { try { cloudWs?.close(); } catch (err) { console.warn('[VoicePanel] 关闭WebSocket失败:', err?.message) } }, 200);
       } else {
         cloudWs?.close();
       }
-    } catch {}
+    } catch (err) { console.warn('[VoicePanel] 停止云端流失败:', err?.message) }
     cloudWs = null;
 
     if (!preserveProcessor) {
-      try { cloudProcessor?.disconnect(); } catch {}
+      try { cloudProcessor?.disconnect(); } catch (err) { console.warn('[VoicePanel] 断开处理器失败:', err?.message) }
       cloudProcessor = null;
-      try { if (cloudAudioCtx) { cloudAudioCtx.close(); cloudAudioCtx = null; } } catch {}
+      try { if (cloudAudioCtx) { cloudAudioCtx.close(); cloudAudioCtx = null; } } catch (err) { console.warn('[VoicePanel] 关闭音频上下文失败:', err?.message) }
     }
   }
 
@@ -610,7 +610,7 @@ export function initVoicePanel({
             setStatus('error');
             if (transcript) transcript.textContent = msg.message || '云端识别错误';
           }
-        } catch {}
+        } catch (err) { console.warn('[VoicePanel] Bargein消息解析失败:', err?.message) }
       };
       bargeinWs.onerror = () => { if (cloudWs === bargeinWs) setStatus('error'); };
       bargeinWs.onclose = () => {
@@ -674,7 +674,7 @@ export function initVoicePanel({
       if (cloudWs && cloudWs.readyState === WebSocket.OPEN) {
         cloudWs.send(JSON.stringify({ type: 'flush' }));
       }
-    } catch {}
+    } catch (err) { console.warn('[VoicePanel] 刷新云端识别失败:', err?.message) }
 
     const finalize = () => {
       if (lastTranscriptText) {

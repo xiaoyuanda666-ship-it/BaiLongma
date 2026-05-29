@@ -33,7 +33,7 @@ function connect(wsUrl) {
       else if (msg.op === 'unmount') unmount(msg.id, 'agent')
       else if (msg.op === 'patch')   patch(msg)
     } else if (msg.kind === 'ping') {
-      try { socket.send(JSON.stringify({ v: 1, kind: 'pong' })) } catch {}
+      try { socket.send(JSON.stringify({ v: 1, kind: 'pong' })) } catch (err) { console.warn('[ACUI] Pong发送失败:', err?.message) }
     } else if (msg.kind === 'acui:hello') {
       // welcome, no-op
     } else if (msg.kind === 'acui:reload') {
@@ -42,7 +42,7 @@ function connect(wsUrl) {
   })
 
   socket.addEventListener('close', () => scheduleReconnect(wsUrl))
-  socket.addEventListener('error', () => { try { socket.close() } catch {} })
+  socket.addEventListener('error', () => { try { socket.close() } catch (err) { console.warn('[ACUI] Socket关闭失败:', err?.message) } })
 }
 
 function scheduleReconnect(wsUrl) {
@@ -61,5 +61,5 @@ function sendSignal({ type, target, payload }) {
       payload: payload || {},
       ts: Date.now()
     }))
-  } catch {}
+  } catch (err) { console.warn('[ACUI] Signal发送失败:', err?.message) }
 }
