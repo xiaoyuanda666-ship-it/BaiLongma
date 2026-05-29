@@ -19,7 +19,13 @@
     "postinstall": "electron-builder install-app-deps",
     "smoke:tools": "node scripts/smoke-tools.mjs",
     "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
-    "smoke:social": "node scripts/smoke-social.mjs"
+    "smoke:social": "node scripts/smoke-social.mjs",
+    "docker:build": "docker build -t bailongma:latest .",
+    "docker:run": "docker run -d -p 3721:3721 -v bailongma_data:/app/data -v bailongma_sandbox:/app/sandbox --name bailongma --restart unless-stopped bailongma:latest",
+    "docker:compose:up": "docker-compose up -d --build",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:logs": "docker-compose logs -f",
+    "docker:compose:restart": "docker-compose restart"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",

@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  bailongma:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bailongma
+    restart: unless-stopped
+    ports:
+      - "${BAILONGMA_PORT:-3721}:3721"
+    volumes:
+      - bailongma_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - BAILONGMA_PORT=3721
+      - BAILONGMA_HOST=0.0.0.0
+      - BAILONGMA_ALLOW_LAN=true
+      - BAILONGMA_USER_DIR=/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:'+process.env.BAILONGMA_PORT+'/status', (r)=>process.exit(r.statusCode==200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  bailongma_data:
