@@ -24,6 +24,7 @@ import { createCloudASRSession } from './voice/cloud-asr.js'
 import { getHotspots, setHotspotPanelState, getHotspotPanelState } from './hotspots.js'
 import { getPersonCard, setPersonCardPanelState, getPersonCardPanelState } from './person-cards.js'
 import { setDocPanelState, getDocPanelState, DOC_TOPICS } from './docs.js'
+import { analyzeRequestIP, getNetworkInfo, getIPLocation, initIPLocation } from './ip-location.js'
 
 export { emitEvent }
 
@@ -206,6 +207,7 @@ function stripAssistantHistoryLabels(content) {
 export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = null } = {}) {
   const onActivatedCallback = onActivated
   const host = getApiHost()
+  initIPLocation()
 
   // 启动时把 DB 里的当前 agent_name 写进 sticky，
   // 这样后续每个新连上的 SSE 客户端（含 brain-ui 首次加载）能立即拿到正确名字
@@ -262,12 +264,16 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     if (req.method === 'POST' && url.pathname === '/message') {
       const chunks = []
       req.on('data', chunk => chunks.push(chunk))
-      req.on('end', () => {
+      req.on('end', async () => {
         try {
           const body = Buffer.concat(chunks).toString('utf-8')
           const { from_id = 'ID:000001', content, channel = 'API' } = JSON.parse(body)
           if (!content?.trim()) return jsonResponse(res, 400, { error: 'content required' })
           const trimmed = content.trim()
+
+          // 分析访客 IP 并设置为当前访客信息
+          await analyzeRequestIP(req)
+
           pushMessage(from_id, trimmed, channel)
           emitEvent('message_in', { from_id, content: trimmed, channel, timestamp: new Date().toISOString() })
           jsonResponse(res, 200, { ok: true, agent_name: getAgentName() })
@@ -349,6 +355,34 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       const db = getDB()
       const { n } = db.prepare('SELECT COUNT(*) as n FROM memories').get()
       jsonResponse(res, 200, { ok: true, memory_count: n, running: isRunning() })
+      return
+    }
+
+    // GET /ip-info — analyze current visitor's IP
+    if (req.method === 'GET' && url.pathname === '/ip-info') {
+      analyzeRequestIP(req)
+        .then((info) => jsonResponse(res, 200, { ok: true, info }))
+        .catch((err) => jsonResponse(res, 500, { ok: false, error: err.message }))
+      return
+    }
+
+    // GET /network-info — get network info for a specific IP or current visitor
+    if (req.method === 'GET' && url.pathname === '/network-info') {
+      const ip = url.searchParams.get('ip') || req.socket?.remoteAddress
+      const info = getNetworkInfo(ip)
+      jsonResponse(res, 200, { ok: true, info })
+      return
+    }
+
+    // POST /ip-location — get location for a specific IP
+    if (req.method === 'POST' && url.pathname === '/ip-location') {
+      readJsonBody(req)
+        .then(async (body) => {
+          const ip = body.ip || req.socket?.remoteAddress
+          const location = await getIPLocation(ip)
+          jsonResponse(res, 200, { ok: true, location })
+        })
+        .catch((err) => jsonResponse(res, 400, { ok: false, error: err.message }))
       return
     }
 

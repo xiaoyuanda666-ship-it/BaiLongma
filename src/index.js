@@ -35,6 +35,7 @@ import { collectLocalResources } from './local-resources-scanner.js'
 import { collectGeoWeather, getGeoWeatherBlock } from './geo-weather.js'
 import { collectTrending, getTrendingBlock } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationAskDirections } from './agents/registry.js'
+import { initIPLocation, getIPLocationBlock, getCurrentVisitorInfo, clearCurrentVisitorInfo } from './ip-location.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
 import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel } from './identity.js'
 
@@ -59,6 +60,9 @@ const geoResult = await collectGeoWeather()
 
 // Collect trending topics (CN → Weibo+Zhihu, others → HN+Reddit; 1h cache)
 await collectTrending(geoResult?.location?.country_code)
+
+// Initialize IP location module for analyzing visitor IPs
+initIPLocation()
 
 // Scan locally installed AI agents (Claude Code, Codex, Hermes, OpenClaw, etc.) and persist to known_agents table
 await collectAgents()
@@ -777,6 +781,11 @@ function buildSystemEnv(msg) {
     blocks.push(getGeoWeatherBlock())
   if (/热点|新闻|热搜|热榜|今天发生|最近发生|微博|知乎|头条/.test(text))
     blocks.push(getTrendingBlock())
+  // 总是注入访客 IP 信息（如果有的话），让 AI 了解当前访问的网络环境和位置
+  const visitorInfo = getCurrentVisitorInfo()
+  if (visitorInfo) {
+    blocks.push(getIPLocationBlock(visitorInfo))
+  }
   return blocks.filter(Boolean).join('\n\n')
 }
 
@@ -1363,6 +1372,9 @@ async function runTurn(input, label, msg = null) {
   }).catch(err => {
     console.error('[recognizer] Background run failed:', err)
   })
+
+  // 本轮处理完后，清除访客信息以防止信息泄露
+  clearCurrentVisitorInfo()
 }
 
 let processing = false
