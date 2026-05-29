@@ -29,7 +29,7 @@ export const createHotspotPanel = () => `
   <!-- ── 统计条 ── -->
   <div class="hs-stats-bar">
     <div class="hs-stat hs-stat--warn">
-      <div class="hs-stat-icon">⚠</div>
+      <div class="hs-stat-icon"><blm-icon name="alert-triangle"></blm-icon></div>
       <div class="hs-stat-body">
         <div class="hs-stat-label">全球预警事件</div>
         <div class="hs-stat-value" id="hs-stat-alert">7</div>
@@ -37,7 +37,7 @@ export const createHotspotPanel = () => `
       </div>
     </div>
     <div class="hs-stat hs-stat--hot">
-      <div class="hs-stat-icon">🔥</div>
+      <div class="hs-stat-icon"><blm-icon name="flame"></blm-icon></div>
       <div class="hs-stat-body">
         <div class="hs-stat-label">高关注度事件</div>
         <div class="hs-stat-value" id="hs-stat-hot">23</div>
@@ -53,7 +53,7 @@ export const createHotspotPanel = () => `
       </div>
     </div>
     <div class="hs-stat hs-stat--ai">
-      <div class="hs-stat-icon">⬡</div>
+      <div class="hs-stat-icon"><blm-icon name="brain"></blm-icon></div>
       <div class="hs-stat-body">
         <div class="hs-stat-label">AI 分析置信度</div>
         <div class="hs-stat-value" id="hs-stat-ai">87%</div>

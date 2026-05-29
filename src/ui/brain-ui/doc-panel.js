@@ -4,7 +4,7 @@ export const createDocPanel = () => `
   <!-- 顶部标题栏 -->
   <div class="dp-header">
     <div class="dp-header-left">
-      <span class="dp-icon" id="dp-icon">⚙️</span>
+      <span class="dp-icon" id="dp-icon"><blm-icon name="settings"></blm-icon></span>
       <div class="dp-titles">
         <div class="dp-title" id="dp-title">配置说明</div>
         <div class="dp-subtitle" id="dp-subtitle">语音配置指南</div>
@@ -12,11 +12,11 @@ export const createDocPanel = () => `
     </div>
     <div class="dp-header-right">
       <div class="dp-tabs" id="dp-tabs">
-        <button class="dp-tab" data-topic="model_config" type="button">🤖 模型</button>
-        <button class="dp-tab" data-topic="voice_asr" type="button">🎤 语音识别</button>
-        <button class="dp-tab" data-topic="voice_tts" type="button">🔊 语音合成</button>
-        <button class="dp-tab" data-topic="voice_config" type="button">⚙️ 语音配置</button>
-        <button class="dp-tab" data-topic="wechat_config" type="button">💬 微信</button>
+        <button class="dp-tab" data-topic="model_config" type="button"><blm-icon name="cpu"></blm-icon> 模型</button>
+        <button class="dp-tab" data-topic="voice_asr" type="button"><blm-icon name="mic"></blm-icon> 语音识别</button>
+        <button class="dp-tab" data-topic="voice_tts" type="button"><blm-icon name="volume"></blm-icon> 语音合成</button>
+        <button class="dp-tab" data-topic="voice_config" type="button"><blm-icon name="settings"></blm-icon> 语音配置</button>
+        <button class="dp-tab" data-topic="wechat_config" type="button"><blm-icon name="message-circle"></blm-icon> 微信</button>
       </div>
       <button class="dp-close-btn" id="dp-close-btn" type="button" title="关闭文档面板">×</button>
     </div>

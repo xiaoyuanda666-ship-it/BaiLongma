@@ -312,7 +312,7 @@ function renderFields(fields, state) {
 function buildConfigHTML(topicId) {
   if (topicId === 'voice_asr') {
     return `
-      <div class="dpc-section-title">⚡ 在此直接配置语音识别</div>
+      <div class="dpc-section-title"><blm-icon name="zap"></blm-icon> 在此直接配置语音识别</div>
       ${renderProviderTabs(ASR_PROVIDER_DEFS, cfgAsrProvider)}
       <div class="dpc-fields" id="dpc-asr-fields">${renderFields(ASR_FIELDS[cfgAsrProvider], cfgVoiceState)}</div>
       <div class="dpc-actions">
@@ -322,7 +322,7 @@ function buildConfigHTML(topicId) {
   }
   if (topicId === 'voice_tts') {
     return `
-      <div class="dpc-section-title">⚡ 在此直接配置语音合成</div>
+      <div class="dpc-section-title"><blm-icon name="zap"></blm-icon> 在此直接配置语音合成</div>
       ${renderProviderTabs(TTS_PROVIDER_DEFS, cfgTtsProvider)}
       <div class="dpc-fields" id="dpc-tts-fields">${renderFields(TTS_FIELDS[cfgTtsProvider], cfgTtsState)}</div>
       <div class="dpc-actions">
@@ -332,10 +332,10 @@ function buildConfigHTML(topicId) {
   }
   if (topicId === 'voice_config') {
     return `
-      <div class="dpc-section-title">⚡ 快速配置</div>
+      <div class="dpc-section-title"><blm-icon name="zap"></blm-icon> 快速配置</div>
       <div class="dpc-dual">
         <div class="dpc-dual-col">
-          <div class="dpc-dual-label">🎤 语音识别</div>
+          <div class="dpc-dual-label"><blm-icon name="mic"></blm-icon> 语音识别</div>
           ${renderProviderTabs(ASR_PROVIDER_DEFS, cfgAsrProvider)}
           <div class="dpc-fields" id="dpc-asr-fields">${renderFields(ASR_FIELDS[cfgAsrProvider], cfgVoiceState)}</div>
           <div class="dpc-actions">
@@ -344,7 +344,7 @@ function buildConfigHTML(topicId) {
           </div>
         </div>
         <div class="dpc-dual-col">
-          <div class="dpc-dual-label">🔊 语音合成</div>
+          <div class="dpc-dual-label"><blm-icon name="volume"></blm-icon> 语音合成</div>
           ${renderProviderTabs(TTS_PROVIDER_DEFS, cfgTtsProvider)}
           <div class="dpc-fields" id="dpc-tts-fields">${renderFields(TTS_FIELDS[cfgTtsProvider], cfgTtsState)}</div>
           <div class="dpc-actions">

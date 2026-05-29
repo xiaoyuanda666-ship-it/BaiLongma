@@ -1,6 +1,7 @@
 import { createHotspotPanel } from './hotspot-panel.js';
 import { createPersonCardPanel } from './person-card-panel.js';
 import { createDocPanel } from './doc-panel.js';
+import '../components/blm-icon.js';
 
 const createGraphStage = () => `
 <div class="grid-overlay"></div>
@@ -15,10 +16,10 @@ const createPrimaryPanel = () => `
       <div class="eyebrow">认知界面</div>
       <div class="brand-title" id="agent-brand-name">Longma AI Agent</div>
     </div>
-    <button class="voice-btn" id="voice-btn" title="麦克风 开/关" type="button">🎤</button>
-    <button class="video-btn" id="video-btn" title="视频模式 (V)" type="button" hidden>⊞</button>
-    <button class="music-btn" id="music-btn" title="音乐模式 (M)" type="button" hidden>♪</button>
-    <button class="settings-btn" id="settings-btn" title="设置" type="button">⚙</button>
+    <button class="voice-btn" id="voice-btn" title="麦克风 开/关" type="button"><blm-icon name="mic"></blm-icon></button>
+    <button class="video-btn" id="video-btn" title="视频模式 (V)" type="button" hidden><blm-icon name="video"></blm-icon></button>
+    <button class="music-btn" id="music-btn" title="音乐模式 (M)" type="button" hidden><blm-icon name="music"></blm-icon></button>
+    <button class="settings-btn" id="settings-btn" title="设置" type="button"><blm-icon name="settings"></blm-icon></button>
   </header>
 
   <div class="stream-meta">
@@ -660,7 +661,7 @@ const createMusicPanel = () => `
         <div class="music-groove music-groove-3"></div>
         <div class="music-groove music-groove-4"></div>
         <div class="music-cover" id="music-cover">
-          <div class="music-cover-title" id="music-cover-title">♪</div>
+          <div class="music-cover-title" id="music-cover-title"><blm-icon name="music"></blm-icon></div>
           <div class="music-cover-artist" id="music-cover-artist"></div>
         </div>
         <div class="music-spindle"></div>
