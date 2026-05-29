@@ -47,7 +47,7 @@ function createAliyunSession(apiKey, lang, onTranscript, onError, onClose) {
     }))
     ready = true
     for (const buf of pending) {
-      try { ws.send(buf) } catch {}
+      try { ws.send(buf) } catch (err) { console.warn('[CloudASR/Aliyun] 发送音频失败:', err?.message) }
     }
     pending.length = 0
   })
@@ -65,7 +65,7 @@ function createAliyunSession(apiKey, lang, onTranscript, onError, onClose) {
       } else if (event === 'task-failed') {
         onError(msg?.header?.error_message || '阿里云 ASR 错误')
       }
-    } catch {}
+    } catch (err) { console.warn('[CloudASR/Aliyun] 消息解析失败:', err?.message) }
   })
 
   ws.on('error', (err) => { pending.length = 0; onError(err.message) })
@@ -158,15 +158,13 @@ function createTencentSession(secretId, secretKey, appId, lang, onTranscript, on
     },
     flush() {
       // 腾讯 ASR 通过关闭连接来结束会话
-      try { ws.close() } catch {}
+      try { ws.close() } catch (err) { console.warn('[CloudASR/Tencent] 关闭连接失败:', err?.message) }
     },
-    close() { try { ws.close() } catch {} },
+    close() { try { ws.close() } catch (err) { console.warn('[CloudASR/Tencent] 关闭连接失败:', err?.message) } },
   }
 }
 
-// ─── 科大讯飞 RTASR ───
-// 签名：base64(hmac-sha1(md5(appid+ts), apiKey))
-// 结果：JSON data 字段，type="1" 为最终
+// ─── 讯飞 RTASR ───
 function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose) {
   const ts = Math.floor(Date.now() / 1000).toString()
   const md5Base = crypto.createHash('md5').update(appId + ts).digest('hex')
@@ -182,7 +180,7 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
   ws.on('open', () => {
     ready = true
     for (const buf of pending) {
-      try { ws.send(buf) } catch {}
+      try { ws.send(buf) } catch (err) { console.warn('[CloudASR/Xunfei] 发送音频失败:', err?.message) }
     }
     pending.length = 0
   })
@@ -199,7 +197,7 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
           .map(c => c.w || '').join('')
         if (text) onTranscript(text, isFinal)
       }
-    } catch {}
+    } catch (err) { console.warn('[CloudASR/Xunfei] 消息解析失败:', err?.message) }
   })
 
   ws.on('error', (err) => { pending.length = 0; onError(err.message) })
@@ -218,7 +216,7 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
       // 讯飞要求发送结束帧
       ws.send(JSON.stringify({ end: true }))
     },
-    close() { try { ws.close() } catch {} },
+    close() { try { ws.close() } catch (err) { console.warn('[CloudASR/Xunfei] 关闭连接失败:', err?.message) } },
   }
 }
 

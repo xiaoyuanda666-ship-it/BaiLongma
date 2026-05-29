@@ -106,7 +106,7 @@ async function findPersonImage(name = '') {
       const data = await res.json();
       const image = data?.thumbnail?.source || data?.originalimage?.source || '';
       if (image) return image;
-    } catch {}
+    } catch (err) { console.warn('[PersonCard] 头像加载失败:', err?.message) }
   }
   return '';
 }

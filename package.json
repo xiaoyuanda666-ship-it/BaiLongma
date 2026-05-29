@@ -25,6 +25,7 @@
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
+    "lucide": "^1.17.0",
     "openai": "^6.34.0",
     "wechat-ilink-client": "^0.1.0",
     "ws": "^8.20.1"

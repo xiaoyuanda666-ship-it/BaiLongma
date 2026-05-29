@@ -114,7 +114,7 @@ export function startVoiceServer({ model = 'small' } = {}) {
 
 export function stopVoiceServer() {
   if (!proc) return getVoiceStatus()
-  try { proc.kill('SIGTERM') } catch {}
+  try { proc.kill('SIGTERM') } catch (err) { console.warn('[Voice] 终止进程失败:', err?.message) }
   proc = null
   status = 'stopped'
   statusMessage = '已停止'

@@ -147,7 +147,7 @@ async function triggerConnect() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ _clawbot_connect: '1' }),
     });
-  } catch {}
+  } catch (err) { console.warn('[WechatPopup] 微信连接失败:', err?.message) }
   stopPoll();
   // 先立即轮询一次，等返回后再决定是否启动 interval
   const shouldContinue = await pollQR();

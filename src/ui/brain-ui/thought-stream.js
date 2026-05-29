@@ -1,3 +1,5 @@
+import { getIcon } from '../components/svg-icons.js';
+
 const TOOL_ZH = {
   send_message: "发送消息",
   express: "表达",
@@ -55,59 +57,59 @@ const TOOL_ZH = {
 };
 
 const TOOL_ICON = {
-  send_message: "💬",
-  express: "🗣️",
-  read_file: "📄",
-  write_file: "✏️",
-  delete_file: "🗑️",
-  make_dir: "📁",
-  list_dir: "📂",
-  exec_command: "⚡",
-  kill_process: "🛑",
-  list_processes: "📋",
-  web_search: "🔎",
-  fetch_url: "🌐",
-  browser_read: "🧭",
-  search_memory: "🔍",
-  upsert_memory: "🧠",
-  merge_memories: "🧬",
-  downgrade_memory: "🌫️",
-  recall_memory: "💭",
-  skip_recognition: "⏭️",
-  skip_consolidation: "⏭️",
-  set_tick_interval: "⏱️",
-  speak: "🔊",
-  generate_lyrics: "🎵",
-  generate_music: "🎼",
-  generate_image: "🎨",
-  ui_show: "🎴",
-  ui_update: "🔄",
-  ui_hide: "🫥",
-  ui_patch: "🩹",
-  ui_register: "📌",
-  manage_app: "📦",
-  focus_banner: "🎯",
-  set_task: "📋",
-  complete_task: "✅",
-  update_task_step: "↳",
-  schedule_reminder: "⏰",
-  manage_reminder: "⏰",
-  manage_prefetch_task: "📡",
-  set_location: "📍",
-  set_agent_name: "🪪",
-  set_security: "🔐",
-  delegate_to_agent: "🤝",
-  grant_agent_delegation: "🤝",
-  complete_startup_self_check: "🩺",
-  install_tool: "🔧",
-  uninstall_tool: "🔧",
-  list_tools: "🧰",
-  connect_wechat: "🔗",
-  media_mode: "🎬",
-  hotspot_mode: "🔥",
-  open_doc_panel: "📖",
-  person_card_mode: "🪪",
-  music: "🎶",
+  send_message: "message-circle",
+  express: "message-square",
+  read_file: "file-text",
+  write_file: "pencil",
+  delete_file: "trash",
+  make_dir: "folder",
+  list_dir: "folder-open",
+  exec_command: "zap",
+  kill_process: "x-circle",
+  list_processes: "clipboard",
+  web_search: "search",
+  fetch_url: "globe",
+  browser_read: "compass",
+  search_memory: "search",
+  upsert_memory: "brain",
+  merge_memories: "brain",
+  downgrade_memory: "trending_down",
+  recall_memory: "brain",
+  skip_recognition: "arrow_right",
+  skip_consolidation: "arrow_right",
+  set_tick_interval: "clock",
+  speak: "volume",
+  generate_lyrics: "music",
+  generate_music: "music",
+  generate_image: "image",
+  ui_show: "eye",
+  ui_update: "refresh",
+  ui_hide: "eye",
+  ui_patch: "pencil",
+  ui_register: "plus",
+  manage_app: "package",
+  focus_banner: "target",
+  set_task: "clipboard",
+  complete_task: "check",
+  update_task_step: "arrow_right",
+  schedule_reminder: "bell",
+  manage_reminder: "bell",
+  manage_prefetch_task: "radio",
+  set_location: "globe",
+  set_agent_name: "id_card",
+  set_security: "lock",
+  delegate_to_agent: "users",
+  grant_agent_delegation: "users",
+  complete_startup_self_check: "check_circle",
+  install_tool: "plus",
+  uninstall_tool: "minus",
+  list_tools: "clipboard",
+  connect_wechat: "link",
+  media_mode: "video",
+  hotspot_mode: "flame",
+  open_doc_panel: "book",
+  person_card_mode: "id_card",
+  music: "music",
 };
 
 function isFailureResult(resultStr) {
@@ -117,7 +119,7 @@ function isFailureResult(resultStr) {
   try {
     const parsed = JSON.parse(t);
     if (parsed && typeof parsed === "object" && parsed.ok === false) return true;
-  } catch {}
+  } catch (err) { console.warn('[ThoughtStream] JSON解析失败:', err?.message) }
   return false;
 }
 
@@ -589,8 +591,8 @@ export class ThoughtStream {
 
   toolLabel(name) {
     const zh = TOOL_ZH[name] || name;
-    const icon = TOOL_ICON[name] || "🔧";
-    return `${icon} ${zh}`;
+    const iconName = TOOL_ICON[name] || "wrench";
+    return `${getIcon(iconName)} ${zh}`;
   }
 
   tool(name, args, result, ok = undefined) {
@@ -599,7 +601,8 @@ export class ThoughtStream {
     this.clearStatus();
 
     const zh = TOOL_ZH[name] || name;
-    const icon = TOOL_ICON[name] || "🔧";
+    const iconName = TOOL_ICON[name] || "wrench";
+    const iconSvg = getIcon(iconName);
     const resultStr = result == null ? "" : String(result);
     const failure = ok === false || (ok !== true && isFailureResult(resultStr));
     this.hadToolCall = true;
@@ -614,7 +617,7 @@ export class ThoughtStream {
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "tool-icon";
-    iconSpan.textContent = icon;
+    iconSpan.innerHTML = iconSvg;
     const nameSpan = document.createElement("span");
     nameSpan.className = "tool-name";
     nameSpan.textContent = zh;
