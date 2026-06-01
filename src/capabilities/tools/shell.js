@@ -65,8 +65,16 @@ function spawnShellCommand(command, opts = {}) {
 }
 
 function resolveExecCwd(cwdArg) {
-  if (!cwdArg) return config.security?.execSandbox === false ? process.cwd() : SANDBOX_ROOT
-  if (config.security?.execSandbox === false) return path.resolve(process.cwd(), cwdArg)
+  // 关键：默认工作目录永远以 SANDBOX_ROOT 为基准，绝不退回 process.cwd()。
+  // 打包后从快捷方式启动时 process.cwd() 是 exe 所在的安装目录，
+  // 在那里建工作文件会在下次更新（NSIS 覆盖安装清空 $INSTDIR）时被一并删掉，
+  // 历史上就因此丢过用户在 spiders/ 下的脚本。SANDBOX_ROOT 在 userData 下，更新动不到。
+  //
+  // execSandbox === false 的语义只是「放开越界校验、允许显式传绝对 cwd 跑到沙盒外」，
+  // 而不是「把默认落点改成安装目录」。所以这里两种情况都用 SANDBOX_ROOT 作基准；
+  // 若 cwdArg 是绝对路径，path.resolve 会忽略基准、直接采用它，绝对 cwd 仍然有效。
+  if (!cwdArg) return SANDBOX_ROOT
+  if (config.security?.execSandbox === false) return path.resolve(SANDBOX_ROOT, cwdArg)
   const resolved = path.resolve(SANDBOX_ROOT, cwdArg)
   assertInSandbox(resolved)
   return resolved
@@ -179,9 +187,19 @@ function terminateProcessTree(child, pid = child?.pid) {
   }
 }
 
+// 命令是否在试图通过 shell 写文件内容（而非运行程序）。这类用法在 Windows PowerShell -Command
+// 模式下对引号 / $ / 反引号 / 三引号转义极其脆弱，HTML/代码这种多行内容几乎必崩，模型还会换着
+// 花样重试直到撞 tool loop 上限。命中后直接把它引导到 write_file（原生写 + 读回校验，零转义）。
+const SHELL_FILE_WRITE_RE = /\[System\.IO\.File\]::WriteAllText|\bOut-File\b|\bSet-Content\b|\bAdd-Content\b|\bWriteAllLines\b|python3?\s+-c\b[\s\S]*\b(open|write)\b|>\s*['"]?[^\s|>]+\.(html?|css|js|jsx|ts|tsx|json|md|py|txt|xml|svg|vue|c|cpp|java|go|rs|sh|ps1)\b/i
+// 本地 shell 在内容到达目标前就因转义失败而拒绝的典型报错
+const ESCAPE_FAILURE_RE = /Missing expression after|Missing\s+'\)'|Missing closing|The string is missing the terminator|unterminated (triple-quoted )?string|Unexpected token|ParserError|unexpected EOF/i
+
 export function getCommandFailureHint(command = '', stderr = '', stdout = '') {
   const combined = `${stderr || ''}\n${stdout || ''}`
   const text = String(combined)
+  if (SHELL_FILE_WRITE_RE.test(command) && ESCAPE_FAILURE_RE.test(text)) {
+    return 'This failed because you tried to write file content through the shell, and PowerShell mangled the quotes/$/backticks/triple-quotes in the content. Do NOT retry with different escaping. Use the write_file tool instead: pass { path, content } with the full file body verbatim — it writes natively (no escaping), creates parent dirs, and verifies the result. write_file accepts an absolute path (e.g. D:\\desktop\\rc-car.html) when the file sandbox is disabled.'
+  }
   if (/\bssh\b/i.test(command) && /syntax error:\s*unexpected end of file/i.test(text)) {
     return 'The remote shell command reached bash with broken quoting or an unfinished block. Do not retry the same SSH command. Simplify the remote command, avoid multiline nested quotes from PowerShell, or pass a small bash -lc script with carefully escaped single quotes.'
   }

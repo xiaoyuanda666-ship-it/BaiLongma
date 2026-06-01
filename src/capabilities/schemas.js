@@ -138,7 +138,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Write content to the specified file. Creates the file automatically if it does not exist.',
+      description: 'Write content to the specified file. This is the ONLY correct way to create or overwrite a text file (HTML, code, JSON, markdown, scripts, any multi-line content). Pass the full file body verbatim in `content` — no escaping, no quoting, no here-strings. Creates the file and any missing parent directories automatically, then reads the file back to verify the bytes landed. Accepts a relative path (inside the sandbox) or an absolute path such as D:\\desktop\\page.html when the file sandbox is disabled. NEVER build a file by shelling out through exec_command (e.g. PowerShell [System.IO.File]::WriteAllText / Out-File / Set-Content / echo >, or python -c with embedded content): those break on quotes, $, backticks and triple-quotes and waste turns. If you need the file somewhere specific on disk, give that absolute path here directly.',
       parameters: {
         type: 'object',
         properties: {
@@ -258,7 +258,7 @@ export const TOOL_SCHEMAS = {
     type: 'function',
     function: {
       name: 'exec_command',
-      description: 'Run a shell command. Returns structured JSON with ok, mode, exit_code, stdout, stderr, timed_out, pid. On Windows runs in PowerShell — use PowerShell syntax (e.g. Get-ChildItem, $env:USERPROFILE, Write-Output). Use background=true for long-running servers. Use cwd to run in a sandbox subdirectory instead of cd-chaining. Use promote_to_background=true so a foreground timeout converts the process to background instead of killing it.',
+      description: 'Run a shell command. Returns structured JSON with ok, mode, exit_code, stdout, stderr, timed_out, pid. On Windows runs in PowerShell — use PowerShell syntax (e.g. Get-ChildItem, $env:USERPROFILE, Write-Output). Use background=true for long-running servers. Use cwd to run in a sandbox subdirectory instead of cd-chaining. Use promote_to_background=true so a foreground timeout converts the process to background instead of killing it. Do NOT use this tool to write file content (no [System.IO.File]::WriteAllText, Out-File, Set-Content, echo >, or python -c with embedded text): the quoting/escaping of multi-line content breaks repeatedly — use the write_file tool instead, which takes the raw content directly. exec_command is for running programs (node, npm, python script.py, git, opening files), not for authoring them.',
       parameters: {
         type: 'object',
         properties: {

@@ -20,7 +20,7 @@ import { registerProvider } from './providers/registry.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { isRunning, setScheduler } from './control.js'
 import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as getTickerStatus } from './ticker.js'
-import { seedSandboxOnce, seedMusicOnce } from './paths.js'
+import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
 import { ensureSkillMemories } from './memory/seed-skills.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
@@ -41,6 +41,21 @@ import { buildLLMMessages } from './runtime/messages.js'
 // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
 seedSandboxOnce()
 seedMusicOnce()
+
+// 安全护栏：把历史上误落在安装目录里的工作文件迁回 sandbox（避免下次更新随安装目录被清空）。
+// 迁移发生后用粘性事件告警，前端连上即可看到提示。
+try {
+  const rescuedDirs = rescueDataFromInstallDir()
+  if (rescuedDirs.length > 0) {
+    setStickyEvent('install_dir_rescue', {
+      level: 'warning',
+      dirs: rescuedDirs,
+      message: `检测到 ${rescuedDirs.length} 个工作目录原先存放在程序安装目录里（更新时会被清空），已自动迁移到 sandbox：${rescuedDirs.join('、')}`,
+    })
+  }
+} catch (err) {
+  console.warn('[startup] 安装目录数据迁移检查失败:', err?.message || err)
+}
 
 // Collect host system environment info (full scan + persist on first run, then refresh dynamic fields).
 // Must complete before the main loop starts so buildSystemPrompt can inject the env block.

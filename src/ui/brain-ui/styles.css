@@ -552,6 +552,8 @@ body {
 }
 
 .line-status {
+  display: inline-block;
+  margin: 6px 0 0 13px;
   font-size: 9px;
   font-family: "JetBrains Mono", ui-monospace, monospace;
   letter-spacing: 0.04em;

@@ -205,16 +205,14 @@ export class ThoughtStream {
   setStatus(text, kind = "busy") {
     this.clearStatusTimer();
     if (!this.curLine) this.newLine(this.thinkingLabel);
-    const header = this.curLine.querySelector(".line-header");
-    if (!header) return;
-    if (!this.statusEl || !this.statusEl.parentElement) {
-      this.statusEl = document.createElement("span");
-      this.statusEl.className = "line-status";
-      const timeEl = header.querySelector(".line-time");
-      header.insertBefore(this.statusEl, timeEl || null);
+    if (!this.statusEl) {
+      this.statusEl = document.createElement("div");
     }
     this.statusEl.className = `line-status ${kind}`.trim();
     this.statusEl.textContent = text;
+    // 始终把状态条移到行末（最新工具的下方），避免被堆叠的工具顶出视口
+    this.curLine.appendChild(this.statusEl);
+    this.scrollToLatest();
   }
 
   setTimedStatus(text, kind = "busy", options = {}) {
