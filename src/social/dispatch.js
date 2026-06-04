@@ -45,16 +45,35 @@ async function getFeishuTenantToken() {
   return feishuTokenRefreshing
 }
 
-async function sendFeishu({ receiveIdType, receiveId }, content) {
+async function sendFeishu({ receiveIdType, receiveId }, content, { useCard = true } = {}) {
   const token = await getFeishuTenantToken()
   const url = `https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(receiveIdType)}`
+
+  let msgType, msgContent
+  if (useCard) {
+    msgType = 'interactive'
+    msgContent = JSON.stringify({
+      config: { wide_screen_mode: true },
+      header: {
+        title: { tag: 'plain_text', content: 'Jarvis' },
+        template: 'blue',
+      },
+      elements: [
+        { tag: 'markdown', content },
+      ],
+    })
+  } else {
+    msgType = 'text'
+    msgContent = JSON.stringify({ text: content })
+  }
+
   const res = await requestJson(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
     body: {
       receive_id: receiveId,
-      msg_type: 'text',
-      content: JSON.stringify({ text: content }),
+      msg_type: msgType,
+      content: msgContent,
     },
   })
   if (!res.ok || res.data?.code !== 0) throw new Error(`Feishu send failed: ${res.text}`)
