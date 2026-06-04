@@ -25,6 +25,7 @@
     "smoke:social": "node scripts/smoke-social.mjs"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.66.1",
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
@@ -112,4 +113,3 @@
     ]
   }
 }
-
