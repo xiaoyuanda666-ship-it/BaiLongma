@@ -110,6 +110,17 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/smoke-video.mp4') {
+      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Cache-Control': 'no-cache' })
+      res.end('smoke')
+      return
+    }
+
+    if (url.pathname === '/media/history') {
+      sendJson(res, { ok: true })
+      return
+    }
+
     if (url.pathname === '/hotspots') {
       sendJson(res, {
         ok: true,
@@ -122,6 +133,33 @@ function createServer() {
             { rank: 2, title: 'Smoke 热点二', heat: '80万', trend: 'same', isNew: true, source: 'smoke' },
           ],
         },
+      })
+      return
+    }
+
+    if (url.pathname === '/hotspot-state') {
+      sendJson(res, { ok: true, state: { active: false } })
+      return
+    }
+
+    if (url.pathname === '/wiki-stats') {
+      sendJson(res, {
+        ok: true,
+        root: '/Users/merry/wiki',
+        totalFiles: 42,
+        updatedToday: 3,
+        updated7d: 9,
+        latestAt: '2026-06-08T08:30:00.000Z',
+        directories: [
+          { name: 'concepts', count: 12, latestAt: '2026-06-08T08:30:00.000Z' },
+          { name: 'life', count: 20, latestAt: '2026-06-07T12:00:00.000Z' },
+          { name: 'articles', count: 10, latestAt: '2026-06-06T12:00:00.000Z' },
+        ],
+        recent: [
+          { path: 'concepts/new-skill.md', name: 'new-skill.md', dir: 'concepts', updatedAt: '2026-06-08T08:30:00.000Z' },
+          { path: 'life/today.md', name: 'today.md', dir: 'life', updatedAt: '2026-06-08T07:30:00.000Z' },
+          { path: 'articles/report.md', name: 'report.md', dir: 'articles', updatedAt: '2026-06-08T06:30:00.000Z' },
+        ],
       })
       return
     }
@@ -225,6 +263,7 @@ page.on('pageerror', err => errors.push(err.message))
 page.on('console', msg => {
   if (msg.text().includes('/acui') && msg.text().includes('WebSocket connection')) return
   if (msg.text().includes('Failed to load resource: the server responded with a status of 404')) return
+  if (msg.text().includes('Failed to load resource: net::ERR_CONNECTION_CLOSED')) return
   if (msg.type() === 'error') errors.push(msg.text())
 })
 page.on('response', response => {
@@ -238,6 +277,44 @@ try {
   await page.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#graph circle', { timeout: 5000 })
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
+  await page.keyboard.press('v')
+  await page.waitForFunction(() => document.body.classList.contains('video-mode'))
+  const emptyVideoOpened = await page.evaluate(() => ({
+    active: document.body.classList.contains('video-mode'),
+    emptyVisible: getComputedStyle(document.querySelector('#video-empty')).display !== 'none',
+    hasMedia: document.querySelector('#video-surface')?.classList.contains('has-media'),
+  }))
+  if (!emptyVideoOpened.active || !emptyVideoOpened.emptyVisible || emptyVideoOpened.hasMedia) {
+    throw new Error('V did not open the empty video panel correctly')
+  }
+  await page.keyboard.press('v')
+  await page.waitForFunction(() => !document.body.classList.contains('video-mode'))
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent('bailongma:media', {
+      detail: {
+        mode: 'video',
+        action: 'show',
+        src: `${location.origin}/smoke-video.mp4`,
+        title: 'Smoke Video',
+        autoplay: false,
+      },
+    }))
+  })
+  await page.waitForFunction(() => document.body.classList.contains('video-mode') && !document.querySelector('#video-feed')?.hidden)
+  const loadedVideo = await page.evaluate(() => ({
+    title: document.querySelector('#video-title')?.textContent || '',
+    videoSrc: document.querySelector('#video-feed')?.getAttribute('src') || '',
+    hasMedia: document.querySelector('#video-surface')?.classList.contains('has-media'),
+  }))
+  if (!loadedVideo.title.includes('Smoke Video')) throw new Error('media_mode video title did not render')
+  if (!loadedVideo.videoSrc.includes('/smoke-video.mp4')) throw new Error('media_mode video src was not loaded')
+  if (!loadedVideo.hasMedia) throw new Error('media_mode video did not mark surface as loaded')
+  await page.keyboard.press('v')
+  await page.waitForFunction(() => !document.body.classList.contains('video-mode'))
+  await page.keyboard.press('v')
+  await page.waitForFunction(() => document.body.classList.contains('video-mode') && !document.querySelector('#video-feed')?.hidden)
+  await page.click('#video-exit-btn')
+  await page.waitForFunction(() => !document.body.classList.contains('video-mode'))
   await page.fill('#msg-input', '马云是谁')
   await page.click('#send-btn')
   await page.waitForTimeout(300)
@@ -256,22 +333,58 @@ try {
   })
   await page.waitForFunction(() => document.querySelector('#pc-summary')?.textContent.includes('阿里巴巴集团创始人'))
 
-  const snapshot = await page.evaluate(() => ({
-    d3: Boolean(window.d3),
-    nodes: document.querySelectorAll('#graph circle').length,
-    links: document.querySelectorAll('#graph line').length,
-    acuiHost: Boolean(document.getElementById('acui-host')),
-    personCard: document.querySelector('#pc-name')?.textContent || '',
-    personSummary: document.querySelector('#pc-summary')?.textContent || '',
-    personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
-    personImage: !document.querySelector('#pc-hero-img')?.hidden,
-    closeHidden: getComputedStyle(document.querySelector('#pc-exit-btn')).opacity === '0',
-    brand: document.querySelector('#agent-brand-name')?.textContent || '',
-  }))
+  await page.keyboard.press('Control+Alt+W')
+  await page.waitForFunction(() => document.querySelector('#wiki-panel.active'))
+  await page.waitForFunction(() => document.querySelector('#wiki-total-count')?.textContent.includes('42'))
+
+  await page.click('.wiki-node[data-seed-id="tools_system"]')
+
+  const snapshot = await page.evaluate(() => {
+    const graphContainer = document.getElementById('wiki-graph-container')
+    const graphRect = graphContainer?.getBoundingClientRect()
+    const detailRect = document.getElementById('wiki-seed-detail')?.getBoundingClientRect()
+    return {
+      d3: Boolean(window.d3),
+      nodes: document.querySelectorAll('#graph circle').length,
+      links: document.querySelectorAll('#graph line').length,
+      acuiHost: Boolean(document.getElementById('acui-host')),
+      wikiSeedNodes: document.querySelectorAll('#wiki-panel .wiki-node').length,
+      wikiSeedLinks: document.querySelectorAll('#wiki-panel .wiki-graph-lines line').length,
+      wikiSeedGraphVisible: !!graphRect && graphRect.width > 300 && graphRect.height > 250,
+      wikiSeedDetailBelowGraph: !!graphRect && !!detailRect && detailRect.top >= graphRect.bottom,
+      wikiStatsTotal: document.querySelector('#wiki-total-count')?.textContent || '',
+      wikiStatsToday: document.querySelector('#wiki-recent-num')?.textContent || '',
+      wikiStatsRecent: [...document.querySelectorAll('#wiki-feed-track .hs-feed-item')].map(el => el.textContent).join(' / '),
+      wikiPanelLatestList: document.querySelector('#wiki-articles-list')?.textContent || '',
+      wikiStatsDist: document.querySelector('#wiki-dist-list')?.textContent || '',
+      wikiSeedFocused: document.querySelector('#wiki-seed-detail')?.textContent || '',
+      wikiActiveNode: document.querySelector('.wiki-node-active')?.dataset.seedId || '',
+      wikiActiveLinks: document.querySelectorAll('.wiki-graph-line-active').length,
+      personCard: document.querySelector('#pc-name')?.textContent || '',
+      personSummary: document.querySelector('#pc-summary')?.textContent || '',
+      personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
+      personImage: !document.querySelector('#pc-hero-img')?.hidden,
+      closeHidden: getComputedStyle(document.querySelector('#pc-exit-btn')).opacity === '0',
+      brand: document.querySelector('#agent-brand-name')?.textContent || '',
+    }
+  })
 
   if (!snapshot.d3) throw new Error('d3 global missing')
   if (snapshot.nodes < 2) throw new Error(`expected at least 2 graph nodes, saw ${snapshot.nodes}`)
   if (!snapshot.acuiHost) throw new Error('ACUI host was not bootstrapped')
+  if (snapshot.wikiSeedNodes !== 27) throw new Error(`expected 27 wiki seed graph nodes, saw ${snapshot.wikiSeedNodes}`)
+  if (snapshot.wikiSeedLinks !== 31) throw new Error(`expected 31 wiki seed graph links, saw ${snapshot.wikiSeedLinks}`)
+  if (!snapshot.wikiSeedGraphVisible) throw new Error('wiki seed graph container is not visibly sized')
+  if (!snapshot.wikiSeedDetailBelowGraph) throw new Error('wiki seed detail overlaps the graph container')
+  if (!snapshot.wikiStatsTotal.includes('42')) throw new Error('wiki total file stats did not render')
+  if (!snapshot.wikiStatsToday.includes('3')) throw new Error('wiki today update stats did not render')
+  if (!snapshot.wikiStatsRecent.includes('concepts/new-skill.md')) throw new Error('wiki recent update files did not render')
+  if (!snapshot.wikiPanelLatestList.includes('concepts/new-skill.md')) throw new Error('wiki latest update panel list did not render')
+  if (!snapshot.wikiStatsDist.includes('concepts') || !snapshot.wikiStatsDist.includes('12')) throw new Error('wiki directory distribution did not render')
+  if (snapshot.wikiActiveNode !== 'tools_system') throw new Error('clicking a wiki seed node did not focus it')
+  if (!snapshot.wikiSeedFocused.includes('工具系统')) throw new Error('wiki seed detail did not show clicked node title')
+  if (!snapshot.wikiSeedFocused.includes('内置工具')) throw new Error('wiki seed detail did not show clicked node detail')
+  if (snapshot.wikiActiveLinks < 5) throw new Error('wiki seed graph did not highlight clicked node relationships')
   if (!snapshot.personCard.includes('马云')) throw new Error('person card did not render the requested person')
   if (!snapshot.personSummary.includes('阿里巴巴集团创始人')) throw new Error('person card did not absorb assistant summary')
   if (!snapshot.personKnownFor.includes('淘宝')) throw new Error('person card did not absorb assistant known-for items')

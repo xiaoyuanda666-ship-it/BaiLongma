@@ -40,6 +40,8 @@ const D3_VENDOR_PATH     = path.join(paths.resourcesDir, 'node_modules', 'd3', '
 const SANDBOX_PATH       = paths.sandboxDir
 const DEFAULT_AGENT_NAME = '小白龙'
 const DEFAULT_API_HOST = '127.0.0.1'
+const DEFAULT_WIKI_ROOT = path.join(process.env.HOME || paths.userDir, 'wiki')
+const WIKI_FILE_EXTENSIONS = new Set(['.md', '.markdown', '.txt', '.html', '.htm', '.pdf'])
 
 // card.action signals that are lifecycle/system-internal — stored in DB for passive injector use only, not pushed to the agent queue
 const SILENT_CARD_ACTIONS = new Set([
@@ -189,6 +191,73 @@ function contentTypeFor(filePath) {
       return 'image/svg+xml'
     default:
       return 'text/plain; charset=utf-8'
+  }
+}
+
+function formatRelativeWikiPath(root, filePath) {
+  return path.relative(root, filePath).split(path.sep).join('/')
+}
+
+function getWikiRoot() {
+  const configured = String(process.env.BAILONGMA_WIKI_DIR || getConfig('wiki_root') || '').trim()
+  return path.resolve(configured || DEFAULT_WIKI_ROOT)
+}
+
+function collectWikiStats() {
+  const root = getWikiRoot()
+  const now = Date.now()
+  const dayMs = 24 * 60 * 60 * 1000
+  const files = []
+  const dirCounts = new Map()
+  const stack = [root]
+
+  if (!fs.existsSync(root)) {
+    return { ok: true, root, exists: false, totalFiles: 0, updatedToday: 0, updated7d: 0, latestAt: null, directories: [], recent: [] }
+  }
+
+  while (stack.length) {
+    const dir = stack.pop()
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const fullPath = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        stack.push(fullPath)
+        continue
+      }
+      if (!entry.isFile()) continue
+      const ext = path.extname(entry.name).toLowerCase()
+      if (!WIKI_FILE_EXTENSIONS.has(ext)) continue
+      let stat
+      try { stat = fs.statSync(fullPath) } catch { continue }
+      const rel = formatRelativeWikiPath(root, fullPath)
+      const topDir = rel.includes('/') ? rel.split('/')[0] : 'root'
+      const updatedAtMs = stat.mtimeMs
+      files.push({ path: rel, name: entry.name, dir: topDir, updatedAtMs, updatedAt: new Date(updatedAtMs).toISOString() })
+      const current = dirCounts.get(topDir) || { name: topDir, count: 0, latestAtMs: 0 }
+      current.count += 1
+      current.latestAtMs = Math.max(current.latestAtMs, updatedAtMs)
+      dirCounts.set(topDir, current)
+    }
+  }
+
+  files.sort((a, b) => b.updatedAtMs - a.updatedAtMs)
+  const directories = [...dirCounts.values()]
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+    .slice(0, 8)
+    .map(item => ({ name: item.name, count: item.count, latestAt: item.latestAtMs ? new Date(item.latestAtMs).toISOString() : null }))
+
+  return {
+    ok: true,
+    root,
+    exists: true,
+    totalFiles: files.length,
+    updatedToday: files.filter(file => now - file.updatedAtMs <= dayMs).length,
+    updated7d: files.filter(file => now - file.updatedAtMs <= 7 * dayMs).length,
+    latestAt: files[0]?.updatedAt || null,
+    directories,
+    recent: files.slice(0, 12).map(({ updatedAtMs, ...file }) => file),
   }
 }
 
@@ -539,6 +608,16 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       return
     }
 
+    // GET /wiki-stats — filesystem summary for Wiki knowledge panel
+    if (req.method === 'GET' && url.pathname === '/wiki-stats') {
+      try {
+        jsonResponse(res, 200, collectWikiStats())
+      } catch (err) {
+        jsonResponse(res, 500, { ok: false, error: err?.message || 'wiki stats failed' })
+      }
+      return
+    }
+
     // GET /media/music/:filename — serve musicDir audio files (avoids file:// cross-origin restriction)
     if (req.method === 'GET' && url.pathname.startsWith('/media/music/')) {
       const raw = url.pathname.slice('/media/music/'.length)
@@ -824,27 +903,15 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     }
 
     if (req.method === 'GET' && url.pathname === '/dashboard.html') {
-      try {
-        const html = fs.readFileSync(DASHBOARD_PATH, 'utf-8')
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(html)
-      } catch {
-        res.writeHead(404)
-        res.end('dashboard.html not found')
-      }
+      res.writeHead(302, { Location: '/brain-ui' })
+      res.end()
       return
     }
 
-    // GET /brain.html — Brain Monitor
+    // GET /brain.html — legacy Brain Monitor route
     if (req.method === 'GET' && url.pathname === '/brain.html') {
-      try {
-        const html = fs.readFileSync(BRAIN_PATH, 'utf-8')
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(html)
-      } catch {
-        res.writeHead(404)
-        res.end('brain.html not found')
-      }
+      res.writeHead(302, { Location: '/brain-ui' })
+      res.end()
       return
     }
 

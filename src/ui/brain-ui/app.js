@@ -2844,12 +2844,12 @@ initHotspot().catch((err) => console.warn('[Hotspot] init failed:', err));
   }
 
   async function showVideo({
-    url = "", title = "Video", autoplay = true,
+    url = "", src = "", title = "Video", autoplay = true,
     muted = false, volume = null, currentTime = null, camera = false,
   } = {}) {
     if (camera) { showCamera({ title, autoplay }); return; }
 
-    const source = normalizeUrl(url);
+    const source = normalizeUrl(url || src);
     if (musicActive) closeMusicPanel();
     setPanelVisible(true);
     resetVideoSurface();
@@ -3255,6 +3255,18 @@ initHotspot().catch((err) => console.warn('[Hotspot] init failed:', err));
 
   window.addEventListener("keydown", (e) => {
     if (e.target?.tagName === "INPUT" || e.target?.tagName === "TEXTAREA" || e.target?.isContentEditable) return;
+
+    const isWikiShortcutKey = e.code === "KeyW" || e.key === "W" || e.key === "w";
+    if (
+      (e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && isWikiShortcutKey) ||
+      (e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey && isWikiShortcutKey)
+    ) {
+      e.preventDefault();
+      setHotspotMode(false, { source: "keyboard" });
+      toggleWikiPanel();
+      return;
+    }
+
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "v" || e.key === "V") {
       e.preventDefault();

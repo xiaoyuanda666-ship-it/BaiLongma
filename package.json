@@ -22,7 +22,7 @@
     "smoke:social": "node scripts/smoke-social.mjs"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.10.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
     "openai": "^6.34.0",
@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
-    "electron": "^33.2.0",
+    "electron": "^33.4.11",
     "electron-builder": "^25.1.8",
     "playwright": "^1.59.1"
   },

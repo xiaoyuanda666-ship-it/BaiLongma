@@ -374,6 +374,8 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
     stopHotspotRefresh();
     restoreVoicePanel();
   } else {
+    window.closeWikiPanel?.();
+
     // 关闭其他媒体模式（互斥）
     if (document.body.classList.contains('video-mode'))
       document.body.classList.remove('video-mode');

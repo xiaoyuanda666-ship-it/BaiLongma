@@ -2979,6 +2979,390 @@ body.video-mode   > #voice-panel #voice-canvas {
   padding: 0 6px;
 }
 
+body.wiki-panel-mode #panel-l1 { transform: translateX(calc(-100% - 20px)); }
+body.wiki-panel-mode #panel-l2 { transform: translateX(calc(100% + 20px)); }
+body.wiki-panel-mode .console  { left: calc(66vw + 8px); right: 16px; }
+body.wiki-panel-mode #graph    { transform: none; }
+body.wiki-panel-mode .panel-tab { opacity: 0; pointer-events: none; transition: opacity 0.3s ease; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Wiki 面板  WIKI PANEL
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.wiki-panel {
+  position: fixed;
+  left: 16px;
+  top: 16px;
+  bottom: 16px;
+  width: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg-deep) 94%, #001018);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    width 0.45s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.35s ease,
+    border-color 0.35s ease;
+}
+
+.wiki-panel.active {
+  width: calc(66vw - 32px);
+  opacity: 1;
+  pointer-events: auto;
+  border-color: var(--line-strong);
+}
+
+.wiki-panel .hs-body {
+  flex: 1 1 0;
+}
+
+.wiki-panel .hs-col-center {
+  gap: 10px;
+  padding: 10px;
+}
+
+.wiki-panel .wiki-graph-container {
+  flex: 1 1 58%;
+  min-height: 320px;
+  border: 1px solid rgba(143,182,216,.16);
+  border-radius: 14px;
+}
+
+.wiki-panel .hs-center-aux {
+  flex: 0 0 118px;
+  border: 1px solid rgba(143,182,216,.12);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.wiki-tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+  align-content: center;
+  padding: 24px;
+  width: 100%;
+  height: 100%;
+}
+
+.wiki-tag {
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255,255,255,.045);
+  color: var(--ink2);
+  padding: 6px 12px;
+  cursor: default;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+
+.wiki-tag:hover {
+  color: var(--ink);
+  border-color: var(--cool);
+  background: rgba(143,182,216,.10);
+}
+
+.wiki-graph-container {
+  background:
+    radial-gradient(circle at 50% 48%, rgba(143,182,216,.16), transparent 34%),
+    linear-gradient(180deg, #07111d 0%, #050a12 100%);
+}
+
+.wiki-graph-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: .22;
+  background-image:
+    linear-gradient(rgba(143,182,216,.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(143,182,216,.10) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(circle at center, black 30%, transparent 82%);
+}
+
+.wiki-graph-lines {
+  position: absolute;
+  inset: 34px 18px 26px;
+  width: calc(100% - 36px);
+  height: calc(100% - 60px);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.wiki-graph-lines line {
+  stroke: rgba(143,182,216,.26);
+  stroke-width: .72;
+  stroke-linecap: round;
+  stroke-dasharray: 2 7;
+  vector-effect: non-scaling-stroke;
+}
+
+.wiki-graph-lines .wiki-graph-line-soft {
+  stroke: rgba(143,182,216,.14);
+  stroke-width: .56;
+}
+
+.wiki-graph-nodes {
+  position: absolute;
+  inset: 40px 20px 34px;
+  display: block;
+  padding: 0;
+  width: auto;
+  height: auto;
+  z-index: 2;
+}
+
+.wiki-node {
+  position: absolute;
+  left: var(--x);
+  top: var(--y);
+  transform: translate(-50%, -50%) scale(var(--s, 1));
+  min-width: 72px;
+  text-align: center;
+  border-color: rgba(143,182,216,.42);
+  background:
+    linear-gradient(145deg, rgba(143,182,216,.16), rgba(255,255,255,.035)),
+    rgba(9,18,28,.92);
+  color: var(--ink);
+  box-shadow: 0 0 22px rgba(143,182,216,.07), inset 0 1px 0 rgba(255,255,255,.06);
+  cursor: pointer;
+  font: inherit;
+}
+
+.wiki-node:focus-visible {
+  outline: 2px solid var(--cool);
+  outline-offset: 3px;
+}
+
+.wiki-node-core {
+  min-width: 92px;
+  border-color: var(--cool);
+  color: #eaf6ff;
+  background:
+    radial-gradient(circle at top, rgba(143,182,216,.34), transparent 62%),
+    rgba(16,32,46,.96);
+  box-shadow: 0 0 34px rgba(143,182,216,.24), inset 0 1px 0 rgba(255,255,255,.10);
+}
+
+.wiki-node-active {
+  z-index: 5;
+  border-color: #fff;
+  color: #fff;
+  background:
+    radial-gradient(circle at top, rgba(143,182,216,.48), transparent 64%),
+    rgba(20,42,60,.98);
+  box-shadow: 0 0 38px rgba(143,182,216,.46), 0 0 0 1px rgba(255,255,255,.18), inset 0 1px 0 rgba(255,255,255,.16);
+}
+
+.wiki-node-related {
+  z-index: 4;
+  border-color: rgba(143,182,216,.84);
+  color: var(--ink);
+  box-shadow: 0 0 24px rgba(143,182,216,.24), inset 0 1px 0 rgba(255,255,255,.10);
+}
+
+.wiki-node-dimmed {
+  opacity: .34;
+}
+
+.wiki-graph-lines line.wiki-graph-line-active {
+  stroke: rgba(205,231,255,.74);
+  stroke-width: 1.15;
+  stroke-dasharray: 4 4;
+}
+
+.wiki-graph-lines line.wiki-graph-line-dimmed {
+  opacity: .12;
+}
+
+.wiki-node-minor {
+  color: var(--ink2);
+  border-color: rgba(143,182,216,.24);
+  background: rgba(9,18,28,.76);
+}
+
+.wiki-graph-stats {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 28px;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.wiki-graph-stats span {
+  border: 1px solid rgba(143,182,216,.20);
+  border-radius: 999px;
+  background: rgba(0,0,0,.18);
+  color: var(--dim);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  padding: 3px 8px;
+}
+
+.wiki-seed-detail {
+  flex: 0 0 104px;
+  max-height: 104px;
+  min-height: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(143,182,216,.22);
+  border-radius: 12px;
+  background: rgba(5,10,18,.78);
+  box-shadow: 0 14px 38px rgba(0,0,0,.16), inset 0 1px 0 rgba(255,255,255,.06);
+  overflow: hidden;
+}
+
+.wiki-seed-detail-kicker {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--cool);
+  margin-bottom: 4px;
+}
+
+.wiki-seed-detail-title {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.wiki-seed-detail-body {
+  color: var(--ink2);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wiki-seed-detail-links {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.wiki-seed-detail-links span {
+  border: 1px solid rgba(143,182,216,.18);
+  border-radius: 999px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  padding: 2px 7px;
+  background: rgba(143,182,216,.06);
+}
+
+.hs-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  color: var(--ink2);
+  font-size: 11px;
+  line-height: 1.45;
+  border-left: 2px solid transparent;
+}
+
+.hs-list-item:hover {
+  color: var(--ink);
+  background: var(--line);
+  border-left-color: var(--cool);
+}
+
+.hs-list-item--wiki-update {
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.wiki-list-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-list-time {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.hs-list-item--stub {
+  color: var(--ink2);
+}
+
+.wiki-panel .hs-feed-bar {
+  height: 104px;
+}
+
+.wiki-panel .hs-feed-track {
+  align-items: stretch;
+}
+
+.wiki-panel .hs-feed-item {
+  flex: 0 0 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background:
+    linear-gradient(145deg, rgba(143,182,216,.08), transparent 42%),
+    var(--bg1);
+  color: var(--ink);
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+.wiki-panel .hs-feed-item:hover {
+  border-color: var(--cool);
+  background: color-mix(in srgb, var(--bg1) 82%, var(--cool) 8%);
+}
+
+.wiki-update-path,
+.wiki-update-time {
+  display: block;
+}
+
+.wiki-update-path {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.wiki-update-time {
+  margin-top: 4px;
+  color: var(--dim);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    人物卡片模式  PERSON CARD MODE
    ───────────────────────────────────────────────────────────────────────────── */
