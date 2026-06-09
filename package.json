@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.343",
+  "version": "2.1.353",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -23,6 +23,8 @@
     "test:section-gate": "node ./src/test-section-gate.js",
     "test:agent-skills": "node ./src/test-agent-skills.js",
     "test:config-upgrade": "node ./src/test-config-upgrade.js",
+    "repair:memories:dry": "electron ./scripts/repair-memory-quality.js",
+    "repair:memories": "electron ./scripts/repair-memory-quality.js --apply",
     "probe:config-upgrade": "node ./scripts/probe-config-upgrade.mjs",
     "smoke:tools": "node scripts/smoke-tools.mjs",
     "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
@@ -104,8 +106,8 @@
       "installerHeaderIcon": "build/installerHeaderIcon.ico",
       "installerSidebar": "build/installerSidebar.bmp",
       "uninstallerSidebar": "build/uninstallerSidebar.bmp",
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": false,
       "shortcutName": "Bailongma"
     },
     "publish": [

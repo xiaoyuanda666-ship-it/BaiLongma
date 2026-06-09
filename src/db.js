@@ -68,9 +68,15 @@ function initSchema() {
   // 整段 try-catch；失败时回到老行为（FTS5 中文召回不工作但程序不崩）。
   try {
     const ftsRow = db.prepare(`SELECT sql FROM sqlite_master WHERE name='memories_fts'`).get()
-    if (ftsRow && !/trigram/i.test(String(ftsRow.sql || ''))) {
+    const ftsSql = String(ftsRow?.sql || '')
+    const needsFtsRebuild = ftsRow && (
+      !/trigram/i.test(ftsSql)
+      || !/\btitle\b/i.test(ftsSql)
+      || !/\bmem_id\b/i.test(ftsSql)
+    )
+    if (needsFtsRebuild) {
       const memCountBefore = (() => { try { return db.prepare('SELECT COUNT(*) AS c FROM memories').get().c } catch { return -1 } })()
-      console.log(`[DB migration] Upgrading memories_fts: unicode61 → trigram. memories rows=${memCountBefore}. memories table itself is NOT touched.`)
+      console.log(`[DB migration] Upgrading memories_fts: trigram + title/mem_id searchable columns. memories rows=${memCountBefore}. memories table itself is NOT touched.`)
       db.exec(`
         DROP TRIGGER IF EXISTS memories_ai;
         DROP TRIGGER IF EXISTS memories_au;
@@ -154,26 +160,26 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_memories_parent_id  ON memories(parent_id);
 
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-      content, detail, entities, concepts, tags,
+      title, mem_id, content, detail, entities, concepts, tags,
       content='memories', content_rowid='id',
       tokenize='trigram'
     );
 
     CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO memories_fts(rowid, content, detail, entities, concepts, tags)
-      VALUES (new.id, new.content, new.detail, new.entities, new.concepts, new.tags);
+      INSERT INTO memories_fts(rowid, title, mem_id, content, detail, entities, concepts, tags)
+      VALUES (new.id, new.title, new.mem_id, new.content, new.detail, new.entities, new.concepts, new.tags);
     END;
 
     CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content, detail, entities, concepts, tags)
-      VALUES ('delete', old.id, old.content, old.detail, old.entities, old.concepts, old.tags);
+      INSERT INTO memories_fts(memories_fts, rowid, title, mem_id, content, detail, entities, concepts, tags)
+      VALUES ('delete', old.id, old.title, old.mem_id, old.content, old.detail, old.entities, old.concepts, old.tags);
     END;
 
     CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content, detail, entities, concepts, tags)
-      VALUES ('delete', old.id, old.content, old.detail, old.entities, old.concepts, old.tags);
-      INSERT INTO memories_fts(rowid, content, detail, entities, concepts, tags)
-      VALUES (new.id, new.content, new.detail, new.entities, new.concepts, new.tags);
+      INSERT INTO memories_fts(memories_fts, rowid, title, mem_id, content, detail, entities, concepts, tags)
+      VALUES ('delete', old.id, old.title, old.mem_id, old.content, old.detail, old.entities, old.concepts, old.tags);
+      INSERT INTO memories_fts(rowid, title, mem_id, content, detail, entities, concepts, tags)
+      VALUES (new.id, new.title, new.mem_id, new.content, new.detail, new.entities, new.concepts, new.tags);
     END;
 
     CREATE TABLE IF NOT EXISTS config (
@@ -1640,19 +1646,48 @@ export function upsertUserProfile(profile = {}) {
   return getUserProfile(payload.user_id)
 }
 
+const RECENT_RAW_CONTEXT_FLOOR = 60
+const CONVERSATION_COLUMNS = `
+  id, role, from_id, to_id, content, channel, timestamp, created_at,
+  external_party_id, focus_absorbed, focus_topic, open_question
+`
+
+function normalizeConversationLimit(limit, fallback = 20) {
+  const n = Number(limit)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
+}
+
 export function getRecentConversation(entityId, limit = 20, maxHours = 24, { includeAbsorbed = false } = {}) {
   const db = getDB()
   const normalizedId = normalizeConversationPartyId(entityId)
   const cutoff = new Date(Date.now() - maxHours * 3600 * 1000).toISOString()
-  const absorbedClause = includeAbsorbed ? '' : 'AND focus_absorbed = 0'
+  const safeLimit = normalizeConversationLimit(limit)
+  if (includeAbsorbed) {
+    const rows = db.prepare(`
+      SELECT ${CONVERSATION_COLUMNS} FROM conversations
+      WHERE (from_id = ? OR to_id = ?)
+      AND timestamp >= ?
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
+    `).all(normalizedId, normalizedId, cutoff, safeLimit)
+    return rows.reverse()
+  }
+
   const rows = db.prepare(`
-    SELECT * FROM conversations
-    WHERE (from_id = ? OR to_id = ?)
-    AND timestamp >= ?
-    ${absorbedClause}
-    ORDER BY timestamp DESC
+    WITH scoped AS (
+      SELECT
+        ${CONVERSATION_COLUMNS},
+        ROW_NUMBER() OVER (ORDER BY timestamp DESC, id DESC) AS recent_rank
+      FROM conversations
+      WHERE (from_id = ? OR to_id = ?)
+      AND timestamp >= ?
+    )
+    SELECT ${CONVERSATION_COLUMNS}
+    FROM scoped
+    WHERE recent_rank <= ? OR focus_absorbed = 0
+    ORDER BY timestamp DESC, id DESC
     LIMIT ?
-  `).all(normalizedId, normalizedId, cutoff, limit)
+  `).all(normalizedId, normalizedId, cutoff, RECENT_RAW_CONTEXT_FLOOR, safeLimit)
   return rows.reverse() // 按时间正序返回
 }
 
@@ -1661,14 +1696,31 @@ export function getRecentConversation(entityId, limit = 20, maxHours = 24, { inc
 export function getRecentConversationTimeline(limit = 20, maxHours = 24, { includeAbsorbed = false } = {}) {
   const db = getDB()
   const cutoff = new Date(Date.now() - maxHours * 3600 * 1000).toISOString()
-  const absorbedClause = includeAbsorbed ? '' : 'AND focus_absorbed = 0'
+  const safeLimit = normalizeConversationLimit(limit)
+  if (includeAbsorbed) {
+    const rows = db.prepare(`
+      SELECT ${CONVERSATION_COLUMNS} FROM conversations
+      WHERE timestamp >= ?
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ?
+    `).all(cutoff, safeLimit)
+    return rows.reverse()
+  }
+
   const rows = db.prepare(`
-    SELECT * FROM conversations
-    WHERE timestamp >= ?
-    ${absorbedClause}
-    ORDER BY timestamp DESC
+    WITH scoped AS (
+      SELECT
+        ${CONVERSATION_COLUMNS},
+        ROW_NUMBER() OVER (ORDER BY timestamp DESC, id DESC) AS recent_rank
+      FROM conversations
+      WHERE timestamp >= ?
+    )
+    SELECT ${CONVERSATION_COLUMNS}
+    FROM scoped
+    WHERE recent_rank <= ? OR focus_absorbed = 0
+    ORDER BY timestamp DESC, id DESC
     LIMIT ?
-  `).all(cutoff, limit)
+  `).all(cutoff, RECENT_RAW_CONTEXT_FLOOR, safeLimit)
   return rows.reverse()
 }
 
@@ -1886,11 +1938,14 @@ export function searchMemories(keyword, limit = 10) {
   const kw = String(keyword || '')
   const likeFallback = () => db.prepare(`
     SELECT * FROM memories
-    WHERE (content LIKE ? OR detail LIKE ? OR concepts LIKE ?)
+    WHERE (
+      title LIKE ? OR mem_id LIKE ? OR content LIKE ? OR detail LIKE ?
+      OR entities LIKE ? OR concepts LIKE ? OR tags LIKE ?
+    )
     AND ${VISIBLE_CLAUSE}
     ORDER BY COALESCE(salience, 3) DESC, timestamp DESC
     LIMIT ?
-  `).all(`%${kw}%`, `%${kw}%`, `%${kw}%`, limit)
+  `).all(`%${kw}%`, `%${kw}%`, `%${kw}%`, `%${kw}%`, `%${kw}%`, `%${kw}%`, `%${kw}%`, limit)
 
   // trigram tokenizer 对 < 3 字符的查询无法匹配，直接走 LIKE
   if (kw.length < 3) return likeFallback()
@@ -2153,10 +2208,23 @@ export function deleteMusicTrack(id) {
 //   focus.js 只在内存里改 state.focusStack，所以 index.js 在每次 updateFocusFrame
 //   返回非 noop 时主动调；focus-compress.js 也通过 onConclusionAttached 回调触发。
 //   写库失败 console.warn 后吞掉——专注栈丢一次远比阻塞主对话轻。
+const FOCUS_STACK_RESTORE_TTL_MS = 24 * 60 * 60 * 1000
+
 export function loadFocusStack() {
   const db = getDB()
   try {
     const rows = db.prepare(`SELECT * FROM focus_stack ORDER BY depth ASC`).all()
+    if (rows.length > 0) {
+      const newest = rows
+        .map(r => Date.parse(r.updated_at || r.started_at || ''))
+        .filter(Number.isFinite)
+        .sort((a, b) => b - a)[0]
+      if (Number.isFinite(newest) && Date.now() - newest > FOCUS_STACK_RESTORE_TTL_MS) {
+        db.prepare(`DELETE FROM focus_stack`).run()
+        console.log('[focus-persist] dropped stale persisted focus_stack on startup')
+        return []
+      }
+    }
     return rows.map(r => ({
       topic: JSON.parse(r.topic || '[]'),
       startedAt: r.started_at,

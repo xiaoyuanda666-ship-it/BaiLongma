@@ -44,6 +44,19 @@ const MIN_MESSAGE_LENGTH = 4
 // 短回应（关键词不足但 body 长度 ≥ 此值）视为对栈顶的承诺/确认，保留栈顶不丢。
 const SHORT_RESPONSE_KEEP_THRESHOLD = 10
 
+// 明显的一次性叶子查询：不该开启/切换专注帧。
+// 只在生产 async 路径启用，避免测试/同步仲裁场景失去覆盖；同步路径仍交给 LLM 判 leaf。
+const ONE_OFF_LEAF_RE = /天气|气温|温度|下雨|下雪|空气质量|AQI|几点|几号|星期几|汇率|股价|热搜|新闻|在吗|早上好|晚上好|谢谢|收到/i
+const SUSTAINED_FOCUS_RE = /分析|优化|修复|实现|修改|设计|写|做|排查|调试|构建|部署|项目|代码|文件|机制|方案|测试|review|debug|fix|implement|build/i
+
+function isLikelyOneOffLeaf(body) {
+  const text = String(body || '').trim()
+  if (!text) return false
+  if (SUSTAINED_FOCUS_RE.test(text)) return false
+  if (/^(hello|hi|hey|在吗|早上好|晚上好|谢谢|收到)$/i.test(text)) return true
+  return text.length <= 40 && ONE_OFF_LEAF_RE.test(text)
+}
+
 // 判断当前输入是不是 TICK。复用 injector 的同源识别。
 function isTickMessage(message) {
   return typeof message === 'string' && /^TICK\s/i.test(message.trim())
@@ -179,6 +192,10 @@ export async function updateFocusFrame(state, message, {
     return maybeClearStale(state, tickCounter)
   }
 
+  if (classifierEnabled && classifierMode === 'async' && isLikelyOneOffLeaf(body)) {
+    return { event: 'noop', poppedFrames: [] }
+  }
+
   // 抽关键词
   const kws = extractKeywords(body, KEYWORD_EXTRACT_BUDGET)
   // 关键词太少（≤2）= 太空泛，原则上不动
@@ -225,6 +242,7 @@ export async function updateFocusFrame(state, message, {
   // ===== async 模式：v0 立刻建帧 + LLM 后台仲裁 + 拿到结果后 patch 帧 topic =====
   // 这条路径专为 fastUserPath 实时聊天用：零延迟，下一轮 buildContextBlock 看到 refined topic。
   if (classifierEnabled && classifierMode === 'async') {
+    const priorTopRef = topOf(state.focusStack)
     const result = applyV0Pushed_or_Returned({
       state,
       v0Event,
@@ -262,9 +280,42 @@ export async function updateFocusFrame(state, message, {
         console.log('[focus-classifier] async LLM 返回但帧已出栈 → 丢弃 refined topic')
         return
       }
+
+      // 简单误 push 可以安全回滚：没有挤出旧帧、刚 push 的帧仍是栈顶。
+      // returned / overflow 涉及 poppedFrames 与压缩回填，暂不事后重排结构。
+      const canUndoSimplePush =
+        v0Event === 'pushed' &&
+        result.poppedFrames.length === 0 &&
+        topOf(state.focusStack) === frameRef
+      if (canUndoSimplePush && llm.action === 'leaf') {
+        state.focusStack.pop()
+        console.log('[focus-classifier] async rollback pushed→leaf: removed one-off focus frame')
+        if (typeof onClassifierRefined === 'function') {
+          try {
+            onClassifierRefined({ frameRef, llmResult: llm, v0Event, correction: 'removed_leaf_frame' })
+          } catch (e) {
+            console.log(`[focus-classifier] onClassifierRefined 回调抛错: ${e?.message || 'unknown'}`)
+          }
+        }
+        return
+      }
+      if (canUndoSimplePush && llm.action === 'kept' && priorTopRef && state.focusStack.includes(priorTopRef)) {
+        state.focusStack.pop()
+        priorTopRef.lastSeenTick = tickCounter
+        priorTopRef.hitCount += 1
+        console.log('[focus-classifier] async rollback pushed→kept: restored previous top frame')
+        if (typeof onClassifierRefined === 'function') {
+          try {
+            onClassifierRefined({ frameRef: priorTopRef, llmResult: llm, v0Event, correction: 'restored_kept_frame' })
+          } catch (e) {
+            console.log(`[focus-classifier] onClassifierRefined 回调抛错: ${e?.message || 'unknown'}`)
+          }
+        }
+        return
+      }
+
       // 只在 LLM 给的 action 跟 v0 结构动作一致时才回填 topic。
-      // LLM 改判 kept/leaf/不同 action → 我们已经按 v0 建了帧，不再事后改栈结构（太复杂、风险高）。
-      // 只回填 topic 也已经解决了主要 bug（语义关键词替换 ngram）。
+      // 除上方「简单 pushed→leaf/kept」安全回滚外，其余结构改判不事后重排，避免和压缩回填竞态。
       if (llm.action !== v0Event) {
         console.log(`[focus-classifier] async LLM 改判 ${v0Event}→${llm.action}，async 模式不改栈结构，但仍回填 topic 以反映语义`)
       }

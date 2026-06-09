@@ -54,7 +54,7 @@ function stubClassifier(returnValue, capture) {
   state.tickCounter = 5
 
   const captured = []
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, 'build realtime dashboard component integration', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -105,7 +105,7 @@ function stubClassifier(returnValue, capture) {
   state.focusStack = [makeFrame(['prompt', 'caching'])]
   state.tickCounter = 5
 
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, 'build realtime dashboard component integration', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -145,7 +145,7 @@ function stubClassifier(returnValue, capture) {
   state.tickCounter = 5
 
   const throwingClassifier = async () => { throw new Error('LLM blew up') }
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, '实现广州天气预报看板功能并联动实时数据', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -163,7 +163,7 @@ function stubClassifier(returnValue, capture) {
   state.tickCounter = 5
   const stackSnap = JSON.stringify(state.focusStack.map(f => f.topic))
 
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, '实现广州天气预报看板功能并联动实时数据', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -207,7 +207,7 @@ function stubClassifier(returnValue, capture) {
   state.tickCounter = 5
 
   let called = false
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, '实现广州天气预报看板功能并联动实时数据', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: false,
@@ -327,7 +327,7 @@ function stubClassifier(returnValue, capture) {
   const llmPending = new Promise(resolve => { resolveLLM = resolve })
   const refinedCalls = []
 
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, 'build realtime dashboard component integration', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -369,7 +369,7 @@ function stubClassifier(returnValue, capture) {
   state.tickCounter = 5
 
   const refinedCalls = []
-  const r = await updateFocusFrame(state, '广州今天天气怎么样啊预报呢', {
+  const r = await updateFocusFrame(state, 'build realtime dashboard component integration', {
     isTick: false,
     tickCounter: state.tickCounter,
     classifierEnabled: true,
@@ -384,6 +384,54 @@ function stubClassifier(returnValue, capture) {
   // topic 保留 v0 ngram，未被改写
   const t = state.focusStack[1].topic.join(',')
   assert(t.length > 0, `async-null v0 topic kept: ${t}`)
+}
+
+// ========== async 模式：明显叶子查询不建帧、不调 LLM ==========
+{
+  const state = makeState()
+  state.focusStack = [makeFrame(['prompt', 'caching'])]
+  state.tickCounter = 5
+
+  let called = false
+  const r = await updateFocusFrame(state, '今天天气怎么样啊', {
+    isTick: false,
+    tickCounter: state.tickCounter,
+    classifierEnabled: true,
+    classifierMode: 'async',
+    classifierFn: async () => { called = true; return { action: 'pushed', topic: ['天气'], returnsToDepth: -1 } },
+  })
+  assert(r.event === 'noop', `async-leaf-guard event=${r.event}`)
+  assert(state.focusStack.length === 1, 'async-leaf-guard: stack unchanged')
+  assert(called === false, 'async-leaf-guard: classifierFn not called')
+}
+
+// ========== async 模式：LLM 改判 leaf → 撤销简单 v0 push ==========
+{
+  const state = makeState()
+  state.focusStack = [makeFrame(['prompt', 'caching'])]
+  state.tickCounter = 5
+
+  let resolveLLM
+  const llmPending = new Promise(resolve => { resolveLLM = resolve })
+  const refinedCalls = []
+  const r = await updateFocusFrame(state, '临时讨论一个外部查询接口的返回字段和缓存策略', {
+    isTick: false,
+    tickCounter: state.tickCounter,
+    classifierEnabled: true,
+    classifierMode: 'async',
+    onClassifierRefined: (args) => refinedCalls.push(args),
+    classifierFn: async () => {
+      await llmPending
+      return { action: 'leaf', topic: ['临时查询'], returnsToDepth: -1 }
+    },
+  })
+  assert(r.event === 'pushed', `async-leaf-rollback initial event=${r.event}`)
+  assert(state.focusStack.length === 2, 'async-leaf-rollback: v0 pushed before LLM returns')
+  resolveLLM()
+  await new Promise(r => setTimeout(r, 10))
+  assert(state.focusStack.length === 1, 'async-leaf-rollback: LLM removed pushed frame')
+  assert(refinedCalls.length === 1, 'async-leaf-rollback: save callback fired once')
+  assert(refinedCalls[0].correction === 'removed_leaf_frame', 'async-leaf-rollback: correction marker set')
 }
 
 // ========== async 模式：帧在 LLM 返回前被后续操作 pop 出栈 → 丢弃 refine ==========

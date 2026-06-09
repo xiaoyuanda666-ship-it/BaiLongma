@@ -324,15 +324,22 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
           rows = db.prepare(`
             SELECT m.* FROM memories m
             JOIN memories_fts ON memories_fts.rowid = m.id
-            WHERE memories_fts MATCH ?
+            WHERE memories_fts MATCH ? AND m.visibility = 1
             ORDER BY bm25(memories_fts), m.created_at DESC LIMIT ?
           `).all(search, limit)
         } catch {
-          rows = db.prepare(`SELECT * FROM memories WHERE content LIKE ? OR detail LIKE ? ORDER BY created_at DESC LIMIT ?`)
-            .all(`%${search}%`, `%${search}%`, limit)
+          rows = db.prepare(`
+            SELECT * FROM memories
+            WHERE (
+              title LIKE ? OR mem_id LIKE ? OR content LIKE ? OR detail LIKE ?
+              OR entities LIKE ? OR concepts LIKE ? OR tags LIKE ?
+            )
+            AND visibility = 1
+            ORDER BY created_at DESC LIMIT ?
+          `).all(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, limit)
         }
       } else {
-        rows = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?').all(limit)
+        rows = db.prepare('SELECT * FROM memories WHERE visibility = 1 ORDER BY created_at DESC LIMIT ?').all(limit)
       }
       jsonResponse(res, 200, rows)
       return

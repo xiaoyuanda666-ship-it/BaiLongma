@@ -130,6 +130,15 @@ export function rescueDataFromInstallDir() {
     return rescued
   }
 
+  // If an old installer recorded a shared parent folder as InstallLocation
+  // (for example AppData\Local\Programs or D:\Software), scanning and moving
+  // "unknown" directories would touch other applications. Only rescue from a
+  // dedicated Bailongma install folder.
+  if (path.basename(installDir).toLowerCase() !== 'bailongma') {
+    console.warn(`[paths] skip install-dir rescue from unsafe shared folder: ${installDir}`)
+    return rescued
+  }
+
   // sandbox 必须在安装目录之外，否则迁过去等于没迁
   if (isPathInside(installDir, paths.sandboxDir)) {
     console.warn('[paths] 警告：sandbox 目录位于安装目录内，更新时会被清空，请检查 BAILONGMA_USER_DIR 配置')

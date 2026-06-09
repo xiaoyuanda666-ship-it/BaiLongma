@@ -41,6 +41,7 @@ import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalC
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { parseMarkers } from './runtime/markers.js'
+import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPayload, isVerbatimOutputRequest, isVerbatimSetup, isVerbatimStart } from './runtime/verbatim.js'
 import { refreshUserProfile } from './profile/infer.js'
 
 // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
@@ -213,6 +214,7 @@ const state = {
   recentActions: [], // summaries of recent turns, format: { ts, summary }
   thoughtStack: [],  // thought stack, max 3 entries, format: { concept, line }
   startupSelfCheck: null,
+  pendingVerbatimRecital: null,
   pendingConfidenceHint: null,  // 上一轮 refresh-loop 的 confidence，供下次 runInjector 调整召回数量后清空
   tickCounter: 0,             // 累计 TICK 计数（每次进 isTick 路径自增）
   lastTaskRefreshTick: -10,   // 上次 TICK 路径触发 refresh-loop 时的 tickCounter；初值 -10 保证首个 TICK 立刻可触发（差值 = 0 - (-10) = 10 >= 5）
@@ -599,8 +601,60 @@ function voiceTurnNeedsSendMessage(text) {
   return EXTERNAL_SEND_HINTS.some(k => b.includes(k.toLowerCase()))
 }
 
+function deliverDirectReply(msg, content, finishTurn) {
+  const timestamp = nowTimestamp()
+  if (isVoiceChannel(msg?.channel)) autoSpeakForVoiceReply(content)
+  deliverFallbackReply(msg, content, timestamp)
+  finishTurn?.(content)
+}
+
+function tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow = [] } = {}) {
+  if (!msg || msg.silent === true) return false
+  const text = String(input || '').trim()
+  if (!text) return false
+
+  if (isVerbatimStart(text) && state.pendingVerbatimRecital?.text) {
+    const reply = state.pendingVerbatimRecital.text
+    state.pendingVerbatimRecital = null
+    deliverDirectReply(msg, reply, finishTurn)
+    return true
+  }
+
+  const payload = extractVerbatimPayload(text)
+  if (isVerbatimSetup(text) && payload.length >= 20) {
+    state.pendingVerbatimRecital = {
+      text: payload,
+      sourceTimestamp: msg.timestamp || nowTimestamp(),
+      createdAt: Date.now(),
+    }
+    deliverDirectReply(msg, '收到，准备好了。说"开始"我就读。', finishTurn)
+    return true
+  }
+
+  if (isVerbatimOutputRequest(text)) {
+    const reply = (hasInlineVerbatimPayload(text) && payload.length >= 20)
+      ? payload
+      : (state.pendingVerbatimRecital?.text || findRecentVerbatimPayload(conversationWindow, msg))
+    if (reply) {
+      state.pendingVerbatimRecital = null
+      deliverDirectReply(msg, reply, finishTurn)
+      return true
+    }
+  }
+
+  return false
+}
+
 function isFastUserMessage(msg) {
   return !!msg && getProcessPriority(msg) >= PRIORITY.user
+}
+
+function stableFocusTopic(frame) {
+  if (!frame || !Array.isArray(frame.topic) || frame.topic.length === 0) return ''
+  const hitCount = Number(frame.hitCount || 0)
+  const hasConclusion = Array.isArray(frame.conclusions) && frame.conclusions.length > 0
+  if (hitCount < 2 && !hasConclusion) return ''
+  return frame.topic.slice(0, 3).join(',')
 }
 
 function shouldPreemptFor(entry) {
@@ -756,6 +810,11 @@ async function runTurn(input, label, msg = null) {
 
     if (isTick) ensureStartupSelfCheckState()
 
+    const earlyConversationWindow = msg ? getRecentConversationTimeline(12, 2, { includeAbsorbed: true }) : []
+    if (!isTick && tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow: earlyConversationWindow })) {
+      return
+    }
+
     // Key auto-config: if the user message contains an API key, silently configure it, purge the DB entry, notify frontend, and skip LLM
     let keyConfigFailDir = null
     if (!isTick && msg) {
@@ -832,9 +891,7 @@ async function runTurn(input, label, msg = null) {
 
       // P0-1：把"当前焦点 topic"广播给 db.js，之后本轮所有 insertConversation
       // 自动带上该 topic。同时回填本轮触发判定的 user 消息（pushMessage 时焦点还没算）。
-      const topTopicStr = topFrame && Array.isArray(topFrame.topic)
-        ? topFrame.topic.slice(0, 3).join(',')
-        : ''
+      const topTopicStr = stableFocusTopic(topFrame)
       setCurrentFocusTopic(topTopicStr)
       if (!isTick && msg?.fromId && msg?.timestamp && topTopicStr) {
         try { updateUserMessageFocusTopic(msg.fromId, msg.timestamp, topTopicStr) } catch {}
@@ -908,6 +965,7 @@ async function runTurn(input, label, msg = null) {
       directions.push('Voice mode style: speak like a person in the room. Default to one or two short sentences. No Markdown, no bullets, no headings, no process acknowledgement, no repeated summary. Say the situation, then stop.')
       directions.push('The current user message came from voice input. Speak naturally and concisely — like talking to a person, not writing an article. Get to the point, avoid filler phrases, and do not use Markdown formatting (no bullet points, asterisks, or headers). Say what needs to be said and stop.')
       directions.push('For voice input, do not send process acknowledgements like "I will look" or "let me check" before the answer. Send one compact answer unless you truly need a slow tool and have no result yet.')
+      directions.push('If the user asks you to read, repeat, or output exact text for recording, reply with the exact text as normal chat text. Do not call the speak tool; this voice channel already turns assistant text into audio automatically. Do not paraphrase, summarize, shorten, or add commentary.')
       directions.push('If the voice input is clearly a speech recognition error (meaningless noise, garbled syllables, random characters) OR appears to be ambient speech not directed at you — such as someone nearby talking to another person, background conversation, or utterances with no plausible intent to address an AI assistant — silently ignore it: do NOT call send_message or any other tool. Only respond when the input is reasonably addressed to you.')
     }
 
@@ -1094,10 +1152,11 @@ async function runTurn(input, label, msg = null) {
     //   - conversationWindow 每条消息 marker 上的 topic 标签
     //   - 当前 user 消息 marker 上的 "topic switch" 提示
     //   - 过期未答悬念的判断（话题切走时直接标 [expired]）
-    const currentTopicStr = (state.focusStack && state.focusStack.length > 0
-      && Array.isArray(state.focusStack[state.focusStack.length - 1].topic))
-      ? state.focusStack[state.focusStack.length - 1].topic.slice(0, 3).join(',')
-      : ''
+    const currentTopicStr = stableFocusTopic(
+      state.focusStack && state.focusStack.length > 0
+        ? state.focusStack[state.focusStack.length - 1]
+        : null
+    )
 
     const buildMessagesWithContext = (ctxBlock) => buildLLMMessages({
       systemPrompt,

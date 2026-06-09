@@ -73,24 +73,24 @@ try {
   const markedAgain = markConversationsAbsorbed(t1, t2)
   assert(markedAgain === 0, `second mark is idempotent (got ${markedAgain})`)
 
-  // 默认调用——absorbed 的两条被隐去，剩 2 条主线
+  // 默认调用——近期 raw 连续性优先：absorbed 的两条仍在最近窗口内可见。
   const afterMark = getRecentConversation(testUser, 50, 24)
-  assert(afterMark.length === 2, `after mark: default getRecentConversation hides absorbed (got ${afterMark.length})`)
+  assert(afterMark.length === 4, `after mark: recent raw floor keeps absorbed rows visible (got ${afterMark.length})`)
   assert(
-    afterMark.every(r => r.timestamp === t0 || r.timestamp === t2),
-    'after mark: remaining rows are exactly the main-line ones'
+    afterMark.some(r => r.content === '今天天气怎么样') && afterMark.some(r => r.content === '今天晴天 25 度'),
+    'after mark: recent absorbed rows remain visible to preserve continuity'
   )
 
   // 显式 includeAbsorbed=true——拿全量
   const afterMarkFull = getRecentConversation(testUser, 50, 24, { includeAbsorbed: true })
   assert(afterMarkFull.length === 4, `includeAbsorbed=true returns all 4 rows (got ${afterMarkFull.length})`)
 
-  // timeline 默认也过滤
+  // timeline 默认也保留最近 raw。
   const afterMarkTimeline = getRecentConversationTimeline(50, 24)
   const ourRowsTimeline = afterMarkTimeline.filter(r => r.from_id === testUser || r.to_id === testUser)
   assert(
-    ourRowsTimeline.length === 2,
-    `after mark: timeline (default) hides absorbed our rows (got ${ourRowsTimeline.length})`
+    ourRowsTimeline.length === 4,
+    `after mark: timeline (default) keeps recent absorbed our rows (got ${ourRowsTimeline.length})`
   )
 
   // timeline 显式 includeAbsorbed=true——拿全量
@@ -99,6 +99,24 @@ try {
   assert(
     ourRowsTimelineFull.length === 4,
     `timeline includeAbsorbed=true returns all 4 (got ${ourRowsTimelineFull.length})`
+  )
+
+  // 插入 65 条更新的主线消息后，天气子帧已经落到 recent raw floor 之外；
+  // 此时默认窗口应再次隐藏 absorbed，只保留可见主线。
+  for (let i = 0; i < 65; i++) {
+    const ts = new Date(Date.parse(t2) + (i + 1) * 1000).toISOString()
+    insertConversation({
+      role: 'user',
+      from_id: testUser,
+      to_id: 'jarvis',
+      content: `主线继续 ${i}`,
+      timestamp: ts,
+    })
+  }
+  const afterAging = getRecentConversation(testUser, 100, 24)
+  assert(
+    afterAging.every(r => r.content !== '今天天气怎么样' && r.content !== '今天晴天 25 度'),
+    'after aging past raw floor: absorbed leaf rows are hidden again'
   )
 
   // 错误防御：startedAt 为空时返回 0，不抛
