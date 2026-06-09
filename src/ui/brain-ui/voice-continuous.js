@@ -27,18 +27,29 @@ const BARGEIN_FAST_SILENT_NEED = 7;
 
 const BARGEIN_NO_SPEECH_MS = 3500; // 3.5s 内没有识别到语音 → 视为误触发
 
+// ─── 自动发送：音量顺延的宽限窗口 ───
+// 纯噪音（高音量但不产生转录文本）不应顺延一条已识别完成消息的发送。
+// 仅当距上次「新转录」在此窗口内，才把音量活动当作「还在说话」而顺延静音计时——
+// 覆盖说话中音频抖动早于转录回调到达的情况；说完话后的持续噪音超出窗口即失效。
+const VOICE_GRACE_AFTER_TRANSCRIPT_MS = 800;
+
 export function createContinuousPolicy(core, { getAutoSend }) {
   // ─── 自动发送状态 ───
   // 「攒成一条，说完再发」：只有真正停足够久才发，中途思考停顿不切断。
-  // 静音阈值可经 localStorage 调，默认 3.5s（比一次思考停顿长，比一句话间隔长）。
+  // 静音阈值可经 localStorage 调，默认 2s（比一次思考停顿长，比一句话间隔长）。
   const SILENCE_SEND_MS = (() => {
     const v = parseInt(localStorage.getItem('bailongma-voice-silence-ms') || '', 10);
-    return Number.isFinite(v) && v >= 800 ? v : 3500;
+    return Number.isFinite(v) && v >= 800 ? v : 2000;
   })();
   let autoSendTimer = null;
-  // 最近一次「用户还在说」的时间戳（语音活动 or 转录都刷新它）。
-  // 自动发送靠它自校正：计时器到点时若期间又有活动，则顺延而不是误发。
+  // 最近一次「用户还在说」的时间戳。自动发送靠它自校正：计时器到点时若期间又有
+  // 活动则顺延而不是误发。何为「活动」：真实转录（新文本）总是算；纯音量仅在
+  // 「刚产生过转录」的宽限窗口内才算——见 lastTranscriptTs / onFrame。
   let lastVoiceActivityTs = 0;
+  // 最近一次产生「新转录文本」的时间戳。噪音不是文字、不产生转录，故不会刷新它。
+  // 用来把「说话时音频抖动顺延」与「说完后纯噪音顺延」区分开：只有距上次转录在
+  // 宽限窗口内的音量才允许顺延，避免噪音无限推迟一条已识别完成消息的发送。
+  let lastTranscriptTs = 0;
   function noteVoiceActivity() { lastVoiceActivityTs = Date.now(); }
 
   // ─── 打断检测状态 ───
@@ -166,9 +177,14 @@ export function createContinuousPolicy(core, { getAutoSend }) {
       }
     }
 
-    // 用户还在出声（音频活动早于转录回调到达）→ 刷新活动时间戳，
-    // 让自动发送的静音计时顺延，避免在说话间隙误发。仅在录音且非 TTS 时计。
-    if (vol > 0.02 && core.micActive && !core.suspendedByMedia) noteVoiceActivity();
+    // 用户还在出声且「刚产生过转录」→ 视为仍在连续语音中（音频抖动可能早于转录
+    // 回调到达），顺延自动发送，避免说话间隙误发。关键：限定在 lastTranscriptTs 的
+    // 宽限窗口内——说完话后的纯噪音不产生新文本、超出窗口即不再顺延，于是一条已
+    // 识别完成的消息不会被环境噪音无限推迟发送。仅在录音且非 TTS 时计。
+    if (vol > 0.02 && core.micActive && !core.suspendedByMedia
+        && Date.now() - lastTranscriptTs < VOICE_GRACE_AFTER_TRANSCRIPT_MS) {
+      noteVoiceActivity();
+    }
   }
 
   // ─── core 钩子：收到一条 transcript 后的策略 ───
@@ -177,6 +193,7 @@ export function createContinuousPolicy(core, { getAutoSend }) {
     bargeinFastCheckActive = false;
     bargeinFastSilentFrames = 0;
     clearBargeinNoSpeechTimer();
+    lastTranscriptTs = Date.now(); // 「新文本」时刻：音量顺延的宽限窗口从此刻起算
     scheduleAutoSend();
   }
 
@@ -189,6 +206,7 @@ export function createContinuousPolicy(core, { getAutoSend }) {
     duckActive = false;
     duckHighFrames = 0;
     duckLowFrames = 0;
+    lastTranscriptTs = 0;
   }
 
   // ─── core 钩子：进入 TTS 挂起时重置打断检测计数 ───
