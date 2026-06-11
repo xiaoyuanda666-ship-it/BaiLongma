@@ -140,4 +140,23 @@ export async function initWorldcup() {
   window.addEventListener('bailongma:hotspot-mode', (event) => {
     if (event?.detail?.active && worldcupActive) setWorldcupMode(false, { source: 'hotspot_open' });
   });
+
+  // 大屏 iframe 持有键盘焦点时空格到不了本窗口，由 iframe 转发 PTT
+  // （worldcup-broadcast-v2.html 发 worldcup-ptt；与 app.js 的全局空格监听互斥——
+  //   键盘事件只会落在其中一个 document，不会双触发）
+  window.addEventListener('message', (event) => {
+    if (event?.data?.type !== 'worldcup-ptt' || !worldcupActive) return;
+    const { phase } = event.data;
+    if (phase === 'down') {
+      try { window.stopTTS?.(); } catch {}   // 与 app.js PTT 同语义：按下即打断播报
+      window.bailongmaVoice?.pttStart?.();
+      expandConsole();                        // 说话时展开看实时识别文字
+    } else if (phase === 'up') {
+      window.bailongmaVoice?.pttEnd?.();
+      scheduleConsoleCollapse(MESSAGE_PEEK_MS);
+    } else if (phase === 'cancel') {
+      window.bailongmaVoice?.pttEnd?.({ send: false });
+      scheduleConsoleCollapse();
+    }
+  });
 }

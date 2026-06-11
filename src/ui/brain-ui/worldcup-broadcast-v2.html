@@ -876,6 +876,30 @@ window.addEventListener('message', (event) => {
   document.body.classList.add('exiting');
 });
 
+// ═══ PTT 转发：点过大屏后键盘焦点在本 iframe，空格到不了宿主窗口 ═══════════════
+// 把按住空格说话转发回宿主（brain-ui/worldcup.js 接收 worldcup-ptt 消息驱动 PTT）
+
+(() => {
+  const isSpace = (e) => e.code === 'Space' || e.key === ' ' || e.key === 'Spacebar';
+  let held = false;
+  const post = (phase) => { try { window.parent?.postMessage({ type: 'worldcup-ptt', phase }, '*'); } catch {} };
+  window.addEventListener('keydown', (e) => {
+    if (!isSpace(e) || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    e.preventDefault(); // 空格不滚动大屏
+    if (e.repeat || held) return;
+    held = true;
+    post('down');
+  }, { capture: true });
+  window.addEventListener('keyup', (e) => {
+    if (!isSpace(e) || !held) return;
+    held = false;
+    e.preventDefault();
+    post('up');
+  }, { capture: true });
+  // 按住期间失焦（切窗口/iframe 卸载）→ 取消而非误发半句
+  window.addEventListener('blur', () => { if (held) { held = false; post('cancel'); } });
+})();
+
 tickTopClock(); setInterval(tickTopClock, 1000);
 setInterval(tickHeroClock, 1000);
 setInterval(() => { if (MODE === 'real') load(); }, 120000);   // 真数据每 2 分钟跟随后端缓存刷新
