@@ -540,7 +540,23 @@ const STATUS_LABELS = { scheduled: '未开赛', live: '进行中', finished: '�
 function formatMatchLine(match) {
   const score = match.score ? `${match.score.home}-${match.score.away}` : 'vs'
   const stage = match.league || '世界杯'
-  return `${match.time} ${stage}：${match.home} ${score} ${match.away}（${STATUS_LABELS[match.status] || match.status}）`
+  const liveClock = match.status === 'live' && match.clock?.periodCn ? `，${match.clock.periodCn}` : ''
+  return `${match.time} ${stage}：${match.home} ${score} ${match.away}（${STATUS_LABELS[match.status] || match.status}${liveClock}）`
+}
+
+// 事件时间线压成一行（进球/红黄牌/换人，带队属和助攻），live 和近期完赛都带上
+function formatEventsLine(match) {
+  if (!Array.isArray(match.events) || !match.events.length) return ''
+  const teamOf = (e) => (e.side === 'home' ? match.home : e.side === 'away' ? match.away : '')
+  const parts = match.events.map((e) => {
+    const who = [teamOf(e), e.name].filter(Boolean).join(' ')
+    return `${e.min}' ${e.type}${who ? `（${who}${e.assist ? `，${e.assist}助攻` : ''}）` : ''}`
+  })
+  return `  事件：${parts.join('；')}`
+}
+
+function formatMatchBlock(match) {
+  return [formatMatchLine(match), formatEventsLine(match)].filter(Boolean).join('\n')
 }
 
 export function buildWorldcupPanelStateContext() {
@@ -573,15 +589,15 @@ export function buildWorldcupRuntimeContext(message = '') {
   const upcoming = matches.filter(m => m.status === 'scheduled' && (m.startMs || 0) - now < 2 * dayMs).slice(0, 8)
 
   const blocks = []
-  if (live.length) blocks.push(`Matches in progress:\n${live.map(formatMatchLine).join('\n')}`)
-  if (recent.length) blocks.push(`Recent results:\n${recent.map(formatMatchLine).join('\n')}`)
+  if (live.length) blocks.push(`Matches in progress:\n${live.map(formatMatchBlock).join('\n')}`)
+  if (recent.length) blocks.push(`Recent results:\n${recent.map(formatMatchBlock).join('\n')}`)
   if (upcoming.length) blocks.push(`Upcoming matches (next 48h):\n${upcoming.map(formatMatchLine).join('\n')}`)
   if (!blocks.length) return ''
 
   return `## Worldcup Context
-Source: worldcup mode (zhibo8.cc), automatically collected by the system. Sender: SYSTEM. Times are Beijing time. Purpose: current World Cup status as background; this is not a user request.
+Source: worldcup mode (zhibo8.cc live feed), automatically collected by the system. Sender: SYSTEM. Times are Beijing time. Purpose: current World Cup status as background; this is not a user request.
 
-Use this data to answer World Cup questions directly. If the user asks for details beyond it (lineups, scorers, minute-by-minute), use web_search. Do not proactively summarize this context when the user's message is unrelated to football.
+The scores, match minutes and event timelines above are real-time data the system just fetched — answer questions about these matches directly from this context, and do NOT call web_search to re-check their current score, status or events. Use web_search only for what is not covered here (lineups, detailed stats, history, other competitions). Do not proactively summarize this context when the user's message is unrelated to football.
 
 Fetched at: ${cache.fetchedAt}${cache.stale ? ' (stale cache, refresh failed)' : ''}
 

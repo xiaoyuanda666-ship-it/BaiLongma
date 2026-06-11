@@ -4152,6 +4152,33 @@ body.worldcup-mode .console {
   width: 380px;
   z-index: 300;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5), var(--shadow-inset);
+  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.28s ease, border-radius 0.28s ease;
+}
+
+/* 折叠态：鼠标不在窗内且输入框未聚焦时收成语音球小坞，不挡大屏右下角
+   （wc-collapsed 由 worldcup.js 按悬停/聚焦/新消息状态切换） */
+body.worldcup-mode .console.wc-collapsed {
+  width: 68px;
+  border-radius: 24px;
+  opacity: 0.85;
+  overflow: hidden;
+}
+body.worldcup-mode .console.wc-collapsed #chat-history,
+body.worldcup-mode .console.wc-collapsed #input-row,
+body.worldcup-mode .console.wc-collapsed > #voice-panel .voice-transcript { display: none; }
+body.worldcup-mode .console.wc-collapsed > #voice-panel {
+  border-bottom: none;
+  padding: 13px 0;
+  justify-content: center;
+}
+/* 语音未启用（没有语音球）时折叠态给个聊天图标占位，否则是空壳 */
+body.worldcup-mode .console.wc-collapsed:not(:has(#voice-panel))::after {
+  content: '💬';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 17px 0;
+  font-size: 22px;
 }
 
 body.worldcup-mode #chat-history.open { max-height: min(420px, calc(100vh - 240px)); }
