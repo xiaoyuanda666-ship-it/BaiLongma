@@ -231,7 +231,8 @@ async function createWindow() {
 }
 
 function setupTray() {
-  const iconPath = path.join(RESOURCE_ROOT, 'build', 'icon.ico')
+  const iconName = process.platform === 'darwin' ? 'icon.png' : 'icon.ico'
+  const iconPath = path.join(RESOURCE_ROOT, 'build', iconName)
   tray = new Tray(nativeImage.createFromPath(iconPath))
   tray.setToolTip('Bailongma')
 

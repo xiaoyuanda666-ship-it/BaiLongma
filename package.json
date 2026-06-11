@@ -14,8 +14,10 @@
     "start:backend": "node --env-file=.env src/index.js",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "node --env-file=.env --watch src/index.js",
-    "build": "powershell -ExecutionPolicy Bypass -File scripts/prebuild-clean.ps1 && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --win",
-    "publish": "electron-builder --win --publish always",
+    "build": "node scripts/prebuild-clean.mjs && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder",
+    "build:win": "node scripts/prebuild-clean.mjs && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --win",
+    "build:mac": "node scripts/prebuild-clean.mjs && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --mac",
+    "publish": "node scripts/prebuild-clean.mjs && electron-rebuild -f -w better-sqlite3 -v 33.4.11 && electron-builder --publish always",
     "postinstall": "electron-builder install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
     "test:complex-task": "electron ./src/test-complex-task.js",
@@ -69,6 +71,8 @@
       "focus-banner.html",
       "turn-trace.html",
       "build/icon.ico",
+      "build/icon.png",
+      "build/icon-mac-cartoon.png",
       "sandbox/**/*",
       "music/**/*",
       "package.json",
@@ -109,6 +113,20 @@
       "createDesktopShortcut": false,
       "createStartMenuShortcut": false,
       "shortcutName": "Bailongma"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },
     "publish": [
       {
