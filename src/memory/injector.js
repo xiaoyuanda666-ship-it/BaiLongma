@@ -44,6 +44,7 @@ export {
   formatMemoriesForPrompt,
   formatPrefetchedItems,
   formatActiveUICards,
+  formatSceneManifest,
   formatAIVideoPanel,
   formatTaskKnowledge,
 } from './injector-format.js'

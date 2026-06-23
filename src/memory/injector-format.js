@@ -98,6 +98,21 @@ export function formatActiveUICards(cards = []) {
   return `[Active UI cards on screen]\n${lines.join('\n')}\nUse ui_hide with the id to close a card; use ui_update to update its content.`
 }
 
+// 当前屏幕上的 scene surfaces(新 Agent-UI 架构,SceneStore 的紧凑投影)。
+// 只暴露 id/kind/intent/focus —— 让 Agent 知道"屏上有什么",但碰不到像素/data。
+// 这是设计方案 §四的闭环回注:背景状态,不是触发器。
+export function formatSceneManifest(manifest = []) {
+  if (!manifest?.length) return ''
+  const lines = manifest.map(s => {
+    const flags = []
+    if (s.focus) flags.push('focus')
+    if (s.intent && s.intent !== 'inform') flags.push(s.intent)
+    const tail = flags.length ? `  [${flags.join(', ')}]` : ''
+    return `  - id="${s.id}"  kind=${s.kind}${tail}`
+  })
+  return `[Surfaces currently on screen]\n${lines.join('\n')}\nThis is what you have placed on the interface via ui_set. To update one, call ui_set with the same id; to remove one, ui_set with that id and remove=true. Treat this as context, not a trigger — do not react merely because something is on screen.`
+}
+
 // AI 视频生成面板「感知」：把面板开关状态 + 用户正在编辑的提示词草稿贴进上下文。
 // state 来自 media.js 的 getAIVideoPanelState()。面板关闭且无草稿时不渲染（零噪声）。
 export function formatAIVideoPanel(state) {

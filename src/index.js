@@ -2,7 +2,8 @@ import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.j
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
-import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
+import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatActiveUICards, formatSceneManifest, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
+import { sceneStore } from './scene/scene-store.js'
 import {
   ensureThreadState, attributeUserMessage, buildThreadView, getForegroundThread,
   getThreadById, openCommitment, closeCommitment, touchCommitmentThread,
@@ -1161,7 +1162,7 @@ async function runTurn(input, label, msg = null) {
     const agentName = getConfig('agent_name') || '小白龙'
     const entities = getKnownEntities()
     const hasActiveTask = !!state.task
-    const extraContextJoined = [presenceText, runtimeInjection.contextText, prefetchText, injection.uiSignalSummary, formatActiveUICards(injection.activeUICards), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
+    const extraContextJoined = [presenceText, runtimeInjection.contextText, prefetchText, injection.uiSignalSummary, formatActiveUICards(injection.activeUICards), formatSceneManifest(sceneStore.manifest()), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
     const skillSelection = selectSkillsForMessage(msg?.content || input || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
     if (skillSelection.active.length > 0 || skillSelection.catalogRequested) {
