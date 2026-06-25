@@ -20,6 +20,8 @@ function summarizeToolExecution(name, args = {}) {
       return `make_dir(${args.path || args.dir || args.directory || '?'})`
     case 'exec_command':
       return `exec_command(${String(args.command || args.cmd || '?').slice(0, 100)})`
+    case 'install_software':
+      return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 100)})`
     case 'fetch_url':
     case 'browser_read':
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`

@@ -24,6 +24,7 @@ import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
 import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
+import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
@@ -179,6 +180,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execDeleteFile(args, context)
       case 'make_dir':
         return await execMakeDir(args, context)
+      case 'install_software':
+        return await execInstallSoftware(args, context)
       case 'exec_command':
         return await execCommand(args, context)
       case 'exec_quick_command':
@@ -192,7 +195,7 @@ async function executeToolUnchecked(name, args, context = {}) {
       case 'kill_process':
         return await execKillProcess(args)
       case 'list_processes':
-        return await execListProcesses(args)
+        return await execListProcessesWithSoftwareJobs(args)
       case 'web_search':
         return await execWebSearch(args, context)
       case 'fetch_url':
@@ -330,6 +333,23 @@ export async function executeTool(name, args, context = {}) {
 }
 
 // express：表达器入口，根据 format 路由到对应输出渠道
+// Extend the existing process list with structured software-install jobs.
+async function execListProcessesWithSoftwareJobs(args = {}) {
+  const result = await execListProcesses(args)
+  try {
+    const parsed = JSON.parse(result)
+    const softwareInstallJobs = listSoftwareInstallJobs({ includeTerminal: true, detail: true })
+    return toolJson({
+      ...parsed,
+      software_install_count: softwareInstallJobs.length,
+      software_install_jobs: softwareInstallJobs,
+    })
+  } catch {
+    return result
+  }
+}
+
+// express: expression entrypoint; route to the requested output format.
 async function execExpress({ target_id, content, channel = 'AUTO', format = 'text' }, context = {}) {
   if (!content?.trim()) return '错误：未提供表达内容'
   if (format === 'voice') {

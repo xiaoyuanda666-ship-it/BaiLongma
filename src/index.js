@@ -48,6 +48,7 @@ import { parseMarkers } from './runtime/markers.js'
 import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
 import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPayload, isVerbatimOutputRequest, isVerbatimSetup, isVerbatimStart } from './runtime/verbatim.js'
 import { refreshUserProfile } from './profile/infer.js'
+import { isSoftwareInstallRequest } from './software-install-intent.js'
 
 // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
 seedSandboxOnce()
@@ -299,6 +300,7 @@ function summarizeToolCall(t = {}) {
     return `read_file(${pathArg}${range})${status}`
   }
   if (t.name === 'exec_command') return `exec_command(${String(args.command || '').slice(0, 80)})${status}`
+  if (t.name === 'install_software') return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 80)})${status}`
   return `${t.name || 'tool'}${status}`
 }
 
@@ -484,7 +486,7 @@ export function buildToolContext({ currentTargetId = null, conversationWindow = 
 
 function buildToolContextForProcess(msg, injection) {
   const base = buildToolContext({
-    currentTargetId: msg?.reminderTargetId || msg?.fromId || null,
+    currentTargetId: msg?.notificationTargetId || msg?.reminderTargetId || msg?.fromId || null,
     conversationWindow: injection.conversationWindow || [],
     includeRecentPartners: true,
   })
@@ -492,8 +494,8 @@ function buildToolContextForProcess(msg, injection) {
   return {
     ...base,
     // 当前 turn 的渠道信息：execSendMessage 在 AUTO 模式下优先用这里，确保"在哪儿收的消息就回到哪儿"
-    currentChannel: msg?.channel || null,
-    currentExternalPartyId: msg?.externalPartyId || null,
+    currentChannel: msg?.notificationChannel || msg?.channel || null,
+    currentExternalPartyId: msg?.notificationExternalPartyId || msg?.externalPartyId || null,
     currentUserMessage: msg?.content || null,
     // 自我感知信号：传给工具执行层（如 upsert_memory 守门），让"镜像污染"在写入长期记忆前就被拦截
     selfPerception: injection.selfPerception || null,
@@ -796,11 +798,6 @@ function detectChannelSwitch(msg, conversationWindow) {
   return false
 }
 
-function isSoftwareInstallRequest(text = '') {
-  const t = String(text || '').toLowerCase()
-  return /安装软件|安装应用|安装程序|安装客户端|装软件|装应用|装程序|装客户端|下载安装包|下载软件|软件下载|软件安装包|安装包|官方安装包|安装微信|装微信|下载微信|微信安装包|安装剪映|装剪映|下载剪映|剪映安装包|capcut|install app|install software|install program|install client|download installer|download setup|software installer|setup\.exe|\.msi|\.exe/.test(t)
-}
-
 // Build systemEnv on demand: inject each block based on keywords in the message
 function buildSystemEnv(msg) {
   const text = (typeof msg === 'string' ? msg : msg?.content || '').toLowerCase()
@@ -1013,7 +1010,7 @@ async function runTurn(input, label, msg = null) {
       directions.unshift('Current turn is a real-time external user message. Understand it quickly and reply directly with send_message. If no slow tool is needed, send exactly one final answer and stop. Use heavier tools only when the reply depends on them. During longer execution, send progress only for meaningful new findings or blockers; do not send an acknowledgement and then a near-duplicate final answer.')
     }
     if (!isTick && isSoftwareInstallRequest(input)) {
-      directions.unshift('Software install workflow: first use injected installed-software context to see whether the app is already installed. If installation is still needed, prefer official vendor sources found via web_search/fetch_url; download installers with download_file so progress events are available. Save installers under sandbox downloads. Only run an installer with exec_task_command/exec_command after you have a concrete local file path or official installer command. Read the tool result before claiming success; if the installer opens a GUI, tell the user exactly what is now waiting for them instead of pretending it completed silently.')
+      directions.unshift('Software install workflow: first use injected installed-software context to see whether the app is already installed. If installation is still needed, call install_software first. install_software starts a background job and normally returns immediately with status="started" and job_id; this only means the job began, not that the app is installed. After a started result, tell the user briefly that installation is running in the background and stop the round. Do not call install_software again for the same app, do not poll repeatedly, and do not claim success until a later background APP_SIGNAL/list_processes result says succeeded/already installed/current. Do not run raw winget commands with exec_command, do not browse vendor pages, and do not enumerate download URLs before install_software has returned a terminal structured failure. On Windows this tool owns the winget path, including candidate selection and stale-manifest fallback such as Tencent.QQ.NT before Tencent.QQ for QQ. Add silent=true only when the user explicitly asked for silent/no-UI install. If the final job result reports all winget candidates failed or no candidates, explain that concrete result and only then use find_tool to load web/download tools for a targeted official fallback if the user still wants it.')
     }
     if (isVoiceChannel(msg?.channel)) {
       directions.push('Voice mode: answer with judgment and meaning first. Do not read out an inventory. If details are merely evidence, compress them into the situation they prove.')

@@ -27,6 +27,7 @@
 // 输出：去重后的 tools: string[]
 
 import { getStatus as getTickerStatus } from '../ticker.js'
+import { isSoftwareInstallRequest, SOFTWARE_INSTALL_TRIGGERS } from '../software-install-intent.js'
 
 // ---- 工具分组 ----
 //
@@ -50,7 +51,7 @@ const REVIEW_TOOLS      = ['review_work']
 const WEB_TOOLS         = ['web_search', 'fetch_url', 'browser_read']
 const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
 const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'download_file', 'kill_process', 'list_processes']
-const SOFTWARE_INSTALL_TOOLS = [...WEB_TOOLS, 'download_file', 'exec_task_command', 'exec_command', 'list_processes', ...FILESYSTEM_TOOLS]
+const SOFTWARE_INSTALL_TOOLS = ['install_software', 'list_processes']
 const MEDIA_TOOLS       = ['media_mode', 'music']
 const REMINDER_TOOLS    = ['manage_reminder']
 const PREFETCH_TOOLS    = ['manage_prefetch_task']
@@ -171,16 +172,6 @@ const ADMIN_TRIGGERS = [
 
 // 多模态生成专用触发（关键词必须足够具体——单字"说""画"在中文里太宽泛
 // 会被"没说""画面"误命中。优先用 2+ 字组合 / 明确动词短语。）
-const SOFTWARE_INSTALL_TRIGGERS = [
-  '安装软件', '安装应用', '安装程序', '安装客户端', '装软件', '装应用', '装程序', '装客户端',
-  '下载安装包', '下载软件', '软件下载', '软件安装包', '安装包', '官方安装包',
-  '安装微信', '装微信', '下载微信', '微信安装包',
-  '安装剪映', '装剪映', '下载剪映', '剪映安装包', 'capcut',
-  '安装浏览器', '装浏览器', '下载浏览器',
-  'install app', 'install software', 'install program', 'install client',
-  'download installer', 'download setup', 'software installer', 'setup.exe', '.msi', '.exe',
-]
-
 const TTS_TRIGGERS = [
   '朗读', '念出来', '念一下', '读出来', '读给我听', '念给我',
   '播报', '语音播报', '用声音', '说出来',
@@ -391,7 +382,7 @@ export function selectTools(ctx = {}) {
   if (hits(body, FOCUS_BANNER_TRIGGERS) || hasTask) {
     for (const t of FOCUS_BANNER_TOOLS) out.add(t)
   }
-  if (hits(body, SOFTWARE_INSTALL_TRIGGERS)) {
+  if (isSoftwareInstallRequest(messageBody)) {
     for (const t of SOFTWARE_INSTALL_TOOLS) out.add(t)
   }
   if (hits(body, ADMIN_TRIGGERS)) {
