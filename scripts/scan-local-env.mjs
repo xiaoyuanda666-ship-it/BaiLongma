@@ -8,6 +8,13 @@
  * 之所以放到子进程：原实现是主进程内同步调用 collectDesktopInfo / collectInstalledSoftware /
  * collectLocalResources，在 macOS 上某些目录（iCloud 桌面、外接盘等）的 readdirSync 可能
  * 同步阻塞事件循环，导致整个后端卡死在 startAPI 之前。子进程阻塞不影响主进程。
+ *
+ * 两种启动方式：
+ *   - node 后端模式：src/index.js 直接 spawn node 以本脚本为入口；
+ *   - electron 桌面模式：src/index.js 经由 electron/main.cjs 被 import 进 App 进程，此时
+ *     process.execPath 是 App 二进制。若直接 spawn App 二进制 + 脚本路径，electron 会忽略脚本、
+ *     改加载 main.cjs 拉起「完整 App 副本」。故 electron 模式改用 --bailongma-scan-worker 标志，
+ *     由 main.cjs 在最早期识别后 import 本脚本执行。无论哪种方式，本脚本都只做扫描并 process.exit。
  */
 
 // 注意：collectSystemInfo() 已在主进程(src/index.js)执行——它必须把结果留在内存里供

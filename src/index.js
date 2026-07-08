@@ -115,18 +115,34 @@ function withStartupTimeout(promise, ms, label) {
 // 在独立子进程中后台执行本地环境扫描，主进程不阻塞（避免 macOS 上同步扫描冻结事件循环）。
 // 脚本路径用「模块相对路径」(import.meta.url) 解析，而非 process.cwd()——这样无论是开发模式
 // (node src/index.js，cwd=项目根) 还是打包后的 Electron 模式 (脚本位于 app.asar 内，cwd 不固定)，
-// 都能正确定位 worker。打包模式下 spawn 的是 electron 二进制本身，worker 以 ESM main 加载、
-// 复用 asar 内的扫描模块；该 worker 不调用 requestSingleInstanceLock，不会与主实例抢单实例锁，
-// 也不会创建窗口（见 scripts/scan-local-env.mjs 末尾的 process.exit）。
+// 都能正确定位 worker。
+//
+// electron 模式的特殊性：后端(src/index.js)是被 electron/main.cjs 经 import() 加载到 electron 主进程
+// 内的，因此本函数里 process.execPath 指向 App 二进制。若像 node 模式那样 spawn(process.execPath,
+// [scriptPath])，electron 永远加载 package.json 的 main(electron/main.cjs)，传入的脚本路径被忽略，
+// 会错误地拉起「完整 App 副本」。故 electron 模式改用 --bailongma-scan-worker 标志，由 main.cjs 识别后
+// 仅执行扫描并退出（不抢单实例锁、不创建窗口）。
 function runLocalEnvScanInBackground(desktopPath) {
   try {
-    const scriptPath = fileURLToPath(new URL('../scripts/scan-local-env.mjs', import.meta.url))
-    // 桌面路径经环境变量传给 worker（worker 进程内 _cached 为空、无法自己调 getDesktopPath()）。
-    const child = spawn(process.execPath, [scriptPath], {
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, BAILONGMA_DESKTOP_PATH: desktopPath || '' },
-    })
+    const env = { ...process.env, BAILONGMA_DESKTOP_PATH: desktopPath || '' }
+    const isElectron = typeof process.versions.electron !== 'undefined'
+    let child
+    if (isElectron) {
+      // 打包/桌面模式：App 二进制 + 专用标志，main.cjs 识别后仅运行扫描并退出。
+      child = spawn(process.execPath, ['--bailongma-scan-worker'], {
+        detached: true,
+        stdio: 'ignore',
+        env,
+      })
+    } else {
+      // 纯 node 后端模式：直接以脚本路径启动子进程。
+      const scriptPath = fileURLToPath(new URL('../scripts/scan-local-env.mjs', import.meta.url))
+      child = spawn(process.execPath, [scriptPath], {
+        detached: true,
+        stdio: 'ignore',
+        env,
+      })
+    }
     child.unref()
     console.log('[startup] 本地环境扫描已在后台子进程启动')
   } catch (e) {

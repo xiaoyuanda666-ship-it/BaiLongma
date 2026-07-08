@@ -82,6 +82,7 @@
       "src/**/*",
       "skills/**/*",
       "scripts/seed-memories.js",
+      "scripts/scan-local-env.mjs",
       "index.html",
       "dashboard.html",
       "brain.html",
