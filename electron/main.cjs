@@ -26,6 +26,21 @@ const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
 
+// 本地环境扫描 worker：以 --bailongma-scan-worker 启动时，仅 import 并执行扫描脚本后退出，
+// 不抢单实例锁、不启动后端/UI。electron 打包模式下，src/index.js 经由 bootstrapBackend() 被
+// import 进同一 electron 主进程，其后台扫描子进程若直接 spawn App 二进制会错误地拉起「完整 App 副本」，
+// 故改用此标志让 main.cjs 在最早阶段接管（见 src/index.js 的 runLocalEnvScanInBackground）。
+const IS_SCAN_WORKER = process.argv.includes('--bailongma-scan-worker')
+if (IS_SCAN_WORKER) {
+  const { pathToFileURL } = require('url')
+  import(pathToFileURL(path.join(__dirname, '..', 'scripts', 'scan-local-env.mjs')).href)
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('[scan-worker] 本地环境扫描失败:', err?.stack || err?.message || err)
+      process.exit(1)
+    })
+}
+
 const IS_DEV = !app.isPackaged
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
 
@@ -361,6 +376,7 @@ async function bootstrapBackend(port) {
   await import(pathToFileURL(BACKEND_ENTRY).href)
 }
 
+if (!IS_SCAN_WORKER) {
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
@@ -1378,3 +1394,4 @@ app.whenReady().then(async () => {
   // 的 before-input-event 处理（见 createWindow），只在窗口获焦时生效，
   // 不会劫持浏览器/IDE 等其他应用的同键操作。
 })
+}
