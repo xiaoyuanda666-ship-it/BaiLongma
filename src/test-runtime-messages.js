@@ -129,13 +129,39 @@ const tickMessages = buildLLMMessages({
   input: 'TICK 2026-05-25-10:03:00',
   isTick: true,
 })
-assertEqual(tickMessages.length, 3, 'tick path has system + runtime context + one user message')
+assertEqual(tickMessages.length, 2, 'tick path has system + runtime context only')
+assert(tickMessages[0].content.startsWith('[heartbeat tick - no new user message]'), 'tick marker is prepended to system prompt')
+assert(tickMessages[0].content.includes('not a user turn'), 'tick system prompt says this is not a user turn')
+assert(tickMessages[0].content.includes('TICK 2026-05-25-10:03:00'), 'tick system prompt preserves the tick payload')
+assert(tickMessages[0].content.endsWith('SYS'), 'original system prompt follows the tick marker')
+assertEqual(tickMessages[1].role, 'system', 'tick runtime context uses system role')
 assert(tickMessages[1].content.startsWith('[runtime context]'), 'tick runtime context is injected before user message')
 assert(tickMessages[1].content.includes('<context>TICK</context>'), 'tick runtime context gets context block')
-assertEqual(tickMessages[2].role, 'user', 'tick fallback uses user role')
-assert(tickMessages[2].content.includes('[heartbeat tick · no new user message]'), 'tick fallback carries heartbeat marker')
-assert(tickMessages[2].content.includes('NOT a user message'), 'tick fallback tells the model this is not a user message')
-assert(tickMessages[2].content.includes('TICK 2026-05-25-10:03:00'), 'tick fallback preserves the tick payload')
+assert(!tickMessages.some((m, i) => i > 0 && m.content.includes('TICK 2026-05-25-10:03:00')), 'tick payload is not injected as a synthetic user message')
+assert(!tickMessages.some(m => m.role === 'user'), 'tick without history has no user-role message')
+
+const tickHistoryMessages = buildLLMMessages({
+  systemPrompt: 'SYS',
+  conversationWindow: [
+    {
+      role: 'user',
+      from_id: 'ID:000001',
+      timestamp: '2026-05-25T10:00:00+08:00',
+      content: 'hello',
+    },
+    {
+      role: 'jarvis',
+      from_id: 'jarvis',
+      to_id: 'ID:000001',
+      timestamp: '2026-05-25T10:01:00+08:00',
+      content: 'hi back',
+    },
+  ],
+  input: 'TICK 2026-05-25-10:03:00',
+  isTick: true,
+})
+assertEqual(tickHistoryMessages[tickHistoryMessages.length - 1].role, 'assistant', 'tick with history can end on the assistant history row')
+assertEqual(tickHistoryMessages[tickHistoryMessages.length - 1].content, 'hi back', 'tick does not append a current user message after assistant history')
 
 const systemSignal = formatConversationMessage({
   role: 'user',

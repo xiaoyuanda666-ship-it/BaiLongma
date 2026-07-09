@@ -111,6 +111,14 @@ export function formatTaskSteps(taskSteps = []) {
   return `Task step progress (${done}/${total}):\n${lines.join('\n')}`
 }
 
+function buildTickSystemPrompt(systemPrompt, input) {
+  return `[heartbeat tick - no new user message]
+This is an internal L2 heartbeat tick, not a user turn. No user is speaking right now. Read the runtime context and conversation history normally; decide whether there is a real reason to act proactively, or stay silent.
+Tick payload: ${input}
+
+${systemPrompt}`
+}
+
 function buildIntentCheckContext() {
   return 'In <think>: (1) resolve every pronoun/ellipsis in the current user message ("继续/那个/这个呢/再来一个/换一个") against your last reply and the exchange just above, before reaching for older context; (2) list EVERY distinct request this one message carries — finish all of them this turn, not just the first; (3) name the WANT under the words — the outcome that ends their need — and answer that, not the literal grammar (a question is usually "do it"; a complaint is "fix it"; terse/urgent typing means lead with the result, no preamble).'
 }
@@ -123,7 +131,7 @@ function hasPriorAssistantReply(rows, currentRowIndex) {
   return false
 }
 
-export function buildRuntimeContextMessages({ contextBlock = '', recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', conversationMetadata = '', intentCheck = '' } = {}) {
+export function buildRuntimeContextMessages({ contextBlock = '', recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', conversationMetadata = '', intentCheck = '', role = 'user' } = {}) {
   const parts = []
 
   if (contextBlock) {
@@ -170,7 +178,7 @@ export function buildRuntimeContextMessages({ contextBlock = '', recentActions =
 
   if (parts.length === 0) return []
   return [{
-    role: 'user',
+    role,
     content: `[runtime context]\n${parts.join('\n\n')}`,
   }]
 }
@@ -209,7 +217,10 @@ function computeExpiredFollowupSet(rows, currentTopic) {
 }
 
 export function buildLLMMessages({ systemPrompt, contextBlock = '', conversationWindow = [], input, msg = null, recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', currentTopic = '', isTick = false }) {
-  const messages = [{ role: 'system', content: systemPrompt }]
+  const messages = [{
+    role: 'system',
+    content: isTick ? buildTickSystemPrompt(systemPrompt, input) : systemPrompt,
+  }]
 
   const rows = Array.isArray(conversationWindow) ? conversationWindow : []
 
@@ -229,6 +240,7 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
     batteryBlock,
     conversationMetadata,
     intentCheck,
+    role: isTick ? 'system' : 'user',
   }))
 
   // Track the last user-role message representing the current turn. The message
@@ -247,17 +259,13 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
 
   const hasCurrentMessage = currentMessageIndex >= 0
 
-  if (!hasCurrentMessage) {
-    // TICK 心跳路径：fallback 消息会以 role:'user' 注入，结构上跟真用户消息没区别。
-    // 不加 marker 时模型会把 "TICK 2026-..." 当成用户在重新发问，于是反复回答自己上一轮
-    // 提的 open_question，出现自问自答。这里显式标 [heartbeat tick]、注明非用户消息、
-    // 禁止回放历史问题，与下面 system signal 的 marker 待遇对齐。
-    const fallbackContent = isTick
-      ? `[heartbeat tick · no new user message]\n${input}\n(This is an internal heartbeat, NOT a user message. Do NOT treat it as the user re-asking a prior question or responding to your previous open question. Decide whether to act proactively per the directions above, or stay silent — both are valid.)`
-      : (msg?.content || input)
+  if (!hasCurrentMessage && !isTick) {
+    // Non-tick callers without a current conversation row still need a clean user turn.
+    // Tick turns carry their signal in the leading system prompt instead, so there is
+    // deliberately no synthetic current user message for L2 heartbeats.
     messages.push({
       role: 'user',
-      content: fallbackContent,
+      content: msg?.content || input,
     })
     currentMessageIndex = messages.length - 1
   }
