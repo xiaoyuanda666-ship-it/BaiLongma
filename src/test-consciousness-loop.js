@@ -85,6 +85,18 @@ function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRev
 }
 
 {
+  resetTicker()
+  const upperBound = setCustomInterval({ seconds: 36000, ttl: 100, reason: 'upper-bound test' })
+  assert(upperBound.seconds === 36000 && upperBound.ttl === 100, 'ticker accepts the new maximum interval and TTL')
+  assert(getTickerStatus().seconds === 36000 && getTickerStatus().ttl === 100, 'ticker stores the new maximum interval and TTL')
+  resetTicker()
+
+  const lowerBound = setCustomInterval({ seconds: -1, ttl: 0, reason: 'lower-bound test' })
+  assert(lowerBound.seconds === 0 && lowerBound.ttl === 1, 'ticker clamps seconds and TTL to their new lower bounds')
+  resetTicker()
+}
+
+{
   const h = makeHarness()
   await h.loop.onTick()
   assert(h.counts().consumed === 1, 'successful autonomous Tick consumes one cadence TTL')

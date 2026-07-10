@@ -2,16 +2,16 @@
 //
 // 设计：
 // - L2 通过 set_tick_interval 工具指定 { seconds, ttl }
-// - seconds ∈ [10, 3600]，ttl ∈ [1, 50]，越界 clamp
+// - seconds ∈ [0, 36000]，ttl ∈ [1, 100]，越界 clamp
 // - 每次成功完成的自主 TICK 后 ttl--；用户/后台消息和中断/失败不消耗
 // - 优先级低于"有消息(0)"和"429 限流"，高于"有任务(30s)"和"空闲默认"
 
 import { emitEvent } from './events.js'
 
-const MIN_SECONDS = 10
-const MAX_SECONDS = 3600
+const MIN_SECONDS = 0
+const MAX_SECONDS = 36000
 const MIN_TTL = 1
-const MAX_TTL = 50
+const MAX_TTL = 100
 
 const state = {
   intervalMs: null,
@@ -29,7 +29,7 @@ function clampSeconds(n) {
 
 function clampTtl(n) {
   n = Number(n)
-  if (!Number.isFinite(n) || n <= 0) return 10
+  if (!Number.isFinite(n)) return 10
   return Math.max(MIN_TTL, Math.min(MAX_TTL, Math.round(n)))
 }
 

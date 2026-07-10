@@ -818,7 +818,7 @@ function runConfigMigrations() {
 }
 
 export const config = {
-  tickInterval: 20 * 60 * 1000,
+  tickInterval: 20 * 60 * 1000, // default idle heartbeat: 20 minutes
   provider: null,
   model: null,
   apiKey: null,

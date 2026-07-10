@@ -5,12 +5,12 @@ export const taskSchemas = {
     type: 'function',
     function: {
       name: 'set_tick_interval',
-      description: 'Adjust your own thinking rhythm by setting the TICK interval for the next span of time. Use shorter intervals during urgent or important work and longer intervals when idle or reflecting. seconds range [10, 3600], ttl range [1, 50]; out-of-range values are clamped.',
+      description: 'Adjust your own thinking rhythm by setting the TICK interval for the next span of time. Use shorter intervals during urgent or important work and longer intervals when idle or reflecting. seconds range [0, 36000], ttl range [1, 100]; out-of-range values are clamped.',
       parameters: {
         type: 'object',
         properties: {
-          seconds: { type: 'number', description: 'TICK interval in seconds, range [10, 3600].' },
-          ttl: { type: 'number', description: 'Number of successful autonomous heartbeat ticks to keep this rhythm, range [1, 50]. Defaults to 10 and then returns to the default rhythm. User/background turns and aborted heartbeats do not consume it.' },
+          seconds: { type: 'number', description: 'TICK interval in seconds, range [0, 36000].' },
+          ttl: { type: 'number', description: 'Number of successful autonomous heartbeat ticks to keep this rhythm, range [1, 100]. Defaults to 10 and then returns to the default rhythm. User/background turns and aborted heartbeats do not consume it.' },
           reason: { type: 'string', description: 'Optional short reason for later self-reference.' },
         },
         required: ['seconds']
