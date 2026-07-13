@@ -18,6 +18,7 @@ pids
 
 sandbox
 data
+voice/*.json
 
 # PyInstaller 打包产物（由 npm run build:voice 生成）
 voice-dist/

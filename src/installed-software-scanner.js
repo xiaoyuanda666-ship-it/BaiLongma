@@ -85,6 +85,7 @@ function addApp(apps, rawName, source = 'unknown', extra = {}) {
     name,
     version: extra.version || '',
     publisher: extra.publisher || '',
+    path: extra.path || '',
     sources: [source],
   })
 }
@@ -155,7 +156,7 @@ function scanMacApplications(apps) {
   for (const root of ['/Applications', path.join(os.homedir(), 'Applications')]) {
     walkFiles(root, (fullPath, fileName) => {
       if (!fullPath.endsWith('.app') && !fileName.endsWith('.app')) return
-      addApp(apps, path.basename(fileName, '.app'), 'applications')
+      addApp(apps, path.basename(fileName, '.app'), 'applications', { path: fullPath })
     }, 1)
   }
 }
@@ -228,6 +229,7 @@ export function __setInstalledSoftwareForTest(apps = []) {
       name: normalizeAppName(app.name || app),
       version: app.version || '',
       publisher: app.publisher || '',
+      path: app.path || '',
       sources: app.sources || ['test'],
     })).filter(app => app.name && !shouldSkipAppName(app.name))),
   }
@@ -240,6 +242,26 @@ export function getInstalledSoftwareSnapshot() {
     scanned_at: _cached.scanned_at || null,
     apps: Array.isArray(_cached.apps) ? _cached.apps.slice() : [],
   }
+}
+
+function normalizeLookupText(value = '') {
+  return normalizeAppName(value)
+    .replace(/\.app$/i, '')
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .toLowerCase()
+}
+
+export function findInstalledSoftware(query = '') {
+  const needle = normalizeLookupText(query)
+  if (!needle) return null
+  const apps = Array.isArray(_cached?.apps) ? _cached.apps : []
+  for (const app of apps) {
+    const name = normalizeLookupText(app.name)
+    if (name && (name === needle || name.includes(needle) || needle.includes(name))) {
+      return { ...app, matched_by: 'installed_software_snapshot' }
+    }
+  }
+  return null
 }
 
 function isNetworkApp(app) {

@@ -40,6 +40,7 @@ export const paths = {
   modelsDir: ensureDir(path.join(USER_DIR, 'data', 'models')),
   configFile: path.join(USER_DIR, 'config.json'),
   llmConfigDir: ensureDir(path.join(USER_DIR, 'llm')),
+  voiceConfigDir: ensureDir(path.join(USER_DIR, 'voice')),
   // seedance（AI 视频生成）单独成文件，与主 config.json 物理隔离，
   // 避免被 activate() 等“全量覆盖写 config.json”的操作误删。
   seedanceConfigFile: path.join(USER_DIR, 'seedance.json'),

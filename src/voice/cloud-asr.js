@@ -11,6 +11,7 @@
 import crypto from 'crypto'
 import zlib from 'zlib'
 import { WebSocket } from 'ws'
+import { normalizeVoiceProvider } from '../config.js'
 import { createMacSpeechSession } from './macos-speech.js'
 
 // ─── 阿里云 Paraformer ───
@@ -474,7 +475,8 @@ function createVolcengineSession(config, onTranscript, onError, onClose, onEvent
 //           tencentAppId?, xunfeiAppId?, xunfeiApiKey?,
 //           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
 export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
-  const { provider = 'aliyun', lang = 'zh' } = config
+  const provider = normalizeVoiceProvider(config?.provider || config?.voiceProvider || 'aliyun', '')
+  const { lang = 'zh' } = config || {}
 
   if (provider === 'local') {
     if (process.platform === 'darwin') {
@@ -516,6 +518,6 @@ export function createCloudASRSession(config, onTranscript, onError, onClose, on
     return createVolcengineSession(config, onTranscript, onError, onClose, onEvent)
   }
 
-  onError(`未知云端 ASR 服务商: ${provider}`)
+  onError(`未知云端 ASR 服务商: ${config?.provider || config?.voiceProvider || provider || '空'}`)
   return null
 }

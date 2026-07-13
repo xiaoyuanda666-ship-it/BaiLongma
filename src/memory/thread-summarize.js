@@ -8,6 +8,7 @@
 //
 // 整个流程 fire-and-forget，所有错误吞掉，绝对不能阻塞主对话。
 import { appendConclusion } from './threads.js'
+import { logWarn } from '../runtime/error-logger.js'
 
 const MAX_CONVERSATION_ROWS = 60
 const MAX_ACTIONLOG_LIMIT = 50
@@ -107,10 +108,22 @@ export async function summarizeThread(thread, { sessionRef, emitEvent, saveState
     let actionLogs = []
     try {
       conversations = getConversationsForThread(thread.id, { sinceAt, limit: MAX_CONVERSATION_ROWS }) || []
-    } catch {}
+    } catch (err) {
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'load_thread_conversations',
+        metadata: { threadId: thread.id, hasSinceAt: !!sinceAt },
+      })
+    }
     try {
       actionLogs = filterSince(getRecentActionLogs(MAX_ACTIONLOG_LIMIT) || [], sinceAt)
-    } catch {}
+    } catch (err) {
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'load_recent_action_logs',
+        metadata: { threadId: thread.id, hasSinceAt: !!sinceAt },
+      })
+    }
 
     // 自上次摘要以来没新东西（< 2 条对话且无工具调用）→ 不值得花一次 LLM
     if (conversations.length < 2 && actionLogs.length === 0) {
@@ -131,7 +144,15 @@ export async function summarizeThread(thread, { sessionRef, emitEvent, saveState
         mustReply: false,
       })
     } catch (err) {
-      console.warn('[thread-summarize] callLLM failed:', err?.message || err)
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'call_llm',
+        metadata: {
+          threadId: thread.id,
+          conversationCount: conversations.length,
+          actionLogCount: actionLogs.length,
+        },
+      })
       return { conclusion: '', attempted: true }
     }
 
@@ -142,7 +163,15 @@ export async function summarizeThread(thread, { sessionRef, emitEvent, saveState
     appendConclusion(thread, conclusion)
     thread.summary = conclusion
     thread.lastSummaryAt = new Date().toISOString()
-    try { saveState?.() } catch {}
+    try {
+      saveState?.()
+    } catch (err) {
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'save_thread_state',
+        metadata: { threadId: thread.id, sessionRef },
+      })
+    }
 
     // 沉淀长期记忆（event_type 沿用 focus_conclusion，召回路径零改动）
     try {
@@ -157,7 +186,13 @@ export async function summarizeThread(thread, { sessionRef, emitEvent, saveState
         timestamp: sinceAt || new Date().toISOString(),
         salience: 3,
       })
-    } catch {}
+    } catch (err) {
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'insert_focus_conclusion',
+        metadata: { threadId: thread.id, sessionRef },
+      })
+    }
 
     try {
       emitEvent?.('thread_summarized', {
@@ -166,11 +201,21 @@ export async function summarizeThread(thread, { sessionRef, emitEvent, saveState
         conclusion,
         sessionRef,
       })
-    } catch {}
+    } catch (err) {
+      logWarn(err, {
+        scope: 'memory.thread_summary',
+        operation: 'emit_thread_summarized',
+        metadata: { threadId: thread.id, sessionRef },
+      })
+    }
 
     return { conclusion, attempted: true }
   } catch (err) {
-    console.warn('[thread-summarize] unexpected error:', err?.message || err)
+    logWarn(err, {
+      scope: 'memory.thread_summary',
+      operation: 'unexpected',
+      metadata: { threadId: thread?.id, sessionRef },
+    })
     return null
   }
 }

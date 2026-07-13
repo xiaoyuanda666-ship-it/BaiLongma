@@ -44,6 +44,7 @@ const TOOL_ZH = {
   grant_agent_delegation: "授权代理",
   complete_startup_self_check: "完成自检",
   install_tool: "安装工具",
+  install_software: "安装软件",
   uninstall_tool: "卸载工具",
   list_tools: "列出工具",
   connect_wechat: "连接微信",
@@ -97,6 +98,7 @@ const TOOL_ICON = {
   grant_agent_delegation: "🤝",
   complete_startup_self_check: "🩺",
   install_tool: "🔧",
+  install_software: "⬇️",
   uninstall_tool: "🔧",
   list_tools: "🧰",
   connect_wechat: "🔗",
@@ -425,6 +427,8 @@ export class ThoughtStream {
       case "install_tool":
       case "uninstall_tool":
         return this.compactText(a.tool_name || a.name || "", 40);
+      case "install_software":
+        return this.compactText(a.software || a.brew_name || a.url || "", 50);
       case "music":
         return this.compactText(a.title || a.action || "", 40);
       case "media_mode":

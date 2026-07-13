@@ -704,6 +704,141 @@ function persistLlmProviderConfig(record) {
   })
 }
 
+const VOICE_PROVIDER_ALIASES = {
+  macos: 'local',
+  'macos-local': 'local',
+  'local-macos': 'local',
+  mac: 'local',
+  native: 'local',
+  cloud: 'aliyun',
+  dashscope: 'aliyun',
+  bailian: 'aliyun',
+  paraformer: 'aliyun',
+  volcano: 'volcengine',
+  volc: 'volcengine',
+  doubao: 'volcengine',
+  bytedance: 'volcengine',
+  iflytek: 'xunfei',
+}
+const VOICE_PROVIDERS = new Set(['local', 'aliyun', 'volcengine', 'tencent', 'xunfei'])
+const VOICE_PROVIDER_KEYS = {
+  local: ['lang', 'macosRecognitionMode'],
+  aliyun: ['aliyunApiKey', 'aliyunAsrModel'],
+  tencent: ['tencentSecretId', 'tencentSecretKey', 'tencentAppId'],
+  xunfei: ['xunfeiAppId', 'xunfeiApiKey', 'xunfeiApiSecret'],
+  volcengine: ['volcAsrApiKey', 'volcAsrAppKey', 'volcAsrAccessKey', 'volcAsrResourceId'],
+}
+const VOICE_CONFIG_KEYS = [
+  'voiceProvider',
+  ...Object.values(VOICE_PROVIDER_KEYS).flat(),
+]
+const VOICE_KEY_PROVIDER = new Map(
+  Object.entries(VOICE_PROVIDER_KEYS).flatMap(([provider, keys]) => keys.map((key) => [key, provider]))
+)
+
+export function normalizeVoiceProvider(provider, fallback = 'aliyun') {
+  const raw = String(provider || '').trim().toLowerCase()
+  const normalized = VOICE_PROVIDER_ALIASES[raw] || raw
+  return VOICE_PROVIDERS.has(normalized) ? normalized : fallback
+}
+
+function getVoiceActiveFile() {
+  return path.join(paths.voiceConfigDir, 'active.json')
+}
+
+function getVoiceProviderConfigFile(provider) {
+  const p = normalizeVoiceProvider(provider, null)
+  if (!p) return null
+  return path.join(paths.voiceConfigDir, `${p}.json`)
+}
+
+function readJsonObjectFile(file) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    return (parsed && typeof parsed === 'object') ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeJsonObjectFile(file, record) {
+  const tmp = `${file}.tmp`
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
+  fs.renameSync(tmp, file)
+}
+
+function readVoiceProviderConfig(provider) {
+  const file = getVoiceProviderConfigFile(provider)
+  if (!file) return {}
+  const parsed = readJsonObjectFile(file)
+  return parsed || {}
+}
+
+function writeVoiceProviderConfig(provider, record) {
+  const p = normalizeVoiceProvider(provider, null)
+  const file = getVoiceProviderConfigFile(p)
+  if (!p || !file) throw new Error(`Unsupported voice provider: "${provider}"`)
+  writeJsonObjectFile(file, {
+    ...record,
+    provider: p,
+    updatedAt: new Date().toISOString(),
+  })
+}
+
+function writeActiveVoiceProvider(provider) {
+  const p = normalizeVoiceProvider(provider, 'aliyun')
+  writeJsonObjectFile(getVoiceActiveFile(), {
+    provider: p,
+    updatedAt: new Date().toISOString(),
+  })
+  return p
+}
+
+function readLegacyVoiceBlock(cfg = readExistingStoredConfig()) {
+  return (cfg?.voice && typeof cfg.voice === 'object') ? cfg.voice : {}
+}
+
+function readActiveVoiceProvider(fallback = 'aliyun') {
+  const active = readJsonObjectFile(getVoiceActiveFile())
+  if (active?.provider) return normalizeVoiceProvider(active.provider, fallback)
+  const legacy = readLegacyVoiceBlock()
+  return normalizeVoiceProvider(legacy.voiceProvider || legacy.provider || fallback, fallback)
+}
+
+function stripLegacyVoiceBlock(cfg) {
+  const { voice: _voice, ...rest } = cfg || {}
+  return rest
+}
+
+function persistLegacyVoiceBlock(legacy) {
+  if (!legacy || typeof legacy !== 'object') return
+  const activeProvider = writeActiveVoiceProvider(legacy.voiceProvider || legacy.provider || 'aliyun')
+  const buckets = new Map()
+  for (const [key, value] of Object.entries(legacy)) {
+    if (key === 'voiceProvider' || key === 'provider') continue
+    if (!VOICE_CONFIG_KEYS.includes(key)) continue
+    const trimmed = String(value || '').trim()
+    if (!trimmed) continue
+    const provider = VOICE_KEY_PROVIDER.get(key) || activeProvider
+    const bucket = buckets.get(provider) || { ...readVoiceProviderConfig(provider), provider }
+    bucket[key] = trimmed
+    buckets.set(provider, bucket)
+  }
+  if (!buckets.has(activeProvider)) {
+    buckets.set(activeProvider, { ...readVoiceProviderConfig(activeProvider), provider: activeProvider })
+  }
+  for (const [provider, record] of buckets) {
+    writeVoiceProviderConfig(provider, record)
+  }
+}
+
+function migrateLegacyVoiceConfig(cfg) {
+  const legacy = readLegacyVoiceBlock(cfg)
+  if (Object.keys(legacy).length) persistLegacyVoiceBlock(legacy)
+  return stripLegacyVoiceBlock(cfg)
+}
+
 function shouldAllowEnvFallback() {
   return !process.versions?.electron
 }
@@ -761,7 +896,7 @@ function applyConfig(provider, apiKey, model, customBaseURL) {
 // 跑完写回新版本号。把历史上零散、惰性触发的"一次性迁移"（如 seedance 拆分）收编到这里，
 // 让升级路径确定、可测、可追溯，而不是散落在各 getter 里。
 // 加新迁移：CONFIG_SCHEMA_VERSION 加 1，并在 CONFIG_MIGRATIONS 里补上对应版本号的函数。
-const CONFIG_SCHEMA_VERSION = 2
+const CONFIG_SCHEMA_VERSION = 3
 
 // 每个迁移把传入的 config 对象升一级，返回新对象。允许带幂等副作用（如写独立文件）。
 const CONFIG_MIGRATIONS = {
@@ -791,6 +926,11 @@ const CONFIG_MIGRATIONS = {
       }
     }
     return withoutLegacyLlmFields(cfg)
+  },
+  // v2 → v3：ASR 语音识别凭据按厂商拆到 userData/voice/<provider>.json，
+  // config.json 不再承载云端 ASR 密钥，只保留其它通用配置。
+  3(cfg) {
+    return migrateLegacyVoiceConfig(cfg)
   },
 }
 
@@ -1377,7 +1517,7 @@ export function setSocialConfig(updates) {
   const existing = readExistingStoredConfig()
   const current = existing.social || {}
   const next = { ...current }
-  for (const [key, val] of Object.entries(updates)) {
+  for (const [key, val] of Object.entries(updates || {})) {
     if (!SOCIAL_ENV_KEYS.includes(key)) continue
     const trimmed = String(val || '').trim()
     if (trimmed) {
@@ -1390,14 +1530,6 @@ export function setSocialConfig(updates) {
   }
   writeStoredConfig({ ...existing, social: next })
 }
-
-const VOICE_CONFIG_KEYS = [
-  'voiceProvider',
-  'aliyunApiKey',
-  'tencentSecretId', 'tencentSecretKey', 'tencentAppId',
-  'xunfeiAppId', 'xunfeiApiKey', 'xunfeiApiSecret',
-  'volcAsrApiKey', 'volcAsrAppKey', 'volcAsrAccessKey', 'volcAsrResourceId',
-]
 
 function isValidAliyunAsrKey(value) {
   return /^sk-[A-Za-z0-9_\-.]{20,}$/.test(String(value || '').trim())
@@ -1413,12 +1545,12 @@ const CHAT_PROVIDERS_WITH_AMBIGUOUS_SK_KEYS = new Set([
 ])
 
 export function getVoiceConfig() {
-  let stored = {}
-  try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
-  const result = { voiceProvider: stored.voiceProvider || 'aliyun' }
+  const result = { voiceProvider: readActiveVoiceProvider('aliyun') }
   for (const key of VOICE_CONFIG_KEYS) {
     if (key === 'voiceProvider') continue
-    result[key] = { configured: !!(stored[key]) }
+    const provider = VOICE_KEY_PROVIDER.get(key) || result.voiceProvider
+    const stored = readVoiceProviderConfig(provider)
+    result[key] = { configured: !!stored[key] }
     if (key === 'aliyunApiKey' && stored[key]) {
       result[key] = {
         configured: isValidAliyunAsrKey(stored[key]),
@@ -1434,13 +1566,33 @@ export function getVoiceConfig() {
   return result
 }
 
+export function getVoiceRuntimeConfig(providerHint = null) {
+  const provider = readActiveVoiceProvider(providerHint || 'aliyun')
+  const stored = readVoiceProviderConfig(provider)
+  return {
+    ...stored,
+    voiceProvider: provider,
+    provider,
+  }
+}
+
 export function setVoiceConfig(updates) {
   const existing = readExistingStoredConfig()
-  const current = existing.voice || {}
-  const next = { ...current }
+  const { voice: legacyVoice, ...baseConfig } = existing
+  let activeProvider = readActiveVoiceProvider(legacyVoice?.voiceProvider || legacyVoice?.provider || 'aliyun')
+  const requestedProvider = updates?.voiceProvider ?? updates?.provider
+  if (requestedProvider !== undefined) {
+    activeProvider = normalizeVoiceProvider(requestedProvider, activeProvider)
+  }
+  activeProvider = writeActiveVoiceProvider(activeProvider)
+  const changedProviders = new Map()
   for (const [key, val] of Object.entries(updates)) {
+    if (key === 'provider') continue
     if (!VOICE_CONFIG_KEYS.includes(key)) continue
     const trimmed = String(val || '').trim()
+    if (key === 'voiceProvider') {
+      continue
+    }
     if (key === 'aliyunApiKey' && trimmed && !isValidAliyunAsrKey(trimmed)) {
       console.warn('[voice-config] Ignoring invalid Aliyun ASR key format; expected DashScope sk-* API key')
       continue
@@ -1455,10 +1607,19 @@ export function setVoiceConfig(updates) {
       console.warn('[voice-config] Ignoring Aliyun ASR key because it matches the active chat provider API key')
       continue
     }
-    if (trimmed) next[key] = trimmed
-    else delete next[key]
+    const provider = VOICE_KEY_PROVIDER.get(key) || activeProvider
+    const record = changedProviders.get(provider) || { ...readVoiceProviderConfig(provider), provider }
+    if (trimmed) record[key] = trimmed
+    else delete record[key]
+    changedProviders.set(provider, record)
   }
-  writeStoredConfig({ ...existing, voice: next })
+  for (const [provider, record] of changedProviders) {
+    writeVoiceProviderConfig(provider, record)
+  }
+  writeStoredConfig({
+    ...baseConfig,
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+  })
 }
 
 // TTS config
