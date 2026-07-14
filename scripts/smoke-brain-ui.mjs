@@ -470,6 +470,72 @@ try {
       && log?.textContent.includes('bulk-2.js')
       && log?.textContent.includes('bulk-59.js')
   })
+
+  const themeColorSwitch = await page.evaluate(() => {
+    const probe = () => ({
+      lineType: getComputedStyle(document.querySelector('#si-l1 .line-type')).color,
+      lineTool: getComputedStyle(document.querySelector('#si-l1 .line-tool')).color,
+    })
+    document.body.dataset.theme = 'midnight'
+    const midnight = probe()
+    document.body.dataset.theme = 'sand'
+    const sand = probe()
+    document.body.dataset.theme = 'midnight'
+    const restored = probe()
+    return { midnight, sand, restored }
+  })
+  if (themeColorSwitch.midnight.lineType === themeColorSwitch.sand.lineType
+      || themeColorSwitch.midnight.lineTool === themeColorSwitch.sand.lineTool) {
+    throw new Error(`thought stream colors did not follow the theme: ${JSON.stringify(themeColorSwitch)}`)
+  }
+  if (themeColorSwitch.restored.lineType !== themeColorSwitch.midnight.lineType
+      || themeColorSwitch.restored.lineTool !== themeColorSwitch.midnight.lineTool) {
+    throw new Error(`dark theme colors were not restored: ${JSON.stringify(themeColorSwitch)}`)
+  }
+
+  await page.setViewportSize({ width: 320, height: 480 })
+  await page.waitForTimeout(500)
+  await page.evaluate(() => {
+    document.querySelector('#chat-history')?.classList.remove('open')
+    const transcript = document.querySelector('#voice-transcript')
+    if (transcript) transcript.textContent = '这是紧凑窗口语音识别测试'
+  })
+  await page.waitForFunction(() => document.querySelector('#compact-voice-transcript')?.textContent === '这是紧凑窗口语音识别测试')
+  const compactLayout = await page.evaluate(() => {
+    const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+    return {
+      bodyClass: document.body.className,
+      graphDisplay: getComputedStyle(document.querySelector('#graph')).display,
+      leftPanelDisplay: getComputedStyle(document.querySelector('#panel-l1')).display,
+      rightPanelDisplay: getComputedStyle(document.querySelector('#panel-l2')).display,
+      voiceStripDisplay: getComputedStyle(document.querySelector('#compact-voice-strip')).display,
+      historyHeight: rect('#chat-history')?.height || 0,
+      consoleHeight: rect('#chat-area')?.height || 0,
+      consoleWidth: rect('#chat-area')?.width || 0,
+      consoleLeft: rect('#chat-area')?.left || 0,
+      bodyScrollWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      inputWidth: rect('#msg-input')?.width || 0,
+      sendRight: rect('#send-btn')?.right || 0,
+      transcriptWidth: rect('#compact-voice-transcript')?.width || 0,
+    }
+  })
+  if (compactLayout.graphDisplay !== 'none') throw new Error('compact layout must hide the memory graph')
+  if (compactLayout.leftPanelDisplay !== 'none' || compactLayout.rightPanelDisplay !== 'none') {
+    throw new Error('compact layout must hide both side panels')
+  }
+  if (compactLayout.voiceStripDisplay !== 'flex') throw new Error('compact layout voice transcript strip is hidden')
+  if (compactLayout.historyHeight < 250) throw new Error(`compact chat history collapsed: ${compactLayout.historyHeight}px`)
+  if (compactLayout.consoleHeight < 430) throw new Error(`compact console does not fill the window: ${compactLayout.consoleHeight}px`)
+  if (compactLayout.consoleWidth < 285 || compactLayout.consoleLeft > 20) {
+    throw new Error(`compact console does not span the window: ${JSON.stringify(compactLayout)}`)
+  }
+  if (compactLayout.bodyScrollWidth > compactLayout.viewportWidth || compactLayout.sendRight > compactLayout.viewportWidth) {
+    throw new Error(`compact layout overflows horizontally: ${JSON.stringify(compactLayout)}`)
+  }
+  if (compactLayout.inputWidth < 70 || compactLayout.transcriptWidth < 80) {
+    throw new Error(`compact composer or transcript is too narrow: ${JSON.stringify(compactLayout)}`)
+  }
   if (errors.length) throw new Error(`browser errors:\n${errors.join('\n')}`)
 
   console.log('[PASS] brain-ui smoke')

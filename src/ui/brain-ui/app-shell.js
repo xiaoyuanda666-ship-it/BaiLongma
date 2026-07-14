@@ -181,6 +181,11 @@ const createSecondaryPanel = () => `
 
 const createConsole = () => `
 <section class="console" id="chat-area">
+  <div class="compact-voice-strip" id="compact-voice-strip" aria-live="polite">
+    <span class="compact-voice-indicator" aria-hidden="true"></span>
+    <span class="compact-voice-label">语音识别</span>
+    <span class="compact-voice-transcript" id="compact-voice-transcript">按住空格键开始说话</span>
+  </div>
   <div id="chat-history">
     <div id="chat-messages"></div>
   </div>

@@ -165,7 +165,9 @@ export class ThoughtStream {
     this.curLine = document.createElement("div");
     this.curLine.className = "stream-line";
 
-    const color = this.readCSSVar(`--${this.color}`);
+    // 保留对主题变量的引用，不把当前主题的解析色值固化到内联样式。
+    // 否则从浅色切回暗色后，历史记录仍会残留浅色主题的深色文字。
+    const color = `var(--${this.color})`;
     const timeLabel = options.time || this.tStamp();
 
     const header = document.createElement("div");
@@ -264,7 +266,7 @@ export class ThoughtStream {
     if (this.thinkingEl) return;
     const el = document.createElement("div");
     el.className = "line-thinking";
-    el.style.color = this.readCSSVar(`--${this.color}`);
+    el.style.color = `var(--${this.color})`;
     el.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
     this.curLine.appendChild(el);
     this.thinkingEl = el;
@@ -608,7 +610,7 @@ export class ThoughtStream {
 
     const toolEl = document.createElement("div");
     toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = this.readCSSVar(`--${this.color}`);
+    toolEl.style.color = `var(--${this.color})`;
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "tool-icon";
@@ -675,7 +677,7 @@ export class ThoughtStream {
     const toolEl = document.createElement("div");
     const statusCls = this.toolFailed ? "failed" : "ended";
     toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = this.readCSSVar(`--${this.color}`);
+    toolEl.style.color = `var(--${this.color})`;
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "tool-icon";

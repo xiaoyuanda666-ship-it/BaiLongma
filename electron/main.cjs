@@ -483,8 +483,8 @@ async function createWindow({ loadStartup = true } = {}) {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 840,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 320,
+    minHeight: 480,
     backgroundColor: '#0b0b0e',
     title: 'Bailongma',
     icon: getAppIconPath(),

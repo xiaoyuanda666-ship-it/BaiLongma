@@ -4266,6 +4266,8 @@ initVoicePanel({
   canvasId:   "voice-canvas",
   statusId:   "voice-status",
   transcriptId: "voice-transcript",
+  compactTranscriptId: "compact-voice-transcript",
+  compactPanelId: "compact-voice-strip",
   getChatInput:  () => document.getElementById("msg-input"),
   getSendBtn:    () => document.getElementById("send-btn"),
   getSendMessage: (options) => chat?.send?.(options),
@@ -4898,6 +4900,7 @@ initTyphoon();
       if (e.repeat) return;
       if (pttHeld) return;
       pttHeld = true;
+      document.body.classList.add("ptt-active");
       // 不论是否在播，stopTTS 内部已做 no-op 守卫
       try { window.stopTTS?.(); } catch {}
       window.bailongmaVoice?.pttStart?.();
@@ -4907,6 +4910,7 @@ initTyphoon();
       if (!isSpace(e)) return;
       if (!pttHeld) return;
       pttHeld = false;
+      document.body.classList.remove("ptt-active");
       e.preventDefault();
       window.bailongmaVoice?.pttEnd?.();
     }, { capture: true });
@@ -4916,6 +4920,7 @@ initTyphoon();
     window.addEventListener("blur", () => {
       if (!pttHeld) return;
       pttHeld = false;
+      document.body.classList.remove("ptt-active");
       window.bailongmaVoice?.pttEnd?.({ send: false });
     });
   })();

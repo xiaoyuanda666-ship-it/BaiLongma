@@ -1135,6 +1135,10 @@ body {
   box-shadow: var(--shadow-console), var(--shadow-inset);
 }
 
+.compact-voice-strip {
+  display: none;
+}
+
 #chat-history {
   flex: 1 1 auto;
   min-height: 0;
@@ -4759,6 +4763,157 @@ body.worldcup-mode .console > #voice-panel .voice-transcript {
   max-width: none;
   text-align: left;
   min-height: 0;
+}
+
+/* ── 窄窗口：专注聊天模式 ───────────────────────────────────────────────
+   两侧栏与节点图让位给完整聊天记录；顶部保留实时语音识别文字。媒体大屏
+   模式沿用各自布局，因此这里只接管普通 Brain UI。 */
+@media (max-width: 780px) {
+  #graph,
+  .grid-overlay {
+    display: none !important;
+  }
+
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) .console {
+    inset: 10px 10px 12px;
+    width: auto;
+    height: auto;
+    border-radius: 14px;
+  }
+
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) .compact-voice-strip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 46px;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+  }
+
+  .compact-voice-indicator {
+    width: 9px;
+    height: 9px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: var(--dim);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--dim) 12%, transparent);
+    transition: background 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .compact-voice-label {
+    flex: 0 0 auto;
+    color: var(--ink2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+
+  .compact-voice-transcript {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--dim);
+    font-size: 12px;
+    line-height: 1.45;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .compact-voice-strip.has-transcript .compact-voice-transcript {
+    color: var(--ink);
+  }
+
+  body.ptt-active .compact-voice-indicator {
+    background: var(--warm);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--warm) 16%, transparent),
+                0 0 16px color-mix(in srgb, var(--warm) 55%, transparent);
+    animation: compact-voice-pulse 1s ease-in-out infinite;
+  }
+
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) #chat-history,
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) #chat-history.open {
+    display: flex;
+    flex: 1 1 auto;
+    max-height: none;
+    overflow: hidden;
+  }
+
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) #chat-messages {
+    flex: 1 1 auto;
+    width: 100%;
+    max-height: none;
+    padding: 12px 14px 10px;
+  }
+
+  body:not(:is(
+    .hotspot-mode,
+    .doc-panel-mode,
+    .person-card-mode,
+    .worldcup-mode,
+    .typhoon-mode,
+    .video-mode,
+    .aivideo-mode,
+    .image-mode,
+    .music-mode
+  )) #input-row {
+    border-top-color: var(--line);
+  }
+}
+
+@keyframes compact-voice-pulse {
+  50% { transform: scale(0.75); opacity: 0.7; }
 }
 
 .wc-exit-btn {

@@ -18,14 +18,33 @@ import { createWakeFlow } from './voice-wake.js';
 
 export function initVoicePanel({
   btnId, panelId, canvasId, statusId, transcriptId,
+  compactTranscriptId, compactPanelId,
   getChatInput, getSendBtn, getSendMessage, getLang, getAutoSend, getAutoMic,
 }) {
   const btn        = document.getElementById(btnId);
   const panel      = document.getElementById(panelId);
   const canvas     = document.getElementById(canvasId);
   const transcript = document.getElementById(transcriptId);
+  const compactTranscript = document.getElementById(compactTranscriptId);
+  const compactPanel = document.getElementById(compactPanelId);
 
   if (!panel || !canvas) return;
+
+  // 窄窗口会隐藏左侧栏，紧凑聊天区仍需同步显示实时识别文字。
+  // 使用镜像而不是搬动 voice-panel，避免与世界杯/热点等媒体模式争夺同一 DOM 节点。
+  if (transcript && compactTranscript) {
+    const syncCompactTranscript = () => {
+      const text = transcript.textContent.trim();
+      compactTranscript.textContent = text || '按住空格键开始说话';
+      compactPanel?.classList.toggle('has-transcript', Boolean(text));
+    };
+    new MutationObserver(syncCompactTranscript).observe(transcript, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    syncCompactTranscript();
+  }
 
   // ─── 组装 core + 两个模式策略 ───
   const core = createVoiceCore({ canvas, transcript, getChatInput, getSendMessage, getLang });
