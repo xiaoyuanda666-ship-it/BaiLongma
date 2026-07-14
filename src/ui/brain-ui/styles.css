@@ -1389,6 +1389,10 @@ body {
   border-top: 1px solid var(--line);
 }
 
+#chat-history:not(.open) ~ #input-row {
+  border-top-color: transparent;
+}
+
 /* ── 斜杠命令菜单 ───────────────────────────────────────── */
 .slash-menu {
   position: absolute;
