@@ -1,6 +1,6 @@
 // voice-wake.js —— 唤醒会话编排(命中→悬浮球→监听→退场)
 //
-// 命中「小白龙」由主进程经 IPC `wake:hit` 通知本渲染层(见 preload.cjs 的 bailongma.wake)。
+// 命中「小白龙」由主进程经 IPC `wake:hit` 通知本渲染层(见 preload.cjs 的 jarvis.wake)。
 // 会话引擎/对话/TTS 全部复用主窗口现有 voice-core(不重造);悬浮球是独立窗口、只当「脸」:
 // 主窗口每帧把 {状态 sk, 真实音量 vol} + 文字推给球窗,由球窗注入 voice-core(setExternalVol)
 // 驱动球体跳动,动画与 brain-ui 完全一致。
@@ -23,7 +23,7 @@ const FRAME_MIN_MS = 33;       // 推帧给球窗的最小间隔(≈30fps)
 const BUSY_SK = new Set(['recognizing', 'processing', 'speaking', 'event', 'done']);
 
 export function createWakeFlow(core) {
-  const orb = (typeof window !== 'undefined' && window.bailongma && window.bailongma.wake) || null;
+  const orb = (typeof window !== 'undefined' && window.jarvis && window.jarvis.wake) || null;
 
   let active = false;          // 唤醒会话进行中
   let inConversation = false;  // 已听到语音、转入正常对话

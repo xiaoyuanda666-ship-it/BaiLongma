@@ -3,7 +3,7 @@
 import fs from 'fs'
 import path from 'path'
 
-const CONFIG = path.join(process.env.APPDATA, 'Bailongma', 'config.json')
+const CONFIG = path.join(process.env.APPDATA, 'Jarvis', 'config.json')
 const DEFAULT_BASE = 'https://ark.cn-beijing.volces.com/api/v3'
 const DEFAULT_MODEL = 'doubao-seedance-2-0-260128'
 

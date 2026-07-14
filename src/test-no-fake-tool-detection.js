@@ -18,8 +18,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-no-fake-detect-'))
-process.env.BAILONGMA_USER_DIR = tmp
-process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
+process.env.JARVIS_USER_DIR = tmp
+process.env.JARVIS_RESOURCES_DIR = process.cwd()
 
 let closeDBForTest = null
 

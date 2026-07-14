@@ -269,8 +269,8 @@ const directRejectName = `factory_direct_reject_${suffix}`
   const schema = getInstalledToolSchema(goodName)
   assert(schema?.function?.name === goodName, 'installed tool exposes function-call schema', JSON.stringify(schema))
 
-  const result = await executeInstalledTool(goodName, { text: 'bailongma' })
-  assert(result === 'BAILONGMA', 'installed generated tool executes through marketplace registry', result)
+  const result = await executeInstalledTool(goodName, { text: 'jarvis' })
+  assert(result === 'JARVIS', 'installed generated tool executes through marketplace registry', result)
 
   uninstallTool({ name: goodName })
   cleanupToolNames.delete(goodName)
@@ -362,8 +362,8 @@ const directRejectName = `factory_direct_reject_${suffix}`
       }
       console.log('@@RESULT@@' + JSON.stringify(results))
     `, {
-      BAILONGMA_USER_DIR: tempUserDir,
-      BAILONGMA_RESOURCES_DIR: process.cwd(),
+      JARVIS_USER_DIR: tempUserDir,
+      JARVIS_RESOURCES_DIR: process.cwd(),
     })
     assert(directRun.status === 0, 'isolated direct permission process exits cleanly', directRun.stderr || directRun.stdout)
 
@@ -404,8 +404,8 @@ const directRejectName = `factory_direct_reject_${suffix}`
       const installed = parse(await execManageToolFactory({ action: 'install', proposal_id: proposed.proposal_id }))
       console.log('@@RESULT@@' + JSON.stringify({ proposed, reviewed, installed }))
     `, {
-      BAILONGMA_USER_DIR: tempUserDir,
-      BAILONGMA_RESOURCES_DIR: process.cwd(),
+      JARVIS_USER_DIR: tempUserDir,
+      JARVIS_RESOURCES_DIR: process.cwd(),
     })
     assert(installRun.status === 0, 'isolated managed install process exits cleanly', installRun.stderr || installRun.stdout)
 
@@ -428,8 +428,8 @@ const directRejectName = `factory_direct_reject_${suffix}`
         permissions: meta.permissions,
       }))
     `, {
-      BAILONGMA_USER_DIR: tempUserDir,
-      BAILONGMA_RESOURCES_DIR: process.cwd(),
+      JARVIS_USER_DIR: tempUserDir,
+      JARVIS_RESOURCES_DIR: process.cwd(),
     })
     assert(reloadRun.status === 0, 'isolated reload process exits cleanly', reloadRun.stderr || reloadRun.stdout)
 
@@ -466,8 +466,8 @@ const directRejectName = `factory_direct_reject_${suffix}`
       const result = await executeInstalledTool(name, {})
       console.log('@@RESULT@@' + JSON.stringify({ schema_name: schema?.function?.name, result }))
     `, {
-      BAILONGMA_USER_DIR: tempUserDir,
-      BAILONGMA_RESOURCES_DIR: process.cwd(),
+      JARVIS_USER_DIR: tempUserDir,
+      JARVIS_RESOURCES_DIR: process.cwd(),
     })
     assert(legacyRun.status === 0, 'isolated legacy load process exits cleanly', legacyRun.stderr || legacyRun.stdout)
 

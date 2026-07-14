@@ -3,7 +3,7 @@
 // 跑法：node src/test-visibility.js
 // 前提：node 的 better-sqlite3 ABI 与本机匹配（用 electron 内置 node 跑则需要 electron）
 //
-// 本文件不动真实 DB——通过把 BAILONGMA_USER_DIR 环境变量指向临时目录来隔离，
+// 本文件不动真实 DB——通过把 JARVIS_USER_DIR 环境变量指向临时目录来隔离，
 // db.js 走 paths.dbFile = <USER_DIR>/data/jarvis.db，从而落到 temp。
 
 import { tmpdir } from 'node:os'
@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 
 const tmp = mkdtempSync(join(tmpdir(), 'blm-visibility-'))
-process.env.BAILONGMA_USER_DIR = tmp
+process.env.JARVIS_USER_DIR = tmp
 
 const {
   getDB,

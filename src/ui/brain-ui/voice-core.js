@@ -81,8 +81,8 @@ const STATE_CFG = {
 export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 AEC 残留）
 
 const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
-const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
-const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
+const VOICE_PROVIDER_KEY = 'jarvis-voice-provider';
+const VOICE_MIC_DEVICE_KEY = 'jarvis-voice-mic-device-id';
 
 // 采集分块大小（样本数）：AudioWorklet 累积到该样本数再投递；ScriptProcessor 回退也用它。
 // 2048 @ 16kHz = 128ms/块，权衡延迟与消息/网络开销。
@@ -379,8 +379,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   let cloudWs = null;
   let cloudWsIntentional = false; // stopCloudStream 主动关闭时置 true，避免触发重连
 
-  // ─── 采集诊断（定位长语音丢字根因；localStorage 'bailongma-voice-diag'='0' 关闭，默认开） ───
-  const DIAG_ON = localStorage.getItem('bailongma-voice-diag') !== '0';
+  // ─── 采集诊断（定位长语音丢字根因；localStorage 'jarvis-voice-diag'='0' 关闭，默认开） ───
+  const DIAG_ON = localStorage.getItem('jarvis-voice-diag') !== '0';
   let diagTimer = null;
   let diagCaptureMode = 'none';   // 'worklet' | 'scriptprocessor'
   let diagChunks = 0, diagBytes = 0, diagReconnects = 0, diagMaxGapMs = 0, diagLastChunkTs = 0;
@@ -424,8 +424,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // ─── 识别停滞看门狗（self-healing） ───
   // 兜底「云端静默停识别」：音频在正常送、WS 仍 OPEN、用户还在出声，却数秒收不到任何
   // 转录 → 主动关连接触发重连，把识别任务滚动重启接活。不依赖云端发任何结束/错误事件，
-  // 也就修了「说到几十个字球变绿后不再出字」。localStorage 'bailongma-voice-watchdog'='0' 可关。
-  const WATCHDOG_ON = localStorage.getItem('bailongma-voice-watchdog') !== '0';
+  // 也就修了「说到几十个字球变绿后不再出字」。localStorage 'jarvis-voice-watchdog'='0' 可关。
+  const WATCHDOG_ON = localStorage.getItem('jarvis-voice-watchdog') !== '0';
   const STALL_RECONNECT_MS = 3500;   // 仍在说却这么久没转录 → 判定停滞
   const WATCHDOG_SPEECH_VOL = 0.05;  // 判定「人在说话」的音量阈值（与 continuous SPEECH_VOL 同量级）
   let watchdogTimer = null;

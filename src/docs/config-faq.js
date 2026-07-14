@@ -24,7 +24,7 @@ MiniMax 一个 Key 同时供 LLM 与 TTS 两用。`,
       },
       {
         title: 'DeepSeek 配置（首选推荐）',
-        content: `白龙马首选大模型，国产高性能、性价比出色、中文效果好。
+        content: `Jarvis首选大模型，国产高性能、性价比出色、中文效果好。
 
 ■ 官网：https://deepseek.com
 ■ 字段：apiKey（格式：sk-xxxxxxxx）

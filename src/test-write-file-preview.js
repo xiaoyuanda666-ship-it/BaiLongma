@@ -13,7 +13,7 @@ function contentOf(source) {
   return extractPartialJsonStringValue(source, ['content'])
 }
 
-globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
+globalThis.__JARVIS_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
 
 {
   const partial = contentOf('{"path":"demo.md","content":"Hello\\nWor')
@@ -161,8 +161,8 @@ globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
     hold_open: true,
   })
   recordTerminalStreamEvent({ action: 'write', stream_id: 'write_file', text: '# Diary\n\nBody' })
-  const previousReader = globalThis.getBailongmaWindowLayoutSnapshot
-  globalThis.getBailongmaWindowLayoutSnapshot = () => ({
+  const previousReader = globalThis.getJarvisWindowLayoutSnapshot
+  globalThis.getJarvisWindowLayoutSnapshot = () => ({
     displays: [],
     windows: [
       {
@@ -182,12 +182,12 @@ globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
   assert.match(context, /artifact_path=diary\.md/)
   assert.match(context, /force=true/)
   assert.match(context, /Do not tell the user no preview window exists/)
-  globalThis.getBailongmaWindowLayoutSnapshot = () => ({ displays: [], windows: [] })
+  globalThis.getJarvisWindowLayoutSnapshot = () => ({ displays: [], windows: [] })
   assert.match(formatTerminalStreamContext(), /visible_window: no/)
   if (previousReader) {
-    globalThis.getBailongmaWindowLayoutSnapshot = previousReader
+    globalThis.getJarvisWindowLayoutSnapshot = previousReader
   } else {
-    delete globalThis.getBailongmaWindowLayoutSnapshot
+    delete globalThis.getJarvisWindowLayoutSnapshot
   }
 }
 
@@ -207,6 +207,6 @@ globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
   assert.strictEqual(getTerminalStreamSnapshot('write_file').closed, true)
 }
 
-delete globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS
+delete globalThis.__JARVIS_WRITE_PREVIEW_AUTO_CLOSE_MS
 
 console.log('test-write-file-preview passed')

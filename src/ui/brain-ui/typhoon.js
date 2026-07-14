@@ -46,7 +46,7 @@ export function setTyphoonMode(visible, { source = 'brain-ui' } = {}) {
     const finish = () => { closeTimer = null; if (frame) frame.src = 'about:blank'; document.body.classList.remove('typhoon-mode') }
     if (loaded) closeTimer = setTimeout(finish, EXIT_ANIMATION_MS); else finish()
   }
-  window.dispatchEvent(new CustomEvent('bailongma:typhoon-mode', { detail: { active: next } }))
+  window.dispatchEvent(new CustomEvent('jarvis:typhoon-mode', { detail: { active: next } }))
   reportState(next, source)
 }
 export function toggleTyphoon(source = 'brain-ui') { setTyphoonMode(!active, { source }) }
@@ -72,20 +72,20 @@ export function initTyphoon() {
     expandConsole()
     scheduleConsoleCollapse(MESSAGE_PEEK_MS)
   })
-  window.addEventListener('bailongma:hotspot-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'hotspot_open' }) })
-  window.addEventListener('bailongma:worldcup-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'worldcup_open' }) })
+  window.addEventListener('jarvis:hotspot-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'hotspot_open' }) })
+  window.addEventListener('jarvis:worldcup-mode', (event) => { if (event?.detail?.active && active) setTyphoonMode(false, { source: 'worldcup_open' }) })
   window.addEventListener('message', (event) => {
     if (event?.data?.type !== 'typhoon-ptt' || !active) return
     const { phase } = event.data
     if (phase === 'down') {
       try { window.stopTTS?.() } catch {}
-      window.bailongmaVoice?.pttStart?.()
+      window.jarvisVoice?.pttStart?.()
       expandConsole()
     } else if (phase === 'up') {
-      window.bailongmaVoice?.pttEnd?.()
+      window.jarvisVoice?.pttEnd?.()
       scheduleConsoleCollapse(MESSAGE_PEEK_MS)
     } else if (phase === 'cancel') {
-      window.bailongmaVoice?.pttEnd?.({ send: false })
+      window.jarvisVoice?.pttEnd?.({ send: false })
       scheduleConsoleCollapse()
     }
   })

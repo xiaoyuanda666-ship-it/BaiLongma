@@ -1,8 +1,8 @@
-![Bailongma](https://github.com/xiaoyuanda666-ship-it/BaiLongma/blob/main/images/AGI128k.jpg)
+![Jarvis](https://github.com/richardiitse/BaiLongma/blob/main/images/AGI128k.jpg)
 
-# Bailongma
+# Jarvis
 
-Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答结束就退出的聊天程序，而是由主循环驱动：有用户消息时优先处理，空闲时按节奏继续整理记忆、检查任务、刷新上下文，并把状态实时推送到 Brain UI。
+Jarvis 是一个持续运行的桌面 AI Agent 项目。它不是一次问答结束就退出的聊天程序，而是由主循环驱动：有用户消息时优先处理，空闲时按节奏继续整理记忆、检查任务、刷新上下文，并把状态实时推送到 Brain UI。
 
 项目由 Electron 桌面壳、本地 HTTP 服务、LLM 调用层、记忆系统、工具执行器、语音系统、社交连接器和 Brain UI 组成。它的目标是让一个本地 Agent 既能聊天，也能记住、行动、观察自己的运行状态，并通过工具完成文件、网页、媒体、提醒、任务和系统级操作。
 
@@ -144,7 +144,7 @@ http://127.0.0.1:3721
 
 ## 数据与持久化
 
-Bailongma 的长期状态主要保存在本地 SQLite 数据库中，包括：
+Jarvis 的长期状态主要保存在本地 SQLite 数据库中，包括：
 
 - 对话记录、参与者身份和用户画像。
 - 记忆节点、记忆关系、全文检索索引和可见性状态。

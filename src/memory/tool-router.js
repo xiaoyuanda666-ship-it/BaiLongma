@@ -410,7 +410,7 @@ export function selectTools(ctx = {}) {
   if (mmCaps.includes('image')  && hits(body, IMAGE_GEN_TRIGGERS)) out.add(MM_GEN_TOOLS.image)
   // —— ActionLog 保活 ——
   // 上轮（或最近 10 次）调用过的工具强制带上：跨轮工作流不能因为关键词没命中就断链。
-  // 保活只覆盖白龙马的"已知工具"——installed 工具走单独的全注入路径。
+  // 保活只覆盖Jarvis的"已知工具"——installed 工具走单独的全注入路径。
   // 被抑制的工具跳过，避免 ActionLog 或扩展工具列表把明确撤下的旧工具捞回来。
   if (Array.isArray(recentActionLog)) {
     for (const entry of recentActionLog) {

@@ -65,7 +65,7 @@ import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
-    const reporter = globalThis.bailongmaStartupProgress
+    const reporter = globalThis.jarvisStartupProgress
     if (typeof reporter === 'function') reporter({ id, status, detail, message })
   } catch {}
 }
@@ -1692,7 +1692,7 @@ async function main() {
   }
 
   // Start HTTP API — must start regardless of activation status; the activation page depends on it
-  const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
+  const apiPort = Number(process.env.JARVIS_PORT) || 3721
   reportStartupProgress('api', 'running', `准备监听 127.0.0.1:${apiPort}`, '正在启动本地 API')
   startAPI(apiPort, {
     getStateSnapshot: () => ({

@@ -1,10 +1,10 @@
-// audio-output.js — 白龙马语音输出设备路由
+// audio-output.js — Jarvis语音输出设备路由
 //
 // 背景 / 为什么需要这个模块：
-//   白龙马是"会说话"的助手，TTS 默认走 `new Audio()`，也就是听天由命跟着系统默认播放设备走。
+//   Jarvis是"会说话"的助手，TTS 默认走 `new Audio()`，也就是听天由命跟着系统默认播放设备走。
 //   而大众用户的机器上经常装着虚拟声卡（Steam 串流 / NVIDIA Virtual / VB-Audio / Pico VR 等），
 //   或者拔掉耳机后 Windows 没有正确回退到内置扬声器 —— 系统默认就卡在一个"哑巴"虚拟设备上。
-//   结果：白龙马在说话，但用户什么都听不到，而且双方都不知道为什么。对语音产品这是致命的静默失败。
+//   结果：Jarvis在说话，但用户什么都听不到，而且双方都不知道为什么。对语音产品这是致命的静默失败。
 //
 // 本模块做三件事（全部在 renderer 侧，不碰系统默认、不加任何 runtime 硬拦截）：
 //   1) 自己掌握"从哪出声"：用 HTMLMediaElement.setSinkId() 把语音显式绑定到一个真实硬件设备。
@@ -20,8 +20,8 @@
 //   refreshOutputStatus()          -> 重新评估并按需显示/隐藏横幅
 //   isVirtualOutputLabel(label)
 
-const OUTPUT_DEVICE_KEY = 'bailongma-voice-output-device-id'; // '' = 自动；否则为具体 deviceId
-const BANNER_DISMISS_KEY = 'bailongma-voice-output-banner-dismissed'; // 用户主动忽略后本会话不再弹
+const OUTPUT_DEVICE_KEY = 'jarvis-voice-output-device-id'; // '' = 自动；否则为具体 deviceId
+const BANNER_DISMISS_KEY = 'jarvis-voice-output-banner-dismissed'; // 用户主动忽略后本会话不再弹
 
 // 虚拟 / 串流 / 回环声卡关键字黑名单（小写匹配）。命中即视为"不能直接出声给用户"的设备。
 // 关键字而非精确名 → 通用覆盖各家产品和本地化名称。
@@ -169,7 +169,7 @@ export async function applyOutputSink(audioEl) {
 }
 
 // 对一个 AudioContext 应用 sink。
-// 关键：白龙马 TTS 只要 AudioContext 在运行，就会经 createMediaElementSource 走 Web Audio，
+// 关键：Jarvis TTS 只要 AudioContext 在运行，就会经 createMediaElementSource 走 Web Audio，
 // 此时声音从 ctx 的目的地输出，<audio> 元素上的 setSinkId 会被绕过。
 // 因此 Web Audio 这条主路径必须把 sink 设在 AudioContext 上（Chromium 110+ 支持 ctx.setSinkId）。
 let registeredCtx = null;

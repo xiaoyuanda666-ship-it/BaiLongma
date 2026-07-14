@@ -11,8 +11,8 @@ function parseArgs(argv) {
     turns: DEFAULT_TURNS,
     timeoutMs: 180000,
     start: '',
-    localName: '本机白龙马',
-    peerName: '远端白龙马',
+    localName: '本机Jarvis',
+    peerName: '远端Jarvis',
     token: '',
   }
 
@@ -156,16 +156,16 @@ function createEventClient(base, label, token) {
 
 function buildIntro(args) {
   return args.start || [
-    '你正在通过局域网和另一只白龙马进行一次受控对话。',
+    '你正在通过局域网和另一只Jarvis进行一次受控对话。',
     `对方地址是 ${args.peer}。`,
-    '请用一小段话向对方打招呼，介绍你是谁，并问一个适合两只白龙马互相认识的问题。',
+    '请用一小段话向对方打招呼，介绍你是谁，并问一个适合两只Jarvis互相认识的问题。',
     '每次回复保持简短，不要调用工具，不要给用户发送额外消息。',
   ].join('\n')
 }
 
 function formatPeerMessage(fromName, text) {
   return [
-    `[来自 ${fromName} 的白龙马消息]`,
+    `[来自 ${fromName} 的Jarvis消息]`,
     text,
     '',
     '请只回复对方，不要向用户解释桥接过程。回复保持简短。',

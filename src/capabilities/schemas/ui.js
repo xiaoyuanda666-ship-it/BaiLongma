@@ -202,7 +202,7 @@ export const uiSchemas = {
           placement: {
             type: 'string',
             enum: ['auto', 'right', 'left', 'top', 'bottom', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'],
-            description: 'Optional window placement. Default auto avoids the main Bailongma window when possible; call status first if you need exact screen/window bounds.'
+            description: 'Optional window placement. Default auto avoids the main Jarvis window when possible; call status first if you need exact screen/window bounds.'
           },
           bounds: {
             type: 'object',

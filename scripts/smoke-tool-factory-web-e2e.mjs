@@ -9,8 +9,8 @@ const repoRoot = process.cwd()
 const tempUserDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-tool-factory-web-'))
 const TOOL_NAME = 'readable_web_fetch'
 
-process.env.BAILONGMA_USER_DIR = tempUserDir
-process.env.BAILONGMA_RESOURCES_DIR = repoRoot
+process.env.JARVIS_USER_DIR = tempUserDir
+process.env.JARVIS_RESOURCES_DIR = repoRoot
 process.env.ELECTRON_RUN_AS_NODE = '1'
 
 function assert(condition, label, detail = '') {
@@ -39,8 +39,8 @@ function runIsolatedNode(script, extraEnv = {}) {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
-      BAILONGMA_USER_DIR: tempUserDir,
-      BAILONGMA_RESOURCES_DIR: repoRoot,
+      JARVIS_USER_DIR: tempUserDir,
+      JARVIS_RESOURCES_DIR: repoRoot,
       ...extraEnv,
     },
     encoding: 'utf-8',

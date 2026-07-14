@@ -91,7 +91,7 @@ const seedanceFile = path.join(dir, 'seedance.json')
 fs.writeFileSync(configFile, JSON.stringify(obj, null, 2), 'utf-8')
 
 const clearedEnv = clearInterferingEnv()
-process.env.BAILONGMA_USER_DIR = dir
+process.env.JARVIS_USER_DIR = dir
 
 console.log(`输入来源 : ${src}`)
 console.log(`隔离目录 : ${dir}`)

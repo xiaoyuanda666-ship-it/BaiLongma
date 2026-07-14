@@ -36,7 +36,7 @@ export const agentsSchemas = {
     type: 'function',
     function: {
       name: 'grant_agent_delegation',
-      description: '记录用户对 Agent 委托权限的决定。当用户明确表示同意或拒绝让 Bailongma 指挥其他 AI 小伙伴工作时调用此工具落盘。只调用一次，之后不再重复询问。',
+      description: '记录用户对 Agent 委托权限的决定。当用户明确表示同意或拒绝让 Jarvis 指挥其他 AI 小伙伴工作时调用此工具落盘。只调用一次，之后不再重复询问。',
       parameters: {
         type: 'object',
         properties: {

@@ -160,7 +160,7 @@ async function streamWriteDemoFile(id) {
   noteAction('演示流式文本写入', DEMO_FILE_PATH)
   const { resolved } = resolveSandboxFile(DEMO_FILE_PATH)
   const article = [
-    '白龙马像一个住在电脑里的行动伙伴。它不仅能回答问题，也能把能力投到屏幕上：查询天气时变成卡片，写文件时把文字一段段落到磁盘，运行命令时打开真实窗口，让过程被看见。它还能展开热点面板，替你整理当天值得关注的信息。无论是记录灵感、检查环境、生成内容，还是把复杂任务拆成一步步行动，它都应该让你看得见、听得懂、能掌控。好的助手不只是会说，更要能把事情做出来，并让你清楚地看到每一步。',
+    'Jarvis像一个住在电脑里的行动伙伴。它不仅能回答问题，也能把能力投到屏幕上：查询天气时变成卡片，写文件时把文字一段段落到磁盘，运行命令时打开真实窗口，让过程被看见。它还能展开热点面板，替你整理当天值得关注的信息。无论是记录灵感、检查环境、生成内容，还是把复杂任务拆成一步步行动，它都应该让你看得见、听得懂、能掌控。好的助手不只是会说，更要能把事情做出来，并让你清楚地看到每一步。',
     '',
     `生成时间：${nowTimestamp()}`,
   ].join('\n')
@@ -201,7 +201,7 @@ function chunkText(text = '', size = 20) {
   return chunks
 }
 
-function writeCmdDemoScript(windowTitle = 'Bailongma Capability Demo') {
+function writeCmdDemoScript(windowTitle = 'Jarvis Capability Demo') {
   const { resolved } = resolveSandboxFile(CMD_SCRIPT_PATH)
   const safeTitle = sanitizeCmdTitle(windowTitle)
   const randomLine = Array(20).fill('%random%').join('')
@@ -219,10 +219,10 @@ function writeCmdDemoScript(windowTitle = 'Bailongma Capability Demo') {
 }
 
 function sanitizeCmdTitle(title = '') {
-  return String(title || 'Bailongma Capability Demo')
+  return String(title || 'Jarvis Capability Demo')
     .replace(/[&|<>^"]/g, '')
     .slice(0, 96)
-    .trim() || 'Bailongma Capability Demo'
+    .trim() || 'Jarvis Capability Demo'
 }
 
 function quoteCmdPath(value = '') {
@@ -270,7 +270,7 @@ function openRealCmdWindow() {
     return null
   }
   closeCmdWindow()
-  const windowTitle = sanitizeCmdTitle(`Bailongma Capability Demo ${Date.now()}`)
+  const windowTitle = sanitizeCmdTitle(`Jarvis Capability Demo ${Date.now()}`)
   const scriptPath = writeCmdDemoScript(windowTitle)
   activeCmdWindowTitle = windowTitle
   const comspec = process.env.ComSpec || 'cmd.exe'

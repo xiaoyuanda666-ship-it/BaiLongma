@@ -4,7 +4,7 @@
 // 前提：node 的 better-sqlite3 ABI 与本机匹配（用 electron 内置 node 跑则需要 electron）
 // 本地若 ABI 不匹配会在 import db.js 阶段抛错，本测试整体跳过（见末尾 catch）。
 //
-// 隔离策略：把 BAILONGMA_USER_DIR 指向临时目录，db.js 走 paths.dbFile = <USER_DIR>/data/jarvis.db。
+// 隔离策略：把 JARVIS_USER_DIR 指向临时目录，db.js 走 paths.dbFile = <USER_DIR>/data/jarvis.db。
 // 不动真实 DB。
 
 import { tmpdir } from 'node:os'
@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { mkdtempSync, rmSync } from 'node:fs'
 
 const tmp = mkdtempSync(join(tmpdir(), 'blm-noise-eviction-'))
-process.env.BAILONGMA_USER_DIR = tmp
+process.env.JARVIS_USER_DIR = tmp
 
 function assert(cond, msg) {
   if (!cond) {

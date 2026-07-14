@@ -3,7 +3,7 @@
 import fs from 'fs'
 import path from 'path'
 
-const CONFIG = path.join(process.env.APPDATA, 'Bailongma', 'config.json')
+const CONFIG = path.join(process.env.APPDATA, 'Jarvis', 'config.json')
 const seed = JSON.parse(fs.readFileSync(CONFIG, 'utf-8')).seedance || {}
 const apiKey = String(seed.apiKey || '').trim()
 const model = String(seed.model || '').trim() || 'doubao-seedance-2-0-260128'

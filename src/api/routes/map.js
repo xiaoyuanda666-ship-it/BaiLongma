@@ -47,7 +47,7 @@ export async function handleMapRoutes(req, res, url, { requireLocalOrToken } = {
     }
 
     const upstream = await fetch(target, {
-      headers: { 'User-Agent': 'Bailongma/2.0 map-service' },
+      headers: { 'User-Agent': 'Jarvis/2.0 map-service' },
       signal: AbortSignal.timeout(12_000),
     })
     copyProxyHeaders(upstream, res)

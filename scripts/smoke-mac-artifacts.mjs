@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 import pkg from '../package.json' with { type: 'json' }
 
 const root = path.resolve(import.meta.dirname, '..')
-const productName = pkg.productName || 'Bailongma'
+const productName = pkg.productName || 'Jarvis'
 const version = pkg.version
 
 const targets = [
@@ -49,7 +49,7 @@ function assertSingleArch(filePath, expectedArch, label) {
 }
 
 function mountDmg(dmgPath) {
-  const mountPoint = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-dmg-'))
+  const mountPoint = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-dmg-'))
   run('hdiutil', ['attach', '-readonly', '-nobrowse', '-mountpoint', mountPoint, dmgPath])
   return mountPoint
 }

@@ -1,7 +1,7 @@
 // 升级容错：旧 config.json 的 LLM 块不可用时，不能连带把 security / temperature 等
 // 兄弟字段一起重置（升级后最常见的"配置全没了"根因）。
 //
-// 隔离策略：把 BAILONGMA_USER_DIR 指向临时目录，paths.configFile 随之落在临时目录里。
+// 隔离策略：把 JARVIS_USER_DIR 指向临时目录，paths.configFile 随之落在临时目录里。
 // 每个场景重写同一个 config.json，再用带版本号的 URL 重新 import config.js（绕过模块缓存，
 // 让顶层加载逻辑对新文件重跑一遍；paths.js 已缓存，configFile 路径保持不变）。
 //
@@ -12,7 +12,7 @@ import os from 'os'
 import path from 'path'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-config-'))
-process.env.BAILONGMA_USER_DIR = tmp
+process.env.JARVIS_USER_DIR = tmp
 
 // 清掉可能存在的 LLM 环境变量，否则 LLM 块不可用时会走 env 兜底而误判为已激活
 for (const k of [

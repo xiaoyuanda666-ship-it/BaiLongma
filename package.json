@@ -1,12 +1,12 @@
 {
-  "name": "bailongma",
-  "productName": "Bailongma",
+  "name": "jarvis",
+  "productName": "Jarvis",
   "version": "2.1.515",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
   "author": {
-    "name": "xiaoyuanda666-ship-it"
+    "name": "richardiitse"
   },
   "scripts": {
     "start": "chcp 65001 >nul && electron .",
@@ -66,8 +66,8 @@
     "playwright": "^1.59.1"
   },
   "build": {
-    "appId": "com.xiaoyuanda.bailongma",
-    "productName": "Bailongma",
+    "appId": "com.richardiitse.jarvis",
+    "productName": "Jarvis",
     "artifactName": "${productName}-Setup-${version}.${ext}",
     "npmRebuild": false,
     "asar": {
@@ -145,7 +145,7 @@
       "uninstallerSidebar": "build/uninstallerSidebar.bmp",
       "createDesktopShortcut": false,
       "createStartMenuShortcut": false,
-      "shortcutName": "Bailongma"
+      "shortcutName": "Jarvis"
     },
     "mac": {
       "icon": "build/icon.icns",
@@ -160,16 +160,16 @@
       ],
       "category": "public.app-category.productivity",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Bailongma uses the microphone for voice input when you enable voice features.",
-        "NSSpeechRecognitionUsageDescription": "Bailongma may use speech recognition for voice input features."
+        "NSMicrophoneUsageDescription": "Jarvis uses the microphone for voice input when you enable voice features.",
+        "NSSpeechRecognitionUsageDescription": "Jarvis may use speech recognition for voice input features."
       },
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },
     "publish": [
       {
         "provider": "github",
-        "owner": "xiaoyuanda666-ship-it",
-        "repo": "BaiLongma",
+        "owner": "richardiitse",
+        "repo": "Jarvis",
         "releaseType": "release"
       }
     ]

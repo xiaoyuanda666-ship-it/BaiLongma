@@ -243,7 +243,7 @@ const baseUrl = `http://127.0.0.1:${port}`
 const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } })
 await page.addInitScript(() => {
-  localStorage.setItem('bailongma-memory-graph-enabled', 'true')
+  localStorage.setItem('jarvis-memory-graph-enabled', 'true')
 })
 const errors = []
 page.on('pageerror', err => errors.push(err.message))

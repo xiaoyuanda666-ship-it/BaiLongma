@@ -53,8 +53,8 @@ const results = []
 results.push(await tryRequest('Authorization Bearer', { Authorization: `Bearer ${apiKey}` }))
 results.push(await tryRequest('api-key header',       { 'api-key': apiKey }))
 
-// 顺便用 OpenAI SDK 走一遍(模拟 bailongma 实际调用路径)
-console.log('\n── [OpenAI SDK] 模拟 bailongma 调用')
+// 顺便用 OpenAI SDK 走一遍(模拟 jarvis 实际调用路径)
+console.log('\n── [OpenAI SDK] 模拟 jarvis 调用')
 try {
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({ apiKey, baseURL: BASE, timeout: 12000 })

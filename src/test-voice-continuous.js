@@ -3,7 +3,7 @@ import { createContinuousPolicy } from './ui/brain-ui/voice-continuous.js'
 
 globalThis.localStorage = {
   getItem(key) {
-    if (key === 'bailongma-voice-silence-ms') return '800'
+    if (key === 'jarvis-voice-silence-ms') return '800'
     return null
   },
 }
@@ -55,7 +55,7 @@ function createCore() {
   policy.onTranscript()
 
   await wait(500)
-  harness.core.setText('你好，白龙马')
+  harness.core.setText('你好，Jarvis')
   policy.onTranscript()
 
   await wait(450)

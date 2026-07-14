@@ -250,7 +250,7 @@ export function formatSkillsForContext(selection) {
     parts.push(`<agent-skills-catalog root="${normalizeSlash(paths.skillsDir)}" sandbox_root="${normalizeSlash(paths.sandboxSkillsDir)}">
 Installed Agent Skills:
 ${lines.length ? lines.join('\n') : '- No Agent Skills installed yet.'}
-To add one from inside Bailongma, create a folder under sandbox_root with a SKILL.md containing YAML frontmatter name and description. Skills under root are also supported for externally installed packages.
+To add one from inside Jarvis, create a folder under sandbox_root with a SKILL.md containing YAML frontmatter name and description. Skills under root are also supported for externally installed packages.
 </agent-skills-catalog>`)
   }
 

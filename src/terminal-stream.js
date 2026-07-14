@@ -2,7 +2,7 @@ import { emitEvent } from './events.js'
 
 const MAX_CHUNKS = 800
 const MAX_TOTAL_CHARS = 120_000
-const DEFAULT_TITLE = 'Bailongma Terminal Stream'
+const DEFAULT_TITLE = 'Jarvis Terminal Stream'
 const sessions = new Map()
 
 function nowIso() {
@@ -81,7 +81,7 @@ export function getTerminalStreamSnapshot(streamId = 'default') {
 
 function readDesktopLayoutSnapshot() {
   try {
-    const reader = globalThis?.getBailongmaWindowLayoutSnapshot
+    const reader = globalThis?.getJarvisWindowLayoutSnapshot
     return typeof reader === 'function' ? reader() : null
   } catch {
     return null

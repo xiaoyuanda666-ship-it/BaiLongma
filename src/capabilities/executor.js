@@ -61,7 +61,7 @@ function inferFileWritePreviewOutcome(result = '') {
 
 function getDesktopWindowLayoutSnapshot() {
   try {
-    const reader = globalThis?.getBailongmaWindowLayoutSnapshot
+    const reader = globalThis?.getJarvisWindowLayoutSnapshot
     return typeof reader === 'function' ? reader() : null
   } catch {
     return null
@@ -944,7 +944,7 @@ function execTerminalStream({
   action = 'write',
   text = '',
   stream_id = 'default',
-  title = 'Bailongma Terminal Stream',
+  title = 'Jarvis Terminal Stream',
   newline = true,
   level = 'info',
   format = '',
@@ -963,7 +963,7 @@ function execTerminalStream({
 
   const bridge = global.terminalStreamBridge
   const streamId = String(stream_id || 'default').trim() || 'default'
-  const cleanTitle = String(title || 'Bailongma Terminal Stream').trim() || 'Bailongma Terminal Stream'
+  const cleanTitle = String(title || 'Jarvis Terminal Stream').trim() || 'Jarvis Terminal Stream'
   const normalizedHoldOpen = normalizeOptionalBoolean(hold_open)
   const forceClose = normalizeOptionalBoolean(force) === true
 
@@ -1227,7 +1227,7 @@ function execGrantAgentDelegation({ allowed, note = '' }) {
     return toolJson({ ok: false, error: e.message })
   }
   const msg = allowed
-    ? `已记录授权：Bailongma 可以指挥本地 AI 小伙伴工作。`
+    ? `已记录授权：Jarvis 可以指挥本地 AI 小伙伴工作。`
     : `已记录：用户暂不授权 Agent 委托功能。`
   return toolJson({ ok: true, allowed: !!allowed, note: String(note || ''), message: msg })
 }

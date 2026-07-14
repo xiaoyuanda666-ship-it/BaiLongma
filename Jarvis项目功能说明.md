@@ -1077,14 +1077,14 @@ WebSocket：
 
 ### 19.3 便携模式
 
-打包后如果检测到 `portable.flag` 或设置 `BAILONGMA_PORTABLE_DIR`，可以将用户数据目录切到便携目录，方便 U 盘或独立目录运行。
+打包后如果检测到 `portable.flag` 或设置 `JARVIS_PORTABLE_DIR`，可以将用户数据目录切到便携目录，方便 U 盘或独立目录运行。
 
 ### 19.4 日志落盘
 
 桌面主进程会把 console 日志写入用户目录下的日志文件：
 
-- `logs/bailongma.log`
-- 超过 5MB 时轮转为 `bailongma.old.log`
+- `logs/jarvis.log`
+- 超过 5MB 时轮转为 `jarvis.old.log`
 
 这对安装版排查启动失败和运行卡死很重要。
 
@@ -1106,7 +1106,7 @@ WebSocket：
 
 ### 20.3 API Token
 
-可以设置 `BAILONGMA_API_TOKEN`。远程请求可通过 Bearer token 或 query token 访问受保护接口。
+可以设置 `JARVIS_API_TOKEN`。远程请求可通过 Bearer token 或 query token 访问受保护接口。
 
 ### 20.4 敏感路径保护
 

@@ -1,7 +1,7 @@
 // voice-panel.js —— 语音面板编排层
 //
 // 组装共享会话引擎（voice-core）+ 两个模式策略（常开 voice-continuous / 按住空格 voice-ptt），
-// 暴露 initVoicePanel + window.bailongmaVoice（承重墙：app.js 的 TTS 打断与视频/音乐联动依赖它）。
+// 暴露 initVoicePanel + window.jarvisVoice（承重墙：app.js 的 TTS 打断与视频/音乐联动依赖它）。
 //
 // 解耦结构：
 //   voice-core.js       共享机制——点云渲染 + 麦克风采集 + ASR 传输/转录 + 会话生命周期
@@ -68,8 +68,8 @@ export function initVoicePanel({
     btn?.classList.toggle('active', core.micActive || core.userWantedMic);
   });
 
-  // ─── 承重墙：window.bailongmaVoice 接口契约（app.js 依赖，不可改形状） ───
-  window.bailongmaVoice = {
+  // ─── 承重墙：window.jarvisVoice 接口契约（app.js 依赖，不可改形状） ───
+  window.jarvisVoice = {
     isActive: () => core.micActive,
     // 视频/音乐模式：完全停止 mic（不需要打断能力）
     suspendForMedia: () => core.suspendForMedia(),
@@ -86,19 +86,19 @@ export function initVoicePanel({
     pttEnd: ptt.pttEnd,
   };
 
-  window.addEventListener('bailongma:video-mode', (event) => {
+  window.addEventListener('jarvis:video-mode', (event) => {
     if (event.detail?.active) {
-      window.bailongmaVoice.suspendForMedia();
+      window.jarvisVoice.suspendForMedia();
     } else {
-      window.bailongmaVoice.resumeAfterMedia();
+      window.jarvisVoice.resumeAfterMedia();
     }
   });
 
-  window.addEventListener('bailongma:music-mode', (event) => {
+  window.addEventListener('jarvis:music-mode', (event) => {
     if (event.detail?.active) {
-      window.bailongmaVoice.suspendForMedia();
+      window.jarvisVoice.suspendForMedia();
     } else {
-      window.bailongmaVoice.resumeAfterMedia();
+      window.jarvisVoice.resumeAfterMedia();
     }
   });
 

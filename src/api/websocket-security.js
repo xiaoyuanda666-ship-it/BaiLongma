@@ -1,8 +1,8 @@
 import crypto from 'crypto'
 import net from 'net'
 
-export const WS_TOKEN_PROTOCOL_PREFIX = 'bailongma.auth.'
-export const WS_PUBLIC_PROTOCOL = 'bailongma.v1'
+export const WS_TOKEN_PROTOCOL_PREFIX = 'jarvis.auth.'
+export const WS_PUBLIC_PROTOCOL = 'jarvis.v1'
 
 export function normalizeRemoteAddress(address = '') {
   let value = String(address || '').trim().toLowerCase()

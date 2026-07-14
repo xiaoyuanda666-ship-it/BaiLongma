@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron')
 
-contextBridge.exposeInMainWorld('bailongma', {
+contextBridge.exposeInMainWorld('jarvis', {
   platform: process.platform,
   isElectron: true,
   getVersion: () => ipcRenderer.invoke('app:get-version'),

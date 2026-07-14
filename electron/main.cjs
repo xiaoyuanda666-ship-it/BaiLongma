@@ -27,11 +27,11 @@ const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
 
 const IS_DEV = !app.isPackaged
-const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
+const WINDOWS_APP_USER_MODEL_ID = 'com.richardiitse.jarvis'
 
 function resolvePortableRoot() {
   if (IS_DEV) return null
-  const requestedRoot = process.env.BAILONGMA_PORTABLE_DIR?.trim()
+  const requestedRoot = process.env.JARVIS_PORTABLE_DIR?.trim()
   if (requestedRoot) return path.resolve(requestedRoot)
   const exeDir = path.dirname(process.execPath)
   return fs.existsSync(path.join(exeDir, 'portable.flag')) ? exeDir : null
@@ -43,7 +43,7 @@ const IS_PORTABLE = Boolean(PORTABLE_USER_DIR)
 if (PORTABLE_USER_DIR) {
   try { fs.mkdirSync(PORTABLE_USER_DIR, { recursive: true }) } catch {}
   app.setPath('userData', PORTABLE_USER_DIR)
-  process.env.BAILONGMA_USER_DIR ||= PORTABLE_USER_DIR
+  process.env.JARVIS_USER_DIR ||= PORTABLE_USER_DIR
 }
 
 const USER_DIR = app.getPath('userData')
@@ -54,7 +54,7 @@ const STARTUP_PAGE = path.join(__dirname, 'startup.html')
 
 const STARTUP_STEPS = [
   { id: 'port', label: '准备本地端口', detail: '锁定 3721 或备用端口' },
-  { id: 'core', label: '启动本地核心', detail: '加载 Bailongma runtime' },
+  { id: 'core', label: '启动本地核心', detail: '加载 Jarvis runtime' },
   { id: 'resources', label: '准备工作区', detail: '复制沙箱与音乐资源' },
   { id: 'tools', label: '加载工具槽', detail: '恢复已安装能力' },
   { id: 'api', label: '启动本地 API', detail: 'HTTP / SSE / WebSocket' },
@@ -67,7 +67,7 @@ const startupProgressState = {
   failed: false,
   percent: 0,
   activeStepId: null,
-  message: '正在打开 Bailongma',
+  message: '正在打开 Jarvis',
   steps: STARTUP_STEPS.map(step => ({ ...step, status: 'pending', startedAt: null, endedAt: null })),
 }
 
@@ -126,7 +126,7 @@ function emitStartupProgress(update = {}) {
   return cloneStartupProgressState()
 }
 
-global.bailongmaStartupProgress = emitStartupProgress
+global.jarvisStartupProgress = emitStartupProgress
 
 function getAppIconPath({ trayIcon = false } = {}) {
   if (IS_WIN) return path.join(RESOURCE_ROOT, 'build', 'icon.ico')
@@ -228,12 +228,12 @@ function fileImageToDataUrl(filePath) {
   return `data:${imageMimeForPath(filePath)};base64,${bytes.toString('base64')}`
 }
 
-// 持久化日志：把 console.* 镜像到 USER_DIR/logs/bailongma.log，
+// 持久化日志：把 console.* 镜像到 USER_DIR/logs/jarvis.log，
 // 安装版没有 stdout 的情况下，卡死/崩溃后还能 tail 这个文件复盘。
 // 简易 rotate：> 5MB 时把当前文件改名 .old（覆盖上一份 .old），下次写入重开。
 const LOG_DIR = path.join(USER_DIR, 'logs')
-const LOG_FILE = path.join(LOG_DIR, 'bailongma.log')
-const LOG_FILE_OLD = path.join(LOG_DIR, 'bailongma.old.log')
+const LOG_FILE = path.join(LOG_DIR, 'jarvis.log')
+const LOG_FILE_OLD = path.join(LOG_DIR, 'jarvis.old.log')
 const LOG_MAX_BYTES = 5 * 1024 * 1024
 try { fs.mkdirSync(LOG_DIR, { recursive: true }) } catch {}
 function rotateLogIfNeeded() {
@@ -279,7 +279,7 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err?.stack || err?.message || String(err))
 })
-console.log(`[main] Bailongma ${app.getVersion()} starting, logs → ${LOG_FILE}`)
+console.log(`[main] Jarvis ${app.getVersion()} starting, logs → ${LOG_FILE}`)
 
 // ── GPU 适配器偏好（Windows 多显卡：核显 + 独显笔记本） ──
 // Windows 的逐应用显卡偏好存在 HKCU\...\DirectX\UserGpuPreferences
@@ -332,8 +332,8 @@ const focusBannerBridge = new EventEmitter()
 global.focusBannerBridge = focusBannerBridge
 const terminalStreamBridge = new EventEmitter()
 global.terminalStreamBridge = terminalStreamBridge
-global.getBailongmaWindowLayoutSnapshot = getBailongmaWindowLayoutSnapshot
-global.bailongmaAppControl = {
+global.getJarvisWindowLayoutSnapshot = getJarvisWindowLayoutSnapshot
+global.jarvisAppControl = {
   restart() {
     console.log('[main] restart requested')
     app.isQuiting = true
@@ -397,14 +397,14 @@ function validatePackagedNativeModules() {
   }
 
   if (issues.length) {
-    throw new Error(`Packaged native module integrity check failed:\n${issues.join('\n')}\nPlease close Bailongma and reinstall it with the official installer.`)
+    throw new Error(`Packaged native module integrity check failed:\n${issues.join('\n')}\nPlease close Jarvis and reinstall it with the official installer.`)
   }
 }
 
 async function bootstrapBackend(port) {
-  process.env.BAILONGMA_USER_DIR ||= USER_DIR
-  process.env.BAILONGMA_RESOURCES_DIR ||= RESOURCE_ROOT
-  process.env.BAILONGMA_PORT = String(port)
+  process.env.JARVIS_USER_DIR ||= USER_DIR
+  process.env.JARVIS_RESOURCES_DIR ||= RESOURCE_ROOT
+  process.env.JARVIS_PORT = String(port)
   validatePackagedNativeModules()
   await import(pathToFileURL(BACKEND_ENTRY).href)
 }
@@ -486,7 +486,7 @@ async function createWindow({ loadStartup = true } = {}) {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: '#0b0b0e',
-    title: 'Bailongma',
+    title: 'Jarvis',
     icon: getAppIconPath(),
     webPreferences: {
       contextIsolation: true,
@@ -574,7 +574,7 @@ function setupTray() {
   const trayImage = nativeImage.createFromPath(getAppIconPath({ trayIcon: true }))
   if (IS_MAC) trayImage.setTemplateImage(true)
   tray = new Tray(trayImage)
-  tray.setToolTip('Bailongma')
+  tray.setToolTip('Jarvis')
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -702,7 +702,7 @@ focusBannerBridge.on('hide', () => {
 
 // ─── 语音唤醒:隐藏"耳朵"窗口 + 主进程 KWS ───
 // 隐藏窗口常开麦克风 → AudioWorklet 出 16kHz Float32 → IPC → 主进程 KeywordSpotter。
-// 第一步只检测+写日志(USER_DIR/logs/wake-word.log),命中"白龙马"不做其他动作。
+// 第一步只检测+写日志(USER_DIR/logs/wake-word.log),命中"Jarvis"不做其他动作。
 const TERMINAL_STREAM_DEFAULT_WIDTH = 560
 const TERMINAL_STREAM_DEFAULT_HEIGHT = 830
 const TERMINAL_STREAM_MIN_WIDTH = 420
@@ -812,7 +812,7 @@ function windowSnapshot(win) {
   }
 }
 
-function getBailongmaWindowLayoutSnapshot() {
+function getJarvisWindowLayoutSnapshot() {
   const { screen } = require('electron')
   const displays = screen.getAllDisplays().map(display => ({
     id: display.id,
@@ -1038,8 +1038,8 @@ function normalizeTerminalStreamId(value = 'default') {
 }
 
 function createTerminalStreamWindow(payload = {}) {
-  const { title = 'Bailongma Terminal Stream', stream_id = 'default' } = payload
-  const cleanTitle = String(title || 'Bailongma Terminal Stream').slice(0, 120)
+  const { title = 'Jarvis Terminal Stream', stream_id = 'default' } = payload
+  const cleanTitle = String(title || 'Jarvis Terminal Stream').slice(0, 120)
   const streamId = normalizeTerminalStreamId(stream_id)
   const url = `http://127.0.0.1:${backendPort}/terminal-stream?stream_id=${encodeURIComponent(streamId)}`
   const focusWindow = payload.focus !== false
@@ -1385,7 +1385,7 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.error(`[main] Backend startup failed on port ${backendPort || 'unknown'}`, err?.stack || err?.message || err)
     emitStartupProgress({ id: 'core', status: 'error', error: true, message: `启动失败: ${err.message}` })
-    dialog.showErrorBox('Startup failed', `Unable to start the Bailongma backend:\n${err.message}`)
+    dialog.showErrorBox('Startup failed', `Unable to start the Jarvis backend:\n${err.message}`)
     app.quit()
     return
   }
@@ -1393,9 +1393,9 @@ app.whenReady().then(async () => {
   try {
     await loadMainApp()
   } catch (err) {
-    console.error('[main] Failed to load Bailongma UI', err?.stack || err?.message || err)
+    console.error('[main] Failed to load Jarvis UI', err?.stack || err?.message || err)
     emitStartupProgress({ id: 'interface', status: 'error', error: true, message: `进入界面失败: ${err.message}` })
-    dialog.showErrorBox('Startup failed', `Unable to load the Bailongma interface:\n${err.message}`)
+    dialog.showErrorBox('Startup failed', `Unable to load the Jarvis interface:\n${err.message}`)
     app.quit()
     return
   }

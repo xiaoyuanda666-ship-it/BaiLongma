@@ -5,9 +5,9 @@ import path from 'node:path'
 import { once } from 'node:events'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-api-utf8-'))
-process.env.BAILONGMA_USER_DIR = tmp
-process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
-process.env.BAILONGMA_HOST = '127.0.0.1'
+process.env.JARVIS_USER_DIR = tmp
+process.env.JARVIS_RESOURCES_DIR = process.cwd()
+process.env.JARVIS_HOST = '127.0.0.1'
 
 let server = null
 let closeDBForTest = null
@@ -20,7 +20,7 @@ try {
 
   const address = server.address()
   const baseUrl = `http://127.0.0.1:${address.port}`
-  const expected = `utf8_api_probe_${Date.now()} 中文保真测试：你好，白龙马！`
+  const expected = `utf8_api_probe_${Date.now()} 中文保真测试：你好，Jarvis！`
   const body = JSON.stringify({
     from_id: 'ID:UTF8_API_TEST',
     channel: 'API_UTF8_TEST',

@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process'
 import { getGlobalDispatcher, ProxyAgent, setGlobalDispatcher } from 'undici'
 
 const LOCAL_NO_PROXY = 'localhost,127.0.0.1,::1'
-const DEBUG_NETWORK_PROXY = process.env.BAILONGMA_DEBUG_NETWORK === '1'
+const DEBUG_NETWORK_PROXY = process.env.JARVIS_DEBUG_NETWORK === '1'
 
 let configured = false
 let status = {

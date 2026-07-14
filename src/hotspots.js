@@ -7,7 +7,7 @@ import { nowTimestamp } from './time.js'
 const DEFAULT_REFRESH_MINUTES = 30
 const HOTSPOT_CONTEXT_TTL_MINUTES = 60
 const DEFAULT_TIMEOUT_MS = 10000
-const USER_AGENT = 'Bailongma/1.0 (+https://localhost)'
+const USER_AGENT = 'Jarvis/1.0 (+https://localhost)'
 const PUBLIC_HOTDATA_API_KEY = 'zIisgRZJLLXgqKCwBirNLegtNNRuL70eBsbHXPxEBWU='
 
 const PLATFORM_ORDER = ['douyin', 'xiaohongshu', 'wechat', 'weibo']

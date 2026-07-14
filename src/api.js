@@ -39,14 +39,14 @@ export { emitEvent }
 const DEFAULT_API_HOST = '127.0.0.1'
 
 function getApiHost() {
-  const envHost = String(globalThis.process?.env?.BAILONGMA_HOST || '').trim()
+  const envHost = String(globalThis.process?.env?.JARVIS_HOST || '').trim()
   if (envHost) return envHost
   return getNetworkConfig().allowLanAccess ? '0.0.0.0' : DEFAULT_API_HOST
 }
 
 function isLanAccessEnabled() {
   return getNetworkConfig().allowLanAccess
-    || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.BAILONGMA_ALLOW_LAN || '').trim())
+    || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.JARVIS_ALLOW_LAN || '').trim())
 }
 
 function isLoopbackRequest(req) {
@@ -79,7 +79,7 @@ function isAllowedOrigin(origin = '') {
 }
 
 function getAuthToken() {
-  return String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
+  return String(globalThis.process?.env?.JARVIS_API_TOKEN || '').trim()
 }
 
 function hasValidAuthToken(req, url) {

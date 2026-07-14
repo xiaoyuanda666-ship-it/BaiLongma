@@ -17,7 +17,7 @@ let statusMessage = ''
 //   打包模式 → 优先用 extraResources 中的 whisper_server.exe（无需 Python）
 //   开发模式 → 用 Python + whisper_server.py
 function resolveServer() {
-  const resourcesDir = process.env.BAILONGMA_RESOURCES_DIR
+  const resourcesDir = process.env.JARVIS_RESOURCES_DIR
   if (resourcesDir && resourcesDir.endsWith('.asar')) {
     // 打包后 extraResources 落在 app.asar 的上一级目录（resources/）
     const resourcesPath = path.dirname(resourcesDir)

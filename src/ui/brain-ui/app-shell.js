@@ -717,7 +717,7 @@ const createSettingsModal = () => `
           </div>
           <div class="settings-section">
             <div class="settings-section-label">局域网访问</div>
-            <p class="settings-hint">允许同一局域网内的设备访问本机白龙马 API，用于多台白龙马互相通信。开启或关闭后需要重启应用生效。</p>
+            <p class="settings-hint">允许同一局域网内的设备访问本机Jarvis API，用于多台Jarvis互相通信。开启或关闭后需要重启应用生效。</p>
             <div class="settings-row">
               <label class="settings-label" for="security-lan-access">允许局域网访问</label>
               <label class="settings-toggle">

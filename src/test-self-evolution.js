@@ -15,7 +15,7 @@ function assert(cond, label) {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tempUserDir = fs.mkdtempSync(path.join(repoRoot, 'sandbox', 'self-evolution-test-'))
-process.env.BAILONGMA_USER_DIR = tempUserDir
+process.env.JARVIS_USER_DIR = tempUserDir
 process.env.USERPROFILE = tempUserDir
 process.env.HOME = tempUserDir
 

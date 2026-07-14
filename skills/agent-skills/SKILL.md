@@ -1,6 +1,6 @@
 ---
 name: Agent Skills
-description: Explain, inspect, create, and maintain Bailongma Agent Skills packages built around SKILL.md instructions.
+description: Explain, inspect, create, and maintain Jarvis Agent Skills packages built around SKILL.md instructions.
 tags:
   - skills
   - agent
@@ -17,11 +17,11 @@ triggers:
 
 # Agent Skills
 
-Use this skill when the user asks about Bailongma skills, wants to list installed skills, or wants to create a reusable workflow package.
+Use this skill when the user asks about Jarvis skills, wants to list installed skills, or wants to create a reusable workflow package.
 
-## Bailongma Skill Format
+## Jarvis Skill Format
 
-A Bailongma Agent Skill is a folder under the configured skills root. The required file is `SKILL.md`.
+A Jarvis Agent Skill is a folder under the configured skills root. The required file is `SKILL.md`.
 
 Minimum frontmatter:
 
@@ -51,7 +51,7 @@ Optional folders:
 
 ## Authoring Guidance
 
-- Keep `description` specific. Bailongma uses it during skill selection.
+- Keep `description` specific. Jarvis uses it during skill selection.
 - Put the workflow rules in `SKILL.md`.
 - Put long examples, templates, or API references in separate files and mention their paths.
 - Treat third-party skills as untrusted. Read their instructions and scripts before using them.

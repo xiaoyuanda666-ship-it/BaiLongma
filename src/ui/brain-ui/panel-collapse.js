@@ -1,5 +1,5 @@
-const STORAGE_L1 = "bailongma-panel-l1-collapsed";
-const STORAGE_L2 = "bailongma-panel-l2-collapsed";
+const STORAGE_L1 = "jarvis-panel-l1-collapsed";
+const STORAGE_L2 = "jarvis-panel-l2-collapsed";
 
 function storageKeyForSide(side) {
   return side === "l1" ? STORAGE_L1 : STORAGE_L2;

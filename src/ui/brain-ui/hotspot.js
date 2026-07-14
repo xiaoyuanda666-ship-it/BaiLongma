@@ -361,7 +361,7 @@ function setPanelVisible(visible, source = 'brain-ui') {
   const btn = document.getElementById('hotspot-btn');
   if (btn) btn.classList.toggle('active', visible);
 
-  window.dispatchEvent(new CustomEvent('bailongma:hotspot-mode', {
+  window.dispatchEvent(new CustomEvent('jarvis:hotspot-mode', {
     detail: { active: visible },
   }));
   reportHotspotState(visible, source);

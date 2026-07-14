@@ -85,7 +85,7 @@ async function handleFeishu(req, res) {
     return jsonResponse(res, 200, { challenge: body.challenge })
   }
 
-  if (body.encrypt) return jsonResponse(res, 400, { ok: false, error: 'encrypted Feishu events are not enabled in Bailongma yet' })
+  if (body.encrypt) return jsonResponse(res, 400, { ok: false, error: 'encrypted Feishu events are not enabled in Jarvis yet' })
 
   if (providedToken !== expectedToken) {
     return jsonResponse(res, 403, { ok: false, error: 'invalid token' })

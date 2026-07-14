@@ -34,7 +34,7 @@ export function createContinuousPolicy(core, { getAutoSend }) {
   // 「攒成一条，说完再发」：只有转写文本停更足够久才发。底噪/呼吸/键盘声不刷新计时。
   // 延迟可经 localStorage 调，默认 2s（比一次思考停顿长，比一句话间隔长）。
   const SILENCE_SEND_MS = (() => {
-    const v = parseInt(localStorage.getItem('bailongma-voice-silence-ms') || '', 10);
+    const v = parseInt(localStorage.getItem('jarvis-voice-silence-ms') || '', 10);
     return Number.isFinite(v) && v >= 800 ? v : 2000;
   })();
   let autoSendTimer = null;

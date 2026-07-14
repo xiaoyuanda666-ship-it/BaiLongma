@@ -12,7 +12,7 @@ import { PRIMARY_USER_ID } from '../identity.js'
 const ROLE_RULES = [
   {
     label: 'AI agent / LLM product builder',
-    keywords: [/bailongma/i, /agent/i, /llm/i, /prompt/i, /context/i, /memory/i, /codex/i, /claude/i, /openai/i, /minimax/i],
+    keywords: [/jarvis/i, /agent/i, /llm/i, /prompt/i, /context/i, /memory/i, /codex/i, /claude/i, /openai/i, /minimax/i],
     apps: [/cursor/i, /claude/i, /codex/i, /chatgpt/i, /ollama/i, /lm studio/i],
     domains: ['AI agents', 'LLM context', 'memory systems'],
   },
@@ -122,7 +122,7 @@ function inferLabels(rules, text, limit = 4) {
 
 function inferProjects(text) {
   const projects = []
-  if (/bailongma/i.test(text) || /白龙马/.test(text)) projects.push('Bailongma')
+  if (/jarvis/i.test(text) || /Jarvis/.test(text)) projects.push('Jarvis')
   if (/agent/i.test(text) && /memory|context|prompt/i.test(text)) projects.push('agent memory/context system')
   if (/electron/i.test(text)) projects.push('Electron desktop app')
   return uniq(projects).slice(0, 5)

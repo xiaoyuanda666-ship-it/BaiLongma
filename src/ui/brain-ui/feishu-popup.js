@@ -106,7 +106,7 @@ function setStatus(status, extra = {}) {
   connectBtn.textContent = isBusy ? '连接中…' : '连接飞书';
 
   if (isConnected) {
-    hintEl.textContent = '飞书已连接，可以通过飞书向白龙马发送消息。';
+    hintEl.textContent = '飞书已连接，可以通过飞书向Jarvis发送消息。';
   } else if (status === 'error') {
     hintEl.textContent = extra.error ? `连接失败：${extra.error}` : '连接失败，请检查 App ID / Secret 后重试。';
   } else {
@@ -209,7 +209,7 @@ export function initFeishuPopup() {
   });
 
   // SSE 实时同步
-  window.addEventListener('bailongma:social_status', (e) => {
+  window.addEventListener('jarvis:social_status', (e) => {
     const d = e.detail;
     if (d?.platform !== 'feishu') return;
     if (d.status === 'connected') {

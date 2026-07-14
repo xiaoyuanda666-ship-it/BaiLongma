@@ -15,7 +15,7 @@ function assert(cond, label) {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tempUserDir = fs.mkdtempSync(path.join(repoRoot, 'sandbox', 'active-policy-test-'))
-process.env.BAILONGMA_USER_DIR = tempUserDir
+process.env.JARVIS_USER_DIR = tempUserDir
 process.env.USERPROFILE = tempUserDir
 process.env.HOME = tempUserDir
 
@@ -89,7 +89,7 @@ try {
     timestamp: ts,
   })
 
-  const screenshotMsg = '[ID:000099] 2026-06-11T01:00:00+08:00 [TUI] Please make the Bailongma window fullscreen with F11, then take a screenshot and send it.'
+  const screenshotMsg = '[ID:000099] 2026-06-11T01:00:00+08:00 [TUI] Please make the Jarvis window fullscreen with F11, then take a screenshot and send it.'
   const screenshotInjection = await runInjector({ message: screenshotMsg, state: {} })
   const screenshotIds = new Set((screenshotInjection.activePolicies || []).map(m => m.mem_id))
 

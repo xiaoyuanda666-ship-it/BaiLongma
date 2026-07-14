@@ -2,13 +2,13 @@
 // capability-registry.js —— 能力机制（Capability Mechanism）唯一真相源
 //
 // 背景 / 第一性原理：
-//   白龙马里「一个领域的能力」原本被切成 3~4 片，散在不同文件、靠重复的关键词表
+//   Jarvis里「一个领域的能力」原本被切成 3~4 片，散在不同文件、靠重复的关键词表
 //   手动同步：工具半在 tool-router.js（XXX_TRIGGERS + XXX_TOOLS），工作流半在
 //   prompt.js（XXX_BLOCK + shouldInjectXxx），数据预喂半在 runtime-injector.js
 //   （buildXxxRuntimeContext）。每改一个领域要同时动两三个文件、对齐两份关键词。
 //
 //   能力 = 一段工作流上下文（prompt 块）+ 配套工具 + 运行时数据预喂，由情境触发、
-//   打包一起注入，且白龙马能自我感知、按需主动激活。本模块把上述三半收敛成一个
+//   打包一起注入，且Jarvis能自我感知、按需主动激活。本模块把上述三半收敛成一个
 //   声明式单元，让每个能力的关键词、工具、工作流、数据只剩一处。
 //
 // 关键设计：保留「分面解耦」。现有架构故意让 tools / context / prefeed 各有自己的

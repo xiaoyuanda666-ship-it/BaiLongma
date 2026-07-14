@@ -86,7 +86,7 @@ export async function handleAdminRoutes(req, res, url, context = {}) {
   if (req.method === 'POST' && url.pathname === '/admin/restart') {
     jsonResponse(res, 200, { ok: true, message: 'Restarting...' })
     setTimeout(() => {
-      const restart = admin.restartApp || globalThis.bailongmaAppControl?.restart
+      const restart = admin.restartApp || globalThis.jarvisAppControl?.restart
       if (typeof restart === 'function') {
         restart()
         return

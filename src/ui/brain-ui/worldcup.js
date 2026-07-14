@@ -121,7 +121,7 @@ export function setWorldcupMode(visible, { source = 'brain-ui' } = {}) {
     else finishClose();
   }
 
-  window.dispatchEvent(new CustomEvent('bailongma:worldcup-mode', {
+  window.dispatchEvent(new CustomEvent('jarvis:worldcup-mode', {
     detail: { active: nextVisible },
   }));
   reportWorldcupState(nextVisible, source);
@@ -137,7 +137,7 @@ export async function initWorldcup() {
   initConsoleCollapse();
 
   // 热点面板打开时让位（事件解耦，避免 hotspot.js 反向 import 形成循环）
-  window.addEventListener('bailongma:hotspot-mode', (event) => {
+  window.addEventListener('jarvis:hotspot-mode', (event) => {
     if (event?.detail?.active && worldcupActive) setWorldcupMode(false, { source: 'hotspot_open' });
   });
 
@@ -149,13 +149,13 @@ export async function initWorldcup() {
     const { phase } = event.data;
     if (phase === 'down') {
       try { window.stopTTS?.(); } catch {}   // 与 app.js PTT 同语义：按下即打断播报
-      window.bailongmaVoice?.pttStart?.();
+      window.jarvisVoice?.pttStart?.();
       expandConsole();                        // 说话时展开看实时识别文字
     } else if (phase === 'up') {
-      window.bailongmaVoice?.pttEnd?.();
+      window.jarvisVoice?.pttEnd?.();
       scheduleConsoleCollapse(MESSAGE_PEEK_MS);
     } else if (phase === 'cancel') {
-      window.bailongmaVoice?.pttEnd?.({ send: false });
+      window.jarvisVoice?.pttEnd?.({ send: false });
       scheduleConsoleCollapse();
     }
   });

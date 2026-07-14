@@ -113,7 +113,7 @@ function emitTerminalEvent({
 }
 
 function autoCloseDelayMs() {
-  const override = Number(globalThis?.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS)
+  const override = Number(globalThis?.__JARVIS_WRITE_PREVIEW_AUTO_CLOSE_MS)
   return Number.isFinite(override) && override >= 0 ? override : AUTO_CLOSE_DELAY_MS
 }
 

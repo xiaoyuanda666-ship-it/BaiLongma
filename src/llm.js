@@ -727,7 +727,7 @@ function createToolLoopState() {
 
 // send_message/express 是 agent 向用户"汇报 blocker"的唯一通道，必须绕开跨工具的全局熔断计数。
 // 否则当 exec_command/fetch_url 等连续失败触发熔断后，agent 想 send_message 解释失败也会被一并挡掉，
-// 出现"工具调不动 + 嘴也被堵住"的死锁（lessons-bailongma-silent-exit 的镜像问题）。
+// 出现"工具调不动 + 嘴也被堵住"的死锁（lessons-jarvis-silent-exit 的镜像问题）。
 // 同指纹反复失败仍由 sameFailureCounts / recentFingerprints 拦截，安全网完好。
 const REPORT_CHANNEL_TOOLS = new Set(['send_message', 'express'])
 

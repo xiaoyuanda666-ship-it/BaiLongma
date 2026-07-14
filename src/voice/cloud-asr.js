@@ -286,7 +286,7 @@ function makeVolcFrame(messageType, flags, serialization, payload) {
 
 function makeVolcFullClientRequest() {
   const payload = Buffer.from(JSON.stringify({
-    user: { uid: 'bailongma' },
+    user: { uid: 'jarvis' },
     audio: {
       format: 'pcm',
       codec: 'raw',

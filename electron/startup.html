@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bailongma 正在启动</title>
+  <title>Jarvis 正在启动</title>
   <style>
     :root {
       color-scheme: dark;
@@ -296,7 +296,7 @@
       <div class="brand-row">
         <div class="mark">BL</div>
         <div class="brand">
-          <strong>Bailongma</strong>
+          <strong>Jarvis</strong>
           <span id="version">Desktop Agent</span>
         </div>
       </div>
@@ -323,7 +323,7 @@
   <script>
     const fallbackSteps = [
       ['port', '准备本地端口', '锁定 3721 或备用端口'],
-      ['core', '启动本地核心', '加载 Bailongma runtime'],
+      ['core', '启动本地核心', '加载 Jarvis runtime'],
       ['resources', '准备工作区', '复制沙箱与音乐资源'],
       ['tools', '加载工具槽', '恢复已安装能力'],
       ['api', '启动本地 API', 'HTTP / SSE / WebSocket'],
@@ -397,7 +397,7 @@
     render(latestState);
     setInterval(updateElapsed, 200);
 
-    const bridge = window.bailongma;
+    const bridge = window.jarvis;
     if (bridge) {
       bridge.getVersion?.().then((version) => {
         if (version) versionEl.textContent = `Desktop Agent ${version}`;
