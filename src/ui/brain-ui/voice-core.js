@@ -64,13 +64,13 @@ function lerpArr(a, b, t) { return a.map((v, i) => lerp(v, b[i], t)); }
 // ─── 状态配置 ───
 // idle = 麦克风关闭（灰色）  listening = 麦克风开启待命（白色）
 // recognizing = 正在识别（蓝色）  done = 识别完成（绿色，2s 后回 listening）
-// speaking = AI 正在说话（紫色，可打断）
+// processing = 模型正在思考（有波动的绿色微光）  speaking = AI 正在说话（紫色，可打断）
 const STATE_CFG = {
   idle:        { amp: 0.003, spd: 0.10, r: [50,68,80],    g: [50,68,80],    b: [55,73,85]   },
   listening:   { amp: 0.055, spd: 0.75, r: [185,215,245], g: [185,215,245], b: [195,225,255] },
   recognizing: { amp: 0.55,  spd: 4.50, r: [25,75,165],   g: [95,155,230],  b: [195,230,255] },
   done:        { amp: 0.10,  spd: 1.20, r: [30,105,65],   g: [145,200,135], b: [45,90,60]   },
-  processing:  { amp: 0.15,  spd: 1.10, r: [100,60,200],  g: [80,60,180],   b: [220,190,255] },
+  processing:  { amp: 0.26,  spd: 2.10, r: [18,45,88],    g: [92,185,255],  b: [52,112,154]  },
   error:       { amp: 0.10,  spd: 0.70, r: [200,240,255], g: [20,30,40],    b: [20,30,40]   },
   event:       { amp: 0.60,  spd: 4.00, r: [255,200,50],  g: [200,160,30],  b: [50,80,150]   },
   speaking:    { amp: 0.09,  spd: 1.00, r: [130,95,185],  g: [105,80,170],  b: [225,200,255] },
@@ -147,6 +147,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
   // ─── 渲染状态 ───
   let sk = 'idle';
+  let modelThinking = false;
   let animState = {
     amp: STATE_CFG.idle.amp, spd: STATE_CFG.idle.spd,
     col: [STATE_CFG.idle.r, STATE_CFG.idle.g, STATE_CFG.idle.b],
@@ -201,6 +202,15 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
   function setStatus(newSk) { sk = newSk; }
   const getStatus = () => sk;
+  function setThinking(active) {
+    modelThinking = Boolean(active);
+    if (modelThinking) {
+      // 模型思考是一个独立于麦克风的视觉状态；TTS 播放时仍优先展示 speaking。
+      if (sk !== 'speaking') setStatus('processing');
+    } else if (sk === 'processing') {
+      setStatus(micActive ? 'listening' : 'idle');
+    }
+  }
   // 注入外部音量（悬浮球窗口用）；传 null 取消注入，回到自带麦克风/TTS 音量逻辑。
   function setExternalVol(v) { externalVol = (v == null ? null : Number(v) || 0); }
 
@@ -209,7 +219,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     if (doneTimer) clearTimeout(doneTimer);
     doneTimer = setTimeout(() => {
       doneTimer = null;
-      if (sk === 'done') setStatus(micActive ? 'listening' : 'idle');
+      if (sk === 'done') setStatus(modelThinking ? 'processing' : (micActive ? 'listening' : 'idle'));
     }, 2000);
   }
 
@@ -221,7 +231,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     }
     ttsData = null;
     lastTTSVol = 0;
-    if (sk === 'speaking' && !suspendedByMedia) setStatus(micActive ? 'listening' : 'idle');
+    if (sk === 'speaking' && !suspendedByMedia) {
+      setStatus(modelThinking ? 'processing' : (micActive ? 'listening' : 'idle'));
+    }
   }
 
   function readTTSVol() {
@@ -278,6 +290,10 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       lastVol = 0;
     }
 
+    // 麦克风的静音/识别状态不应覆盖模型思考。这样无论消息来自键盘、语音还是心跳，
+    // 从请求进入模型到本段思考结束，点云球都会稳定保持绿色波动。
+    if (modelThinking && sk !== 'speaking') setStatus('processing');
+
     // ── 画面节流 ──
     const fps = targetDrawFps(ts);
     if (fps && ts - lastDrawTs < 1000 / fps) {
@@ -319,6 +335,20 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     s.rotX  = 0.22 + Math.sin(s.t * 0.15) * 0.06;
 
     ctx.clearRect(0, 0, W, H);
+
+    if (sk === 'processing') {
+      // 单层径向光晕比给 4400 个点逐个加 shadowBlur 更轻，也更接近“微微发光”。
+      const pulse = 0.82 + Math.sin(s.t * 1.35) * 0.08;
+      const halo = ctx.createRadialGradient(cx, cy, scale * 0.40, cx, cy, scale * 1.28);
+      halo.addColorStop(0, `rgba(68,255,154,${(0.075 * pulse).toFixed(3)})`);
+      halo.addColorStop(0.62, `rgba(44,214,124,${(0.055 * pulse).toFixed(3)})`);
+      halo.addColorStop(1, 'rgba(25,160,92,0)');
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = halo;
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
 
     const cY = Math.cos(s.rotY), sY = Math.sin(s.rotY);
     const cX = Math.cos(s.rotX), sX = Math.sin(s.rotX);
@@ -937,6 +967,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
     // 渲染 / 状态
     setStatus,
     getStatus,
+    setThinking,
     triggerDone,
     startRenderLoop,
     stopRenderLoop,

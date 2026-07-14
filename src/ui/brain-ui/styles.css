@@ -2183,7 +2183,7 @@ body {
   background: var(--panel);
   border: 0;
   border-radius: 0;
-  padding: 14px 0 10px;
+  padding: 0 0 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2191,14 +2191,60 @@ body {
   animation: scale-up 0.22s ease;
 }
 
+.voice-canvas-card {
+  width: 100%;
+  min-width: 0;
+  padding: 14px 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(132, 164, 190, 0.28);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 44%, rgba(114, 148, 170, 0.06), transparent 62%),
+    rgba(7, 16, 27, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 10px 28px rgba(0, 0, 0, 0.12);
+  transition: border-color 0.35s ease, box-shadow 0.35s ease, background 0.35s ease;
+}
+
+body.model-thinking .voice-canvas-card {
+  border-color: rgba(82, 226, 142, 0.48);
+  background:
+    radial-gradient(circle at 50% 46%, rgba(47, 214, 125, 0.085), transparent 64%),
+    rgba(6, 20, 22, 0.42);
+  animation: voice-card-thinking-glow 2.4s ease-in-out infinite;
+}
+
 #voice-canvas {
   display: block;
   width: min(220px, 78%);
   aspect-ratio: 1;
   height: auto;
-  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   cursor: pointer;
   image-rendering: auto;
+}
+
+@keyframes voice-card-thinking-glow {
+  0%, 100% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 0 14px rgba(52, 222, 126, 0.08),
+      0 10px 28px rgba(0, 0, 0, 0.12);
+  }
+  50% {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.055),
+      0 0 22px rgba(52, 222, 126, 0.16),
+      0 10px 30px rgba(0, 0, 0, 0.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.model-thinking .voice-canvas-card { animation: none; }
 }
 
 .voice-status {
@@ -3245,6 +3291,21 @@ body.hotspot-mode > #voice-panel #voice-canvas,
 body.video-mode   > #voice-panel #voice-canvas,
 body.aivideo-mode > #voice-panel #voice-canvas {
   width: 56px !important;
+  flex-shrink: 0;
+}
+
+body.hotspot-mode > #voice-panel .voice-canvas-card,
+body.video-mode   > #voice-panel .voice-canvas-card,
+body.aivideo-mode > #voice-panel .voice-canvas-card,
+body.worldcup-mode .console > #voice-panel .voice-canvas-card,
+body.typhoon-mode .console > #voice-panel .voice-canvas-card {
+  width: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
   flex-shrink: 0;
 }
 

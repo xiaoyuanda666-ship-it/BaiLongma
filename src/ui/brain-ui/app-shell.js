@@ -897,7 +897,9 @@ const createSettingsModal = () => `
 
 const createVoicePanel = () => `
 <div class="voice-panel" id="voice-panel">
-  <canvas id="voice-canvas" width="160" height="160"></canvas>
+  <div class="voice-canvas-card">
+    <canvas id="voice-canvas" width="160" height="160"></canvas>
+  </div>
   <div class="voice-transcript" id="voice-transcript"></div>
 </div>
 `;

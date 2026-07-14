@@ -71,6 +71,8 @@ export function initVoicePanel({
   // ─── 承重墙：window.bailongmaVoice 接口契约（app.js 依赖，不可改形状） ───
   window.bailongmaVoice = {
     isActive: () => core.micActive,
+    // app.js 的模型事件流驱动：键盘/语音/心跳入口共用同一个思考视觉状态。
+    setThinking: (active) => core.setThinking(active),
     // 视频/音乐模式：完全停止 mic（不需要打断能力）
     suspendForMedia: () => core.suspendForMedia(),
     // TTS 模式：只停云端 ASR WebSocket，保持 mic 硬件 + ScriptProcessor，开启打断预缓冲
@@ -112,6 +114,7 @@ export function initVoicePanel({
   canvas.addEventListener('click', toggleVoice);
 
   core.setStatus('idle');
+  core.setThinking(document.body.classList.contains('model-thinking'));
   openPanel();
   if (getAutoMic?.()) toggleVoice();
 }

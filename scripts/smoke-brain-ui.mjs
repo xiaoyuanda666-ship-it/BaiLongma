@@ -311,17 +311,40 @@ try {
   const settledHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
   if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without a real L2 Tick')
   server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() => document.body.classList.contains('model-thinking'))
+  const thinkingCanvasStyle = await page.locator('.voice-canvas-card').evaluate(element => {
+    const style = getComputedStyle(element)
+    const canvas = element.querySelector('#voice-canvas')
+    const frameRect = element.getBoundingClientRect()
+    const canvasRect = canvas.getBoundingClientRect()
+    return {
+      borderRadius: style.borderRadius,
+      borderColor: style.borderColor,
+      animationName: style.animationName,
+      frameWidth: frameRect.width,
+      canvasWidth: canvasRect.width,
+      canvasBorderWidth: getComputedStyle(canvas).borderWidth,
+    }
+  })
+  if (thinkingCanvasStyle.borderRadius !== '18px') throw new Error(`voice canvas card radius mismatch: ${thinkingCanvasStyle.borderRadius}`)
+  if (thinkingCanvasStyle.animationName !== 'voice-card-thinking-glow') throw new Error('voice canvas thinking glow is not active')
+  if (thinkingCanvasStyle.frameWidth <= thinkingCanvasStyle.canvasWidth) throw new Error('voice canvas card must sit outside the canvas')
+  if (thinkingCanvasStyle.canvasBorderWidth !== '0px') throw new Error('voice canvas must not own the card border')
   await page.waitForFunction(previousPath => (
     document.querySelector('#heartbeat-wave')?.getAttribute('d') !== previousPath
   ), idleHeartbeatPath)
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_preparing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() => !document.body.classList.contains('model-thinking'))
   server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: { path: 'src/example.js' }, result: 'smoke file', ok: true }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() => document.body.classList.contains('model-thinking'))
   server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
   await page.waitForFunction(() =>
     document.querySelector('#heartbeat-count')?.textContent === '1'
     && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
     && document.querySelector('#cognition-state')?.dataset.state === 'done'
+    && !document.body.classList.contains('model-thinking')
     && Boolean(document.querySelector('#heartbeat-wave')?.getAttribute('d')))
   await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
   server.emitSse({ type: 'message_received', data: { input: '请更新配置文件' }, ts: new Date().toISOString() })

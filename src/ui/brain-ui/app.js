@@ -1176,6 +1176,12 @@ function setCognitionState(label, state = "idle") {
   cognitionStateEl.dataset.state = state;
 }
 
+function setVoiceThinking(active) {
+  const thinking = Boolean(active);
+  document.body.classList.toggle("model-thinking", thinking);
+  window.bailongmaVoice?.setThinking?.(thinking);
+}
+
 function revealCognitionStream() {
   if (cognitionEmptyEl?.parentElement) cognitionEmptyEl.remove();
 }
@@ -1670,6 +1676,7 @@ function handle({ type, data = {}, ts = null }) {
         setCognitionState("已让路", "idle");
       }
       currentPath = "l1";
+      setVoiceThinking(true);
       // 兜底：上一轮若被打断、message/response 均未到达，实时气泡会成孤儿、流式会话可能还挂着麦克风
       // ——定稿气泡、收尾流式会话（恢复麦克风）、复位状态，再开新一轮。
       if (sttsActive) endStreamingTTS();
@@ -1690,6 +1697,7 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "tick":
       currentPath = "l2";
+      setVoiceThinking(true);
       revealCognitionStream();
       beginHeartbeatRound(Date.parse(ts) || Date.now());
       setCognitionState("正在思考", "thinking");
@@ -1698,6 +1706,7 @@ function handle({ type, data = {}, ts = null }) {
       L2.startThinkingSession();
       break;
     case "stream_start":
+      setVoiceThinking(true);
       if (currentPath === "l2") {
         revealCognitionStream();
         setCognitionState("正在思考", "thinking");
@@ -1728,11 +1737,13 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "stream_end":
       currentStream().stopThinking();
+      setVoiceThinking(false);
       if (currentPath === "l2" && activeHeartbeatRound) setCognitionState("判断下一步", "thinking");
       // 正文段结束：把残句先送去合成，降低尾句延迟（不结束会话，可能还有后续正文段）
       if (data.mode === "text" && sttsActive) flushStreamingTTSBuf();
       break;
     case "tool_preparing": {
+      setVoiceThinking(false);
       // 思考动画已停，但工具尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "";
@@ -1744,6 +1755,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "tool_executing": {
+      setVoiceThinking(false);
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "工具";
       if (currentPath === "l2") setCognitionState(`执行 · ${label}`, "tool");
@@ -1766,6 +1778,7 @@ function handle({ type, data = {}, ts = null }) {
     case "response":
       // Round complete — stop all animations
       currentStream().end();
+      setVoiceThinking(false);
       if (currentPath === "l2") {
         finishHeartbeatRound("complete");
         setCognitionState("本轮完成", "done");
@@ -1779,12 +1792,14 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "processing_preempted":
       currentStream().end();
+      setVoiceThinking(false);
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted");
         setCognitionState("已中止", "idle");
       }
       break;
     case "llm_retry": {
+      setVoiceThinking(true);
       currentStream().startThinkingSession();
       const nextAttempt = Number(data.nextAttempt || 2);
       const delayText = formatRetryDelay(Number(data.delayMs || 0));
@@ -1792,12 +1807,14 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "message_requeued": {
+      setVoiceThinking(true);
       currentStream().startThinkingSession();
       const retryCount = Number(data.retryCount || 1);
       currentStream().setStatus("LLM 繁忙，已入队重试 " + retryCount + "/3", "busy");
       break;
     }
     case "message_dropped":
+      setVoiceThinking(false);
       currentStream().startThinkingSession();
       currentStream().setStatus("LLM 繁忙，重试次数已达上限", "failed");
       if (currentPath === "l2") {
@@ -1807,9 +1824,11 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "error":
       if (isBusyErrorMessage(data.error)) {
+        setVoiceThinking(true);
         currentStream().startThinkingSession();
         currentStream().setStatus("LLM 繁忙，请稍后重试", "busy");
       } else {
+        setVoiceThinking(false);
         currentStream().stopThinking();
         currentStream().setStatus(data.error || "处理失败", "failed");
         if (currentPath === "l2") {
@@ -1820,6 +1839,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "protocol_violation":
       currentStream().end();
+      setVoiceThinking(false);
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted", "心跳协议校验未通过");
         setCognitionState("未完成", "idle");
