@@ -965,6 +965,9 @@ export const config = {
   baseURL: null,
   needsActivation: true,
   temperature: 0.5,
+  // 内层 turn-engine：'llm' = 现状自研（src/llm.js callLLM）；'pi' = Pi SDK（src/pi/turn-engine.js）。
+  // 切换实验性，默认 'llm' 零回归。
+  turnEngine: 'llm',
   // 思考模式开关：true=向 provider 传 thinking enabled（深度由模型自控），false=thinking disabled。
   // 默认关闭——只有用户在设置里显式开启才思考。这是「用户显式选择」的开关，
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
@@ -1002,6 +1005,10 @@ if (parsedConfig) {
     if (typeof s.execSandbox === 'boolean') config.security.execSandbox = s.execSandbox
     if (Array.isArray(s.blockedTools)) config.security.blockedTools = s.blockedTools
     if (typeof s.updatedAt === 'string') config.security.updatedAt = s.updatedAt
+  }
+  // turn-engine 选择（'llm' | 'pi'），白名单外一律保持默认 'llm'。
+  if (parsedConfig.turnEngine === 'llm' || parsedConfig.turnEngine === 'pi') {
+    config.turnEngine = parsedConfig.turnEngine
   }
   if (parsedConfig.network && typeof parsedConfig.network === 'object') {
     const n = parsedConfig.network
@@ -1169,6 +1176,12 @@ export function commitPreparedActivation(prepared) {
     model: normalizedModel,
     models: withCurrentModel(pConfig.models, normalizedModel),
   }
+}
+
+// 内层 turn-engine 选择：'llm'（自研 src/llm.js）或 'pi'（Pi SDK src/pi/turn-engine.js）。
+// 默认 'llm'。runTurn 据此分流到 callLLM / runPiTurn（见 src/index.js）。
+export function getTurnEngine() {
+  return config.turnEngine === 'pi' ? 'pi' : 'llm'
 }
 
 export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL }) {

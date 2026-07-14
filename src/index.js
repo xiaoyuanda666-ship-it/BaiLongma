@@ -1,6 +1,7 @@
 import './network-proxy.js'
-import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
+import { config, getMinimaxKey as _getMinimaxKey, getSecurity, getTurnEngine } from './config.js'
 import { callLLM } from './llm.js'
+// runPiTurn 惰性加载（pi 分支动态 import），保证默认 llm 路径完全不加载 Pi SDK、零回归。
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
 import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatSceneManifest, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
@@ -1383,7 +1384,18 @@ async function runTurn(input, label, msg = null) {
     // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
     let curStreamMode = null
     let sawTextStream = false
-    llmResult = await callLLM({
+    // Slice 2 + 临时止血(A)：按 config.turnEngine 分流——'pi' 走 Pi SDK runPiTurn，否则 callLLM。
+    // 两者暴露同一 callback 面（onStream/onToolCall/onToolExecute/signal/toolContext），
+    // args 对象完全一致，外层 runTurn 逻辑（焦点栈/投递/标记解析）零改动。默认 'llm' 零回归。
+    // 但 pi 目前只支持 minimax provider（Slice 4 才接多 provider）：非 minimax 时显式回退 llm
+    // 并 warn，绝不静默用 minimax 顶替用户在配置页选的 provider。
+    const piMod = getTurnEngine() === 'pi' ? await import('./pi/turn-engine.js') : null
+    const usePi = !!(piMod && piMod.isPiSupportedForConfig())
+    if (piMod && !usePi) {
+      console.warn(`[pi] provider=${config.provider} 暂不被 pi 引擎支持（仅 minimax），本轮回退 llm 引擎`)
+    }
+    const turnEngine = usePi ? piMod.runPiTurn : callLLM
+    llmResult = await turnEngine({
       systemPrompt,
       message: input,
       messages: llmMessages,
