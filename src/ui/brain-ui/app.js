@@ -1025,6 +1025,7 @@ const L2 = new ThoughtStream("si-l2", "warm", {
 const ACTION_LOG_KEY = "bailongma-action-log-v1";
 const HEARTBEAT_COUNT_KEY = "bailongma-heartbeat-count-v1";
 const ACTION_LOG_LIMIT = 58;
+const ACTION_LOG_IGNORED_TOOLS = new Set(["send_message", "ui_set"]);
 const heartbeatMonitorEl = document.querySelector(".heartbeat-monitor");
 const heartbeatWaveEl = document.getElementById("heartbeat-wave");
 const heartbeatAreaEl = document.getElementById("heartbeat-area");
@@ -1033,7 +1034,6 @@ const heartbeatStateLabelEl = document.getElementById("heartbeat-state-label");
 const heartbeatCountEl = document.getElementById("heartbeat-count");
 const heartbeatLastEl = document.getElementById("heartbeat-last");
 const actionLogEl = document.getElementById("action-log");
-const actionLogCountEl = document.getElementById("action-log-count");
 const cognitionStateEl = document.getElementById("cognition-state");
 const cognitionEmptyEl = document.getElementById("cognition-empty");
 
@@ -1052,6 +1052,7 @@ actionLog = actionLog
   .filter(entry => (
     entry
     && entry.kind !== "failed"
+    && !ACTION_LOG_IGNORED_TOOLS.has(entry.tool)
     && typeof entry.text === "string"
     && Number.isFinite(Number(entry.ts))
   ))
@@ -1059,6 +1060,8 @@ actionLog = actionLog
 let heartbeatCount = Math.max(0, Number(readHeartbeatStorage(HEARTBEAT_COUNT_KEY, 0)) || 0);
 let lastHeartbeatAt = 0;
 let activeHeartbeatRound = false;
+let heartbeatConnectionState = "waiting";
+let defaultHeartbeatIntervalMinutes = 20;
 
 function heartbeatClock(ts) {
   return new Date(Number(ts) || Date.now()).toLocaleTimeString("zh-CN", {
@@ -1072,7 +1075,7 @@ function heartbeatClock(ts) {
 function renderActionLog() {
   if (!actionLogEl) return;
   actionLogEl.replaceChildren();
-  const visibleEntries = actionLog.slice().reverse();
+  const visibleEntries = actionLog.slice();
   if (visibleEntries.length === 0) {
     const empty = document.createElement("div");
     empty.className = "action-log-empty";
@@ -1097,8 +1100,8 @@ function renderActionLog() {
       row.append(dot, textEl, timeEl);
       actionLogEl.appendChild(row);
     }
+    actionLogEl.scrollTop = actionLogEl.scrollHeight;
   }
-  if (actionLogCountEl) actionLogCountEl.textContent = String(actionLog.length);
 }
 
 function describeAction(name, args = {}, result = "") {
@@ -1109,7 +1112,7 @@ function describeAction(name, args = {}, result = "") {
 }
 
 function addActionLogEntry(name, args = {}, result = "", ok = true, ts = Date.now()) {
-  if (ok === false) return;
+  if (ok === false || ACTION_LOG_IGNORED_TOOLS.has(name)) return;
   actionLog.push({
     text: describeAction(name, args, result),
     kind: "action",
@@ -1141,6 +1144,7 @@ function rebuildActionLogFromHistory(events) {
       event?.type === "tool_call"
       && event?.data?.name
       && event.data.ok !== false
+      && !ACTION_LOG_IGNORED_TOOLS.has(event.data.name)
     ))
     .map(event => ({
       text: describeAction(event.data.name, event.data.args, event.data.result),
@@ -1165,9 +1169,41 @@ function updateHeartbeatFacts() {
   else heartbeatLastEl.textContent = `${Math.floor(elapsed / 86_400_000)} 天前`;
 }
 
+function formatHeartbeatInterval(minutes = defaultHeartbeatIntervalMinutes) {
+  const value = Number(minutes);
+  return Number.isInteger(value) && value > 0 ? `${value} 分钟` : "默认间隔";
+}
+
+function applyHeartbeatConfig(heartbeat = {}) {
+  const intervalMinutes = Number(heartbeat.defaultIntervalMinutes);
+  if (Number.isInteger(intervalMinutes) && intervalMinutes > 0) {
+    defaultHeartbeatIntervalMinutes = intervalMinutes;
+  }
+  if (heartbeatConnectionState === "alive") {
+    setHeartbeatConnection("alive", formatHeartbeatInterval());
+  }
+}
+
+async function loadHeartbeatMonitorSettings() {
+  try {
+    const response = await fetch(`${API}/settings/heartbeat`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "读取失败");
+    applyHeartbeatConfig(data.heartbeat);
+  } catch (err) {
+    console.warn("[brain-ui] heartbeat settings unavailable:", err?.message || err);
+  }
+}
+
 function setHeartbeatConnection(state, label) {
+  heartbeatConnectionState = state;
   if (heartbeatStateEl) heartbeatStateEl.dataset.state = state;
   if (heartbeatStateLabelEl) heartbeatStateLabelEl.textContent = label;
+  if (heartbeatStateEl) {
+    heartbeatStateEl.title = state === "alive"
+      ? `默认心跳间隔：${formatHeartbeatInterval()}`
+      : label;
+  }
 }
 
 function setCognitionState(label, state = "idle") {
@@ -1645,7 +1681,7 @@ function connectSSE() {
 
   es.onopen = () => {
     setConnectionState("已连接", true);
-    setHeartbeatConnection("alive", "意识在线");
+    setHeartbeatConnection("alive", formatHeartbeatInterval());
   };
 
   es.onmessage = event => {
@@ -1668,6 +1704,9 @@ function extractNids(memList) {
 
 function handle({ type, data = {}, ts = null }) {
   switch (type) {
+    case "heartbeat_settings_updated":
+      applyHeartbeatConfig(data);
+      break;
     case "message_received": {
       // L1 也是一次真实意识唤醒：只驱动波形，不累加 L2 心跳计数。
       triggerHeartbeatPulse(1);
@@ -2560,6 +2599,7 @@ if (MEMORY_GRAPH_ENABLED) {
     loadMemories();
   }, 5 * 60 * 1000);
 }
+loadHeartbeatMonitorSettings();
 loadBrainUiHistory().finally(connectSSE);
 loadAgentProfile();
 initPersonCard();
@@ -3586,6 +3626,7 @@ function initTTSSettings() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "读取失败");
       const heartbeat = data.heartbeat || {};
+      applyHeartbeatConfig(heartbeat);
       if (heartbeatToggle) heartbeatToggle.checked = heartbeat.enabled !== false;
       if (heartbeatInterval) heartbeatInterval.value = String(heartbeat.defaultIntervalMinutes || 20);
       syncHeartbeatControls();
@@ -3614,6 +3655,7 @@ function initTTSSettings() {
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
+      applyHeartbeatConfig(data.heartbeat);
       showFeedback(heartbeatFeedback, data.heartbeat?.enabled ? "心跳设置已生效" : "心跳已关闭");
       syncHeartbeatControls();
     } catch (err) {

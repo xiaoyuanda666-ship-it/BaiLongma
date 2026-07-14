@@ -548,10 +548,10 @@ body {
   padding: 16px 18px;
   border: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
   border-radius: 12px;
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--warm) 4%, transparent), transparent 45%),
-    color-mix(in srgb, var(--panel) 84%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  background: var(--panel);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-soft), var(--shadow-inset);
   overflow: hidden;
 }
 
@@ -709,18 +709,6 @@ body {
   height: clamp(180px, 25vh, 220px);
   display: flex;
   flex-direction: column;
-}
-
-.l2-module-count {
-  display: inline-grid;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 5px;
-  place-items: center;
-  border-radius: 999px;
-  color: var(--dim);
-  background: color-mix(in srgb, var(--line-strong) 42%, transparent);
-  font: 500 9px/1 "JetBrains Mono", ui-monospace, monospace;
 }
 
 .action-log {

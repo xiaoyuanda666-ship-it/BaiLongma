@@ -154,7 +154,6 @@ const createSecondaryPanel = () => `
           <div class="l2-module-kicker">ACTION LOG</div>
           <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
         </div>
-        <span class="l2-module-count" id="action-log-count">0</span>
       </div>
       <div class="action-log" id="action-log" aria-live="polite">
         <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>

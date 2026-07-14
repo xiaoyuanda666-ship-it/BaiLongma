@@ -221,6 +221,19 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/settings/heartbeat') {
+      sendJson(res, {
+        ok: true,
+        heartbeat: {
+          enabled: true,
+          defaultIntervalMinutes: 20,
+          defaultIntervalMs: 20 * 60 * 1000,
+          updatedAt: null,
+        },
+      })
+      return
+    }
+
     if (url.pathname === '/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -304,6 +317,37 @@ try {
   await page.waitForSelector('#graph circle', { timeout: 5000 })
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+  const l2CardStyles = await page.evaluate(() => {
+    const left = getComputedStyle(document.querySelector('#panel-l1'))
+    return {
+      left: {
+        backgroundColor: left.backgroundColor,
+        backgroundImage: left.backgroundImage,
+        boxShadow: left.boxShadow,
+        backdropFilter: left.backdropFilter,
+      },
+      cards: Array.from(document.querySelectorAll('#panel-l2 .l2-module')).map(element => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
+          boxShadow: style.boxShadow,
+          backdropFilter: style.backdropFilter,
+        }
+      }),
+    }
+  })
+  if (l2CardStyles.cards.length !== 3) throw new Error(`expected 3 L2 cards, got ${l2CardStyles.cards.length}`)
+  if (l2CardStyles.cards.some(style => JSON.stringify(style) !== JSON.stringify(l2CardStyles.left))) {
+    throw new Error(`L2 card surface styles do not match L1: ${JSON.stringify(l2CardStyles)}`)
+  }
+  server.emitSse({
+    type: 'heartbeat_settings_updated',
+    data: { enabled: true, defaultIntervalMinutes: 45, defaultIntervalMs: 45 * 60 * 1000 },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '45 分钟')
   const heartbeatChartHeight = await page.locator('#heartbeat-chart').evaluate(element => element.getBoundingClientRect().height)
   if (heartbeatChartHeight < 92) throw new Error(`heartbeat chart is too short: ${heartbeatChartHeight}px`)
   const idleHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
@@ -439,6 +483,16 @@ try {
   server.emitSse({ type: 'message_received', data: { input: 'action log limit smoke' }, ts: new Date().toISOString() })
   server.emitSse({
     type: 'tool_call',
+    data: { name: 'send_message', args: { content: 'action-log-hidden-message' }, result: 'ok', ok: true },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'tool_call',
+    data: { name: 'ui_set', args: { id: 'action-log-hidden-surface' }, result: 'ok', ok: true },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'tool_call',
     data: { name: 'read_file', args: { path: 'failed-action.js' }, result: 'failed', ok: false },
     ts: new Date().toISOString(),
   })
@@ -452,8 +506,15 @@ try {
   server.emitSse({ type: 'response', data: {}, ts: new Date(Date.now() + 60).toISOString() })
   await page.waitForFunction(() => {
     const log = document.querySelector('#action-log')
-    return document.querySelector('#action-log-count')?.textContent === '58'
+    const entries = [...document.querySelectorAll('#action-log .action-log-entry')]
+    return !document.querySelector('#action-log-count')
+      && entries.length === 58
+      && entries[0]?.textContent.includes('bulk-2.js')
+      && entries.at(-1)?.textContent.includes('bulk-59.js')
+      && Math.abs(log.scrollHeight - log.clientHeight - log.scrollTop) <= 1
       && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('action-log-hidden-message')
+      && !log?.textContent.includes('action-log-hidden-surface')
       && !log?.textContent.includes('bulk-1.js')
       && log?.textContent.includes('bulk-2.js')
       && log?.textContent.includes('bulk-59.js')
@@ -464,8 +525,15 @@ try {
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => {
     const log = document.querySelector('#action-log')
-    return document.querySelector('#action-log-count')?.textContent === '58'
+    const entries = [...document.querySelectorAll('#action-log .action-log-entry')]
+    return !document.querySelector('#action-log-count')
+      && entries.length === 58
+      && entries[0]?.textContent.includes('bulk-2.js')
+      && entries.at(-1)?.textContent.includes('bulk-59.js')
+      && Math.abs(log.scrollHeight - log.clientHeight - log.scrollTop) <= 1
       && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('action-log-hidden-message')
+      && !log?.textContent.includes('action-log-hidden-surface')
       && !log?.textContent.includes('bulk-1.js')
       && log?.textContent.includes('bulk-2.js')
       && log?.textContent.includes('bulk-59.js')
