@@ -1,5 +1,3 @@
-export const TASK_IDLE_TICK_LIMIT = 5
-
 export function createTaskManager({
   state,
   setConfig,
@@ -37,28 +35,6 @@ export function createTaskManager({
     }
   }
 
-  function autoCompleteTask(reason) {
-    const clearedTask = state.task
-    state.task = null
-    state.lastTaskRefreshTick = -10
-    state.taskSteps = []
-    state.taskIdleTickCount = 0
-    setConfig('current_task', '')
-    setConfig('current_task_steps', '[]')
-    closeTaskCommitment('done')
-    console.log(`[task] Auto-cleared (${reason}): ${clearedTask}`)
-    emitEvent('task_cleared', { task: clearedTask, summary: `Auto-cleared: ${reason}` })
-    if (clearedTask) {
-      insertMemory({
-        event_type: 'task_complete',
-        content: `Task auto-cleared: ${clearedTask.slice(0, 60)}`,
-        detail: `Reason: ${reason}`,
-        entities: [], concepts: [], tags: ['task_complete'],
-        timestamp: nowTimestamp(),
-      })
-    }
-  }
-
   function setTask(description, steps = []) {
     state.task = description
     state.lastTaskRefreshTick = -10
@@ -74,7 +50,6 @@ export function createTaskManager({
     const clearedTask = state.task
     state.task = null
     state.taskSteps = []
-    state.taskIdleTickCount = 0
     setConfig('current_task', '')
     setConfig('current_task_steps', '[]')
     closeTaskCommitment('done')
@@ -103,7 +78,6 @@ export function createTaskManager({
     const nextIndex = state.taskSteps.findIndex(s => s.status === 'pending')
     const nextStep = nextIndex >= 0 ? state.taskSteps[nextIndex].text : null
     const anyFailed = state.taskSteps.some(s => s.status === 'failed')
-    if (allTerminal) autoCompleteTask('all steps complete')
     return {
       total,
       done,
@@ -117,7 +91,10 @@ export function createTaskManager({
 
   function setTaskFromMarker(description) {
     state.task = description.trim()
+    state.lastTaskRefreshTick = -10
+    state.taskSteps = []
     setConfig('current_task', state.task)
+    setConfig('current_task_steps', '[]')
     openTaskCommitment(state.task)
     console.log(`[system] Task set: ${state.task}`)
     emitEvent('task_set', { task: state.task })
@@ -128,8 +105,9 @@ export function createTaskManager({
     console.log(`[system] Task completed: ${clearedTask}`)
     emitEvent('task_cleared', { task: clearedTask })
     state.task = null
-    state.taskIdleTickCount = 0
+    state.taskSteps = []
     setConfig('current_task', '')
+    setConfig('current_task_steps', '[]')
     closeTaskCommitment('done')
     if (clearedTask) {
       insertMemory({
@@ -145,7 +123,6 @@ export function createTaskManager({
   return {
     openTaskCommitment,
     closeTaskCommitment,
-    autoCompleteTask,
     setTask,
     completeTask,
     updateTaskStep,

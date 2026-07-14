@@ -5,6 +5,8 @@ import {
   normalizeConversationPartyId,
   insertConversation,
   markConversationOpenQuestion,
+  updateConversationDeliveryStatus,
+  findUnansweredDeliveredOutbound,
 } from '../db.js'
 import { emitEvent } from '../events.js'
 import { dispatchSocialMessage } from '../social/dispatch.js'
@@ -101,6 +103,32 @@ function makeDeliveryFailure({
     error,
     reason: String(reason || 'Message was not delivered.').slice(0, 1200),
     ...(Number.isFinite(retryAfterMs) ? { retry_after_ms: Math.max(0, Math.round(retryAfterMs)) } : {}),
+  })
+}
+
+function makeDeliverySuccess({
+  targetId,
+  channel = '',
+  conversationId = null,
+  platform = '',
+  messageSent = true,
+  skipped = '',
+  deliveredAt = '',
+} = {}) {
+  return JSON.stringify({
+    ok: true,
+    tool: 'send_message',
+    delivered: true,
+    message_sent: messageSent,
+    target_id: targetId,
+    channel,
+    ...(conversationId ? { conversation_id: conversationId } : {}),
+    ...(platform ? { platform } : {}),
+    ...(skipped ? { skipped } : {}),
+    ...(deliveredAt ? { delivered_at: deliveredAt } : {}),
+    reason: messageSent
+      ? 'Message successfully delivered and shown to the user.'
+      : 'The identical message was already successfully delivered and shown to the user. No new message was sent.',
   })
 }
 
@@ -323,6 +351,24 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
       retryAfterMs: previousFailure.retryAfterMs,
     })
   }
+  if (context.autonomous === true) {
+    const alreadyDelivered = findUnansweredDeliveredOutbound({
+      toId: resolvedId,
+      channel: channelLabel,
+      externalPartyId: delivery.externalTargetId || '',
+      content: outboundContent,
+    })
+    if (alreadyDelivered) {
+      return makeDeliverySuccess({
+        targetId: resolvedId,
+        channel: channelLabel,
+        conversationId: alreadyDelivered.id,
+        messageSent: false,
+        skipped: 'already_delivered_unanswered',
+        deliveredAt: alreadyDelivered.timestamp,
+      })
+    }
+  }
   // This is a short concurrency/idempotency lock, not a semantic cooldown.
   // The model remains free to decide whether a message is valuable; this only
   // prevents an explicit send and a retry/fallback race from delivering the
@@ -364,6 +410,7 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
     open_question: isOpenFollowup ? 1 : 0,
+    delivery_status: 'pending',
   })
   if (isOpenFollowup && insertedId) {
     // 写入时 open_question 已设；此处保留兜底（万一上面 column 没生效）
@@ -397,7 +444,19 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     }
   }
 
-  if (socialResult?.ok) return `${media ? '媒体' : '消息'}已发送至 ${resolvedId}（${socialResult.platform} 已投递）`
+  if (delivery.isLocal) {
+    updateConversationDeliveryStatus(insertedId, 'delivered')
+    return makeDeliverySuccess({ targetId: resolvedId, channel: channelLabel, conversationId: insertedId })
+  }
+  if (socialResult?.ok) {
+    updateConversationDeliveryStatus(insertedId, 'delivered')
+    return makeDeliverySuccess({
+      targetId: resolvedId,
+      channel: channelLabel,
+      conversationId: insertedId,
+      platform: socialResult.platform || '',
+    })
+  }
   if (socialResult?.skipped) {
     const reason = socialResult.reason || 'external channel is not configured'
     recordOutboundFailure({
@@ -407,6 +466,7 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
       content: outboundContent,
       reason,
     })
+    updateConversationDeliveryStatus(insertedId, 'failed')
     return makeDeliveryFailure({
       targetId: resolvedId,
       channel: channelLabel,
@@ -429,6 +489,7 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
       content: outboundContent,
       reason: `${reason}${hint}`,
     })
+    updateConversationDeliveryStatus(insertedId, 'failed')
     return makeDeliveryFailure({
       targetId: resolvedId,
       channel: channelLabel,
@@ -436,5 +497,11 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
       reason: `External channel ${delivery.deliveryChannel || 'unknown'} did not deliver the message: ${reason}${hint} The identical message is now paused so later heartbeats will not retry it automatically.`,
     })
   }
-  return `消息已发送至 ${resolvedId}${channelLabel ? `（${channelLabel}）` : ''}`
+  updateConversationDeliveryStatus(insertedId, 'failed')
+  return makeDeliveryFailure({
+    targetId: resolvedId,
+    channel: channelLabel,
+    error: 'external_delivery_unknown',
+    reason: 'The external channel returned no authoritative success result, so delivery was not assumed.',
+  })
 }

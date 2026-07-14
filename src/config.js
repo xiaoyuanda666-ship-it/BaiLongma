@@ -959,6 +959,11 @@ function runConfigMigrations() {
 
 export const config = {
   tickInterval: 20 * 60 * 1000, // default idle heartbeat: 20 minutes
+  heartbeat: {
+    enabled: true,
+    defaultIntervalMinutes: 20,
+    updatedAt: null,
+  },
   provider: null,
   model: null,
   apiKey: null,
@@ -995,6 +1000,16 @@ if (parsedConfig) {
   // 缺字段（旧版升级 / 未开启过）按默认 false 处理 —— 无需 schema 迁移。
   if (typeof parsedConfig.thinking === 'boolean') {
     config.thinking = parsedConfig.thinking
+  }
+  if (parsedConfig.heartbeat && typeof parsedConfig.heartbeat === 'object') {
+    const heartbeat = parsedConfig.heartbeat
+    if (typeof heartbeat.enabled === 'boolean') config.heartbeat.enabled = heartbeat.enabled
+    const intervalMinutes = Number(heartbeat.defaultIntervalMinutes)
+    if (Number.isFinite(intervalMinutes) && intervalMinutes >= 1 && intervalMinutes <= 1440) {
+      config.heartbeat.defaultIntervalMinutes = Math.round(intervalMinutes)
+      config.tickInterval = config.heartbeat.defaultIntervalMinutes * 60 * 1000
+    }
+    if (typeof heartbeat.updatedAt === 'string') config.heartbeat.updatedAt = heartbeat.updatedAt
   }
   if (parsedConfig.security && typeof parsedConfig.security === 'object') {
     const s = parsedConfig.security
@@ -1340,6 +1355,44 @@ export function setThinking(enabled) {
   config.thinking = v
   patchConfig({ thinking: v })
   return { thinking: v }
+}
+
+export function getHeartbeatConfig() {
+  return {
+    enabled: config.heartbeat.enabled !== false,
+    defaultIntervalMinutes: config.heartbeat.defaultIntervalMinutes,
+    defaultIntervalMs: config.tickInterval,
+    updatedAt: config.heartbeat.updatedAt || null,
+  }
+}
+
+export function setHeartbeatConfig(updates = {}) {
+  const before = getHeartbeatConfig()
+  const next = {
+    enabled: config.heartbeat.enabled,
+    defaultIntervalMinutes: config.heartbeat.defaultIntervalMinutes,
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'enabled')) {
+    if (typeof updates.enabled !== 'boolean') throw new Error('心跳开关必须是布尔值')
+    next.enabled = updates.enabled
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'defaultIntervalMinutes')) {
+    const raw = Number(updates.defaultIntervalMinutes)
+    if (!Number.isInteger(raw)) throw new Error('默认心跳间隔必须是整数分钟')
+    if (raw < 1 || raw > 1440) throw new Error('默认心跳间隔必须在 1 到 1440 分钟之间')
+    next.defaultIntervalMinutes = raw
+  }
+
+  const changed = before.enabled !== next.enabled
+    || before.defaultIntervalMinutes !== next.defaultIntervalMinutes
+  config.heartbeat.enabled = next.enabled
+  config.heartbeat.defaultIntervalMinutes = next.defaultIntervalMinutes
+  config.tickInterval = next.defaultIntervalMinutes * 60 * 1000
+  if (changed) config.heartbeat.updatedAt = nowTimestamp()
+  patchConfig({ heartbeat: { ...config.heartbeat } })
+  return getHeartbeatConfig()
 }
 
 export function getSecurity() {

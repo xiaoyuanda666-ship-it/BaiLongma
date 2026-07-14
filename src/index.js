@@ -62,6 +62,8 @@ import { formatTerminalStreamContext } from './terminal-stream.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
+import { createAwakeningManager } from './awakening.js'
+import { createTaskManager } from './task-manager.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
@@ -174,10 +176,6 @@ const PRIORITY = {
 }
 
 const L2_CONTEXT_HOURS = 24 * 7
-// Bump when the deterministic first-run validation changes so existing installs
-// receive the new check rather than retaining the previous completed state.
-const STARTUP_SELF_CHECK_VERSION = 'v3'
-const STARTUP_SELF_CHECK_CONFIG_KEY = 'l2_startup_self_check'
 
 // Initialize database
 getDB()
@@ -188,21 +186,6 @@ if (getMemoryCount() === 0) {
 const birthTime = getOrInitBirthTime()
 refreshUserProfile(PRIMARY_USER_ID)
 reportStartupProgress('skills', 'done', `已加载 ${startupSkills.length} 个技能并恢复记忆`, '技能和记忆已加载')
-
-// Awakening phase: first 10 heartbeat ticks after initial activation run at a fixed 10s cadence
-const AWAKENING_CONFIG_KEY = 'awakening_ticks_remaining'
-function getAwakeningTicks() {
-  const raw = getConfig(AWAKENING_CONFIG_KEY)
-  if (raw === null || raw === undefined || raw === '') return 10
-  return Math.max(0, parseInt(raw, 10) || 0)
-}
-function decrementAwakeningTick() {
-  const current = getAwakeningTicks()
-  if (current > 0) {
-    const next = current - 1
-    setConfig(AWAKENING_CONFIG_KEY, String(next))
-  }
-}
 
 // Restore persisted task from database (survives restarts)
 const persistedTask = getConfig('current_task')
@@ -268,6 +251,29 @@ function initThreadState() {
   return { threads: [], foregroundId: null, commitments: [] }
 }
 
+// Stateful application services own their lifecycle rules; index.js only wires dependencies.
+const awakeningManager = createAwakeningManager({
+  state,
+  getConfig,
+  setConfig,
+  nowTimestamp,
+  insertMemory,
+  clearStickyEvent,
+  emitEvent,
+})
+
+const taskManager = createTaskManager({
+  state,
+  getConfig,
+  setConfig,
+  saveThreadState,
+  openCommitment,
+  closeCommitment,
+  emitEvent,
+  insertMemory,
+  nowTimestamp,
+})
+
 // brain-ui 兼容：把线索状态派生成"栈视图"（后台按活跃时间升序 + 前台垫底=栈顶），
 // focus_frame 事件 payload 形状不变，专注帧观察面板零改动。
 function deriveStackView(state) {
@@ -313,92 +319,9 @@ function summarizeToolCall(t = {}) {
   return `${t.name || 'tool'}${status}`
 }
 
-// 线索模型：task 生命周期 ↔ 承诺生命周期。
-// set_task = "好的我去做"的工程化时刻（单 Agent 版 spawn）：给前台线索挂承诺，钉住温度；
-// 任务完成/取消 = 交差：关承诺，线索按 lastEventAt 自然降温——没有任何突变动作。
-function openTaskCommitment(description) {
-  try {
-    const commitment = openCommitment(state, { text: String(description || ''), tick: state.tickCounter || 0 })
-    // task ↔ 承诺绑定：task 槽是单例（set_task B 会覆盖 A），但承诺是多例的——
-    // 收尾时必须按 id 精确关"当前 task 的承诺"，否则 closeCommitment 默认关最老的
-    // open 承诺，任务 B 完成会误关任务 A 的承诺（被覆盖的 A 承诺保持 open：
-    // 用户没取消 A，承诺仍未兑现，线索保持 warm 等用户回来问）。
-    state.taskCommitmentId = commitment?.id || null
-    // 跨重启持久化：task 从 config 恢复、承诺从 db 恢复，绑定关系也得跟着活下来，
-    // 否则重启后收尾退化回"关最老的 open 承诺"。
-    setConfig('current_task_commitment_id', commitment?.id || '')
-    saveThreadState(state.threadState)
-  } catch (e) {
-    console.log('[threads] openCommitment failed:', e?.message || e)
-  }
-}
-function closeTaskCommitment(status = 'done') {
-  try {
-    const boundId = state.taskCommitmentId || getConfig('current_task_commitment_id') || null
-    const closed = closeCommitment(state, {
-      commitmentId: boundId,
-      status,
-    })
-    state.taskCommitmentId = null
-    setConfig('current_task_commitment_id', '')
-    if (closed) saveThreadState(state.threadState)
-  } catch (e) {
-    console.log('[threads] closeCommitment failed:', e?.message || e)
-  }
-}
-
 function newSessionRef() {
   state.sessionCounter++
   return `session_${Date.now()}_${state.sessionCounter}`
-}
-
-function readStartupSelfCheckState() {
-  try {
-    const raw = getConfig(STARTUP_SELF_CHECK_CONFIG_KEY)
-    if (!raw) return null
-    return JSON.parse(raw)
-  } catch {
-    return null
-  }
-}
-
-function writeStartupSelfCheckState(value) {
-  setConfig(STARTUP_SELF_CHECK_CONFIG_KEY, JSON.stringify(value))
-}
-
-function ensureStartupSelfCheckState() {
-  const current = readStartupSelfCheckState()
-  if (current?.version === STARTUP_SELF_CHECK_VERSION && current.status === 'completed') {
-    state.startupSelfCheck = { ...current, active: false }
-    return state.startupSelfCheck
-  }
-
-  const now = nowTimestamp()
-  const next = {
-    version: STARTUP_SELF_CHECK_VERSION,
-    status: 'running',
-    started_at: current?.started_at || now,
-    updated_at: now,
-    attempts: Number(current?.attempts || 0) + (current?.status === 'running' ? 0 : 1),
-    results: current?.version === STARTUP_SELF_CHECK_VERSION && current?.results ? current.results : {},
-    active: true,
-  }
-  writeStartupSelfCheckState(next)
-  state.startupSelfCheck = next
-  return next
-}
-
-function buildStartupSelfCheckDirections(checkState) {
-  if (!checkState?.active) return ''
-  return [
-    `This is the L2 startup self-check flow (${STARTUP_SELF_CHECK_VERSION}). It runs once. Complete every step in order and then call complete_startup_self_check to persist the actual results.`,
-    `[HARD RULE] Do not call send_message and do not emit ordinary assistant text during this flow. Announce status only with speak and ui_set.`,
-    `Use one Scene surface throughout: id="self-check", kind="selfcheck". Update that same id for each running step, then morph it to done before removing it.`,
-    `1. Call speak text="正在检查文件读写能力". Call ui_set({id:"self-check",kind:"selfcheck",intent:"inform",data:{phase:"running",step:1,total:3,name:"文件读写",icon:"📁"}}). Write the current timestamp to self_check.txt in the sandbox root using write_file, then use read_file to read it back and verify the content. Record ok, degraded, or error from the tool evidence.`,
-    `2. Call speak text="正在检查热点面板". Call ui_set({id:"self-check",kind:"selfcheck",intent:"inform",data:{phase:"running",step:2,total:3,name:"热点面板",icon:"🌐"}}). Call hotspot_mode action="show", verify its response, then call hotspot_mode action="hide". Record the actual result.`,
-    `3. Call speak text="正在检查视频模式". Call ui_set({id:"self-check",kind:"selfcheck",intent:"inform",data:{phase:"running",step:3,total:3,name:"视频模式",icon:"🎬"}}). Call web_search once for "bilibili Iron Man JARVIS". Use the first returned Bilibili BV URL only; do not guess a URL or keep searching. Call media_mode with mode="video", action="show", that URL, and autoplay=true; wait about five seconds, then call media_mode with mode="video", action="hide". Record the actual result.`,
-    `Continue even if a step fails. Then call ui_set({id:"self-check",kind:"selfcheck",intent:"inform",data:{phase:"done",results:[{name:"文件读写",status:"ok/error/skipped",note:"..."},{name:"热点面板",status:"ok/error/skipped",note:"..."},{name:"视频模式",status:"ok/error/skipped",note:"..."}],overall:"ok/degraded/error"}}), replacing the placeholder values with the actual outcomes. Call complete_startup_self_check with the same evidence-based result map, then call ui_set with id="self-check" and remove=true.`,
-  ].join('\n')
 }
 
 // Fallback 投递：当模型未按协议调 send_message 时由主循环代为投递。
@@ -500,91 +423,12 @@ function buildToolContextForProcess(msg, injection) {
     // 计划做对照，看"声称完成"与每步证据是否一致。只读快照，不可被主 Agent 改写。
     getTaskState: () => ({ task: state.task, steps: state.taskSteps }),
 
-    onSetTask: (description, steps) => {
-      state.task = description
-      state.lastTaskRefreshTick = -10
-      state.taskSteps = steps.map(s => ({ text: s, status: 'pending', note: '' }))
-      setConfig('current_task', description)
-      setConfig('current_task_steps', JSON.stringify(state.taskSteps))
-      openTaskCommitment(description)
-      console.log(`[task] Started: ${description} (${steps.length} step(s))`)
-      emitEvent('task_set', { task: description, steps })
-    },
-
-    onCompleteTask: (summary) => {
-      const clearedTask = state.task
-      state.task = null
-      state.taskSteps = []
-      setConfig('current_task', '')
-      setConfig('current_task_steps', '[]')
-      closeTaskCommitment('done')
-      console.log(`[task] Completed: ${clearedTask}`)
-      emitEvent('task_cleared', { task: clearedTask, summary })
-      if (clearedTask) {
-        insertMemory({
-          event_type: 'task_complete',
-          content: `Task completed: ${clearedTask.slice(0, 60)}${summary ? ' — ' + summary.slice(0, 60) : ''}`,
-          detail: 'Task marked complete via the complete_task tool',
-          entities: [], concepts: [], tags: ['task_complete'],
-          timestamp: nowTimestamp(),
-        })
-      }
-    },
-
-    onUpdateTaskStep: (idx, status, note) => {
-      if (!state.taskSteps[idx]) return { error: `Step ${idx + 1} does not exist (${state.taskSteps.length} total)` }
-      state.taskSteps[idx] = { ...state.taskSteps[idx], status, note }
-      setConfig('current_task_steps', JSON.stringify(state.taskSteps))
-      const total = state.taskSteps.length
-      const done = state.taskSteps.filter(s => s.status === 'done').length
-      emitEvent('task_step_updated', { index: idx, status, note, progress: `${done}/${total}` })
-      // Reaching terminal step states is evidence for the model, not a runtime
-      // completion decision. The task remains active until the model explicitly
-      // calls complete_task (or emits the backward-compatible CLEAR_TASK marker).
-      const terminal = ['done', 'failed', 'skipped']
-      const allTerminal = total > 0 && state.taskSteps.every(s => terminal.includes(s.status))
-      const nextIndex = state.taskSteps.findIndex(s => s.status === 'pending')
-      const nextStep = nextIndex >= 0 ? state.taskSteps[nextIndex].text : null
-      const anyFailed = state.taskSteps.some(s => s.status === 'failed')
-      return {
-        total,
-        done,
-        progress: `${done}/${total}`,
-        allTerminal,
-        nextIndex: nextIndex >= 0 ? nextIndex : null,
-        nextStep,
-        anyFailed,
-      }
-    },
+    onSetTask: taskManager.setTask,
+    onCompleteTask: taskManager.completeTask,
+    onUpdateTaskStep: taskManager.updateTaskStep,
 
     startupSelfCheck: state.startupSelfCheck,
-    onCompleteStartupSelfCheck: ({ summary = '', results = {} } = {}) => {
-      const now = nowTimestamp()
-      const completed = {
-        version: STARTUP_SELF_CHECK_VERSION,
-        status: 'completed',
-        started_at: state.startupSelfCheck?.started_at || now,
-        completed_at: now,
-        updated_at: now,
-        results,
-        summary,
-      }
-      writeStartupSelfCheckState(completed)
-      state.startupSelfCheck = { ...completed, active: false }
-      insertMemory({
-        mem_id: `system_l2_startup_self_check_${STARTUP_SELF_CHECK_VERSION}`,
-        type: 'system',
-        title: `L2 startup self-check ${STARTUP_SELF_CHECK_VERSION}`,
-        content: `L2 startup self-check completed: ${summary || 'no summary'}`,
-        detail: JSON.stringify({ summary, results }, null, 2),
-        tags: ['system', 'l2', 'startup_self_check', STARTUP_SELF_CHECK_VERSION],
-        entities: [],
-        timestamp: now,
-      })
-      clearStickyEvent('startup_self_check_started')
-      emitEvent('startup_self_check_completed', completed)
-      return completed
-    },
+    onCompleteStartupSelfCheck: awakeningManager.completeStartupSelfCheck,
 
     onRecall: (query) => {
       state.prev_recall = query
@@ -868,7 +712,7 @@ async function runTurn(input, label, msg = null) {
       controller,
     })
 
-    if (isTick) ensureStartupSelfCheckState()
+    if (isTick) awakeningManager.ensureStartupSelfCheckState()
 
     const earlyConversationWindow = msg ? getRecentConversationTimeline(12, 2, { includeAbsorbed: true }) : []
     if (!isTick && tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow: earlyConversationWindow })) {
@@ -1001,13 +845,16 @@ async function runTurn(input, label, msg = null) {
     }
 
     const directions = [...(injection.directions || [])]
+    if (!isTick && msg) {
+      directions.unshift('Language reminder for this user turn: determine the reply language only from the user\'s current message, not from conversation history, memories, profile, interface language, location, ASR/TTS provider, or agent name. Mirror the current message language unless the user explicitly requests another output language. Proper names may keep their original spelling, but the surrounding sentence must still use the current message language.')
+    }
     if (isTick) {
-      const startupSelfCheckDirections = buildStartupSelfCheckDirections(state.startupSelfCheck)
+      const startupSelfCheckDirections = awakeningManager.buildStartupSelfCheckDirections(state.startupSelfCheck)
       if (startupSelfCheckDirections) {
         directions.unshift(startupSelfCheckDirections)
       } else {
         directions.unshift(buildAutonomousTickDirections({
-          awakeningTicks: getAwakeningTicks(),
+          awakeningTicks: awakeningManager.getAwakeningTicks(),
           delegationDiscovery: buildDelegationDiscoveryContext() || '',
           tickerStatus: getTickerStatus(),
         }))
@@ -1157,6 +1004,7 @@ async function runTurn(input, label, msg = null) {
       userMessage: msg?.content || input || '',
       currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
       isVoiceTurn: isVoiceChannel(msg?.channel),
+      isTick,
       hasWechatHistory: false,
       hasActiveFocus: false,
       currentCountryCode: geoResult?.location?.country_code || '',
@@ -1182,7 +1030,7 @@ async function runTurn(input, label, msg = null) {
       task: state.task || null,
       taskKnowledge: taskKnowledgeText,
       extraContext: extraContextJoined,
-      awakeningTicks: getAwakeningTicks(),
+      awakeningTicks: awakeningManager.getAwakeningTicks(),
       threadView: buildThreadView(state),
       agentSkills: agentSkillsText,
       // Runtime info：从 system 迁来的每轮变化字段，集中放 <context><runtime>
@@ -1555,34 +1403,10 @@ async function runTurn(input, label, msg = null) {
 
   // 6. Detect [SET_TASK: ...] / [CLEAR_TASK]
   if (markers.setTask !== null) {
-    state.task = markers.setTask.trim()
-    state.lastTaskRefreshTick = -10
-    state.taskSteps = []
-    setConfig('current_task', state.task)
-    setConfig('current_task_steps', '[]')
-    openTaskCommitment(state.task)
-    console.log(`[system] Task set: ${state.task}`)
-    emitEvent('task_set', { task: state.task })
+    taskManager.setTaskFromMarker(markers.setTask)
   }
   if (markers.clearTask) {
-    const clearedTask = state.task
-    console.log(`[system] Task completed: ${clearedTask}`)
-    emitEvent('task_cleared', { task: clearedTask })
-    state.task = null
-    state.taskSteps = []
-    setConfig('current_task', '')
-    setConfig('current_task_steps', '[]')
-    closeTaskCommitment('done')
-    // Write a task_complete memory to prevent old task memories from making Jarvis think the task is still active
-    if (clearedTask) {
-      insertMemory({
-        event_type: 'task_complete',
-        content: `Task completed: ${clearedTask.slice(0, 60)}`,
-        detail: 'Task marked complete via [CLEAR_TASK] — no further execution',
-        entities: [], concepts: [], tags: ['task_complete'],
-        timestamp: nowTimestamp(),
-      })
-    }
+    taskManager.clearTaskFromMarker()
   }
 
   // Update recent action log (keep last 5)
@@ -1647,8 +1471,9 @@ const consciousnessLoop = createConsciousnessLoop({
   getQueueSnapshot,
   formatTick,
   consumeTickerTick,
-  decrementAwakeningTick,
+  decrementAwakeningTick: awakeningManager.decrementAwakeningTick,
   isStartupSelfCheckActive: () => !!state.startupSelfCheck?.active,
+  isHeartbeatEnabled: () => config.heartbeat.enabled !== false,
   isRunning,
   setScheduler,
   setInterruptCallback,
@@ -1657,14 +1482,14 @@ const consciousnessLoop = createConsciousnessLoop({
   getBaseTickInterval: () => config.tickInterval,
   getCustomIntervalMs,
   getTickerStatus,
-  getAwakeningTicks,
+  getAwakeningTicks: awakeningManager.getAwakeningTicks,
   isTaskActive: () => !!state.task,
   getNextPendingReminder,
   getQuotaStatus,
   startConsolidationLoop,
-  ensureStartupSelfCheckState,
+  ensureStartupSelfCheckState: awakeningManager.ensureStartupSelfCheckState,
   setStickyEvent,
-  startupSelfCheckVersion: STARTUP_SELF_CHECK_VERSION,
+  startupSelfCheckVersion: awakeningManager.version,
   priorities: PRIORITY,
 })
 markCurrentTickAborted = consciousnessLoop.markLastTickAborted

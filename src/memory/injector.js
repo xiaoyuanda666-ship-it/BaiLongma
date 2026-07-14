@@ -15,7 +15,7 @@ import {
   searchMemories,
 } from '../db.js'
 import { getInstalledToolNames } from '../capabilities/marketplace/index.js'
-import { PRIMARY_USER_ID, isExternalChannel } from '../identity.js'
+import { PRIMARY_USER_ID, isExternalChannel, isVoiceChannel } from '../identity.js'
 import { extractKeywords } from './keywords.js'
 import { stripTemporalWords } from './temporal-parser.js'
 import { selectTools } from './tool-router.js'
@@ -228,6 +228,7 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     senderId,
     hasTask,
     hasRecall: !!state?.prev_recall,
+    isVoiceTurn: isVoiceChannel(currentChannel),
     mmCaps,
     recentActionLog: actionLog,
     installedToolNames: installedNames,

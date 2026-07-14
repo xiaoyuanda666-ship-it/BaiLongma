@@ -745,6 +745,27 @@ const createSettingsModal = () => `
         <!-- ── 高级功能 tab ── -->
         <div class="settings-tab" data-tab="advanced">
           <div class="settings-section">
+            <div class="settings-section-label">心跳</div>
+            <p class="settings-hint">控制小白龙是否按固定节奏自主思考。关闭后不会再自动触发 L2 心跳，但用户消息和定时提醒仍会正常处理。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-heartbeat-enabled">启用心跳</label>
+              <label class="settings-toggle">
+                <input type="checkbox" id="settings-heartbeat-enabled">
+                <span class="settings-toggle-track"></span>
+              </label>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-heartbeat-interval">默认间隔</label>
+              <input class="settings-input" id="settings-heartbeat-interval" type="number" min="1" max="1440" step="1" inputmode="numeric" value="20">
+              <span class="settings-value">分钟</span>
+            </div>
+            <p class="settings-hint">可设置 1–1440 分钟，默认 20 分钟。任务、初次觉醒以及 Agent 临时调整的节奏可能使用更短间隔。</p>
+            <div class="settings-row-action">
+              <button class="settings-save-btn" id="settings-save-heartbeat" type="button">保存心跳设置</button>
+              <span class="settings-feedback" id="settings-heartbeat-feedback"></span>
+            </div>
+          </div>
+          <div class="settings-section">
             <div class="settings-section-label">地图服务</div>
             <p class="settings-hint">为台风监测、位置、行程等功能提供统一真实地图。凭证仅保存在本机加密存储中，不会写入项目源码或返回安全密钥明文。</p>
             <div class="settings-config-row">

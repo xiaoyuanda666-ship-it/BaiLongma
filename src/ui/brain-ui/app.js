@@ -2445,6 +2445,10 @@ function initTTSSettings() {
   const saveMapBtn           = document.getElementById("settings-save-map");
   const clearMapBtn          = document.getElementById("settings-clear-map");
   const mapFeedback          = document.getElementById("settings-map-feedback");
+  const heartbeatToggle      = document.getElementById("settings-heartbeat-enabled");
+  const heartbeatInterval    = document.getElementById("settings-heartbeat-interval");
+  const saveHeartbeatBtn     = document.getElementById("settings-save-heartbeat");
+  const heartbeatFeedback    = document.getElementById("settings-heartbeat-feedback");
 
   if (!settingsBtn || !overlay) return;
 
@@ -2467,7 +2471,10 @@ function initTTSSettings() {
       if (tab === "social") loadSocialSettings();
       if (tab === "security") loadSecuritySettings();
       if (tab === "web-search") loadWebSearchSettings();
-      if (tab === "advanced") loadMapSettings();
+      if (tab === "advanced") {
+        loadHeartbeatSettings();
+        loadMapSettings();
+      }
       if (tab === "update") loadUpdateSettings();
     });
   });
@@ -3115,6 +3122,58 @@ function initTTSSettings() {
     }
   }
 
+  function syncHeartbeatControls() {
+    if (heartbeatInterval) {
+      heartbeatInterval.setAttribute(
+        "aria-label",
+        heartbeatToggle?.checked === false ? "重新启用心跳后使用的默认间隔（分钟）" : "默认心跳间隔（分钟）",
+      );
+    }
+  }
+
+  async function loadHeartbeatSettings() {
+    try {
+      const response = await fetch(`${API}/settings/heartbeat`);
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "读取失败");
+      const heartbeat = data.heartbeat || {};
+      if (heartbeatToggle) heartbeatToggle.checked = heartbeat.enabled !== false;
+      if (heartbeatInterval) heartbeatInterval.value = String(heartbeat.defaultIntervalMinutes || 20);
+      syncHeartbeatControls();
+    } catch (err) {
+      showFeedback(heartbeatFeedback, err.message || "读取心跳设置失败", true);
+    }
+  }
+
+  heartbeatToggle?.addEventListener("change", syncHeartbeatControls);
+
+  saveHeartbeatBtn?.addEventListener("click", async () => {
+    const defaultIntervalMinutes = Number(heartbeatInterval?.value);
+    if (!Number.isInteger(defaultIntervalMinutes) || defaultIntervalMinutes < 1 || defaultIntervalMinutes > 1440) {
+      showFeedback(heartbeatFeedback, "请输入 1–1440 之间的整数分钟", true);
+      return;
+    }
+    saveHeartbeatBtn.disabled = true;
+    try {
+      const response = await fetch(`${API}/settings/heartbeat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: heartbeatToggle?.checked !== false,
+          defaultIntervalMinutes,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
+      showFeedback(heartbeatFeedback, data.heartbeat?.enabled ? "心跳设置已生效" : "心跳已关闭");
+      syncHeartbeatControls();
+    } catch (err) {
+      showFeedback(heartbeatFeedback, err.message || "保存失败", true);
+    } finally {
+      saveHeartbeatBtn.disabled = false;
+    }
+  });
+
   if (saveMapBtn) {
     saveMapBtn.addEventListener("click", async () => {
       const jsKey = mapKeyInput?.value?.trim() || "";
@@ -3350,6 +3409,10 @@ function initTTSSettings() {
       });
       if (tab === "social") loadSocialSettings();
       if (tab === "web-search") loadWebSearchSettings();
+      if (tab === "advanced") {
+        loadHeartbeatSettings();
+        loadMapSettings();
+      }
       if (tab === "update") loadUpdateSettings();
     }
   }

@@ -22,6 +22,10 @@ export function initializeSchema(db) {
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   // 迁移：conversations 加 external_party_id 列（保留外部渠道原始 ID，供回送投递）
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
+  // Persist the actual delivery outcome. Conversation rows are written before
+  // external dispatch so they can be rendered immediately; therefore their
+  // existence alone is not proof that the recipient received the message.
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
 
   // 迁移：FTS5 tokenizer 从默认 unicode61 升级到 trigram。
   // 默认 tokenizer 把中文整段当成一个 token（"咖啡偏好"被存为一个整体），
@@ -69,6 +73,7 @@ export function initializeSchema(db) {
       to_id       TEXT,              -- 接收者 ID（jarvis 发出时有值）
       content     TEXT    NOT NULL,
       channel     TEXT    NOT NULL DEFAULT '',
+      delivery_status TEXT NOT NULL DEFAULT '',
       timestamp   TEXT    NOT NULL,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
@@ -78,6 +83,21 @@ export function initializeSchema(db) {
   `)
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_delivery_status ON conversations(delivery_status)`) } catch {}
+  // A local TUI row is created and broadcast as one synchronous operation, so
+  // historical local assistant rows are safe to backfill as delivered. Do not
+  // infer this for external channels: older rows were also retained on failed
+  // external dispatches and therefore are not authoritative receipts.
+  try {
+    db.exec(`
+      UPDATE conversations
+      SET delivery_status = 'delivered'
+      WHERE role = 'jarvis'
+        AND channel = 'TUI'
+        AND delivery_status = ''
+    `)
+  } catch {}
   // 迁移：focus_absorbed 标记（动态上下文记忆池 3.5 「主线深化时剔除残留噪声」）。
   //   focus_absorbed=1 表示这条对话所属的专注帧已被压缩回填吸收（focus_conclusion 已写入仓库），
   //   下一轮主线注入对话窗口时默认 WHERE focus_absorbed=0 把它隐去。

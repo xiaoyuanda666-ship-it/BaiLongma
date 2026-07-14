@@ -835,6 +835,7 @@ export function insertConversation({
   role, from_id, to_id = null, content, timestamp,
   channel = '', external_party_id = '',
   focus_topic = null, open_question = 0, thread_id = null,
+  delivery_status = '',
 }) {
   const db = getDB()
   const fromId = normalizeConversationPartyId(from_id)
@@ -842,10 +843,43 @@ export function insertConversation({
   const topic = focus_topic == null ? currentFocusTopic : String(focus_topic || '')
   const threadId = thread_id == null ? currentThreadId : String(thread_id || '')
   const info = db.prepare(`
-    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel, external_party_id, focus_topic, open_question, thread_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(role, fromId, toId, content, timestamp, channel || '', external_party_id || '', topic, open_question ? 1 : 0, threadId)
+    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel, external_party_id, focus_topic, open_question, thread_id, delivery_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(role, fromId, toId, content, timestamp, channel || '', external_party_id || '', topic, open_question ? 1 : 0, threadId, delivery_status || '')
   return Number(info.lastInsertRowid) || 0
+}
+
+export function updateConversationDeliveryStatus(id, status) {
+  if (!id) return 0
+  const normalized = ['pending', 'delivered', 'failed'].includes(String(status)) ? String(status) : ''
+  const info = getDB().prepare(`UPDATE conversations SET delivery_status = ? WHERE id = ?`).run(normalized, id)
+  return info.changes || 0
+}
+
+// Return an identical, successfully delivered outbound message when the user
+// has not spoken since it was sent. This is the durable heartbeat idempotency
+// boundary: process restarts and long tick intervals must not turn silence into
+// a reason to send the same message again.
+export function findUnansweredDeliveredOutbound({ toId, content, channel = '', externalPartyId = '' } = {}) {
+  const normalizedId = normalizeConversationPartyId(toId)
+  if (!normalizedId || !String(content || '').trim()) return null
+  return getDB().prepare(`
+    SELECT id, timestamp, channel, external_party_id
+    FROM conversations
+    WHERE role = 'jarvis'
+      AND to_id = ?
+      AND content = ?
+      AND channel = ?
+      AND external_party_id = ?
+      AND delivery_status = 'delivered'
+      AND id > COALESCE((
+        SELECT MAX(id)
+        FROM conversations
+        WHERE role = 'user' AND from_id = ?
+      ), 0)
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(normalizedId, String(content), String(channel || ''), String(externalPartyId || ''), normalizedId) || null
 }
 
 // P0-1：给本轮触发判定的 user 消息回填 focus_topic
@@ -1169,7 +1203,7 @@ export function upsertUserProfile(profile = {}) {
 const RECENT_RAW_CONTEXT_FLOOR = 60
 const CONVERSATION_COLUMNS = `
   id, role, from_id, to_id, content, channel, timestamp, created_at,
-  external_party_id, focus_absorbed, focus_topic, open_question, thread_id
+  external_party_id, focus_absorbed, focus_topic, open_question, thread_id, delivery_status
 `
 
 function normalizeConversationLimit(limit, fallback = 20) {

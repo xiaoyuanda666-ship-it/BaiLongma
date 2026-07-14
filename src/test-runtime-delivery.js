@@ -118,7 +118,12 @@ try {
     allowedTargetIds: ['ID:000001'],
   })
 
-  assert.equal(result, '消息已发送至 ID:000001（TUI）')
+  const success = JSON.parse(result)
+  assert.equal(success.ok, true)
+  assert.equal(success.delivered, true)
+  assert.equal(success.message_sent, true)
+  assert.equal(success.target_id, 'ID:000001')
+  assert.equal(success.channel, 'TUI')
 
   const evt = await events.waitFor('message')
   assert.equal(evt.data.to, 'ID:000001')
@@ -141,6 +146,11 @@ try {
   assert.equal(row.channel, 'TUI')
   assert.equal(row.external_party_id, '')
   assert.equal(row.open_question, 0)
+  assert.equal(
+    dbModule.getDB().prepare('SELECT delivery_status FROM conversations WHERE id = ?').get(evt.data.conversation_id).delivery_status,
+    'delivered',
+    'local send is persisted as authoritative delivery evidence',
+  )
 
   const duplicateResult = await executeTool('send_message', {
     target_id: 'ID:000001',
@@ -152,13 +162,30 @@ try {
     allowedTargetIds: ['ID:000001'],
   })
   const duplicate = JSON.parse(duplicateResult)
-  assert.equal(duplicate.ok, false)
-  assert.equal(duplicate.skipped, 'duplicate_outbound_race')
+  assert.equal(duplicate.ok, true)
+  assert.equal(duplicate.delivered, true)
+  assert.equal(duplicate.message_sent, false)
+  assert.equal(duplicate.skipped, 'already_delivered_unanswered')
   const duplicateRows = dbModule.getDB().prepare(`
     SELECT COUNT(*) AS count FROM conversations
     WHERE role = 'jarvis' AND to_id = ? AND content = ?
   `).get('ID:000001', content)
   assert.equal(duplicateRows.count, 1, 'atomic idempotency prevents duplicate DB/outbound side effects')
+
+  dbModule.insertConversation({
+    role: 'user',
+    from_id: 'ID:000001',
+    to_id: 'jarvis',
+    content: 'Please answer again.',
+    timestamp: new Date().toISOString(),
+    channel: 'TUI',
+  })
+  assert.equal(dbModule.findUnansweredDeliveredOutbound({
+    toId: 'ID:000001',
+    content,
+    channel: 'TUI',
+    externalPartyId: '',
+  }), null, 'a new user message clears the unanswered-delivery boundary')
 
   console.log('PASS runtime delivery send_message preserves DB and SSE behavior')
 } finally {

@@ -154,9 +154,8 @@ assert(sys1.includes('Round-Local Context Channel'), 'system explains the <conte
 
 // =============================================================================
 // Wave 2: 场景规则段按需注入 gate
-// 默认 userMessage 为空 / 无信号位 → 8 段都不出现（除了 Platform Routing 的
-// "都不知道 → 走 CN 保守路径"分支，但 baseSystemArgs 也没传 country/timezone，
-// 它会触发该 fallback；其他 7 段不出现）。
+// 默认 userMessage 为空 / 无信号位 → 场景段都不出现。Platform Routing 即使
+// geo 缺失，也只有在当前请求确实需要选择视频/人物信息平台时才注入。
 // =============================================================================
 
 // 8.0 Neutral baseline：无 userMessage + 无信号位 → CORE 段保留、场景段不出现
@@ -168,11 +167,24 @@ assert(!sysNeutral.includes('WeChat Connection'), 'neutral input: no WeChat Conn
 assert(!sysNeutral.includes('WeChat Outbound Constraint'), 'neutral input: no WeChat Outbound block')
 assert(!sysNeutral.includes('## Focus Banner'), 'neutral input: no Focus Banner block')
 assert(!sysNeutral.includes('## Security Sandbox'), 'neutral input: no Security Sandbox block')
-// Neutral baseline 仍保留 CORE：Top-Level、Response Rules、Visual Surfaces 主段、Voice 段
+// Neutral baseline 只保留真正的 CORE；视觉、语音、TICK 等场景段不再常驻。
 assert(sysNeutral.includes('## Top-Level Behavior Rules'), 'neutral: CORE Top-Level kept')
-assert(sysNeutral.includes('## Visual Surfaces'), 'neutral: CORE Visual Surfaces main kept')
-assert(sysNeutral.includes('## Voice Input: Spoken Brevity'), 'neutral: CORE Voice kept')
-assert(sysNeutral.includes('### Kinds & Composition'), 'neutral: CORE Kinds & Composition kept')
+assert(!sysNeutral.includes('## Visual Surfaces'), 'neutral: Visual Surfaces omitted')
+assert(!sysNeutral.includes('## Voice Input: Spoken Brevity'), 'neutral: Voice rules omitted')
+assert(!sysNeutral.includes('### Kinds & Composition'), 'neutral: visual kind catalog omitted')
+assert(!sysNeutral.includes('## TICK Handling'), 'neutral: TICK rules omitted')
+assert(sysNeutral.includes('## Decision And Execution Core'), 'neutral: compact decision loop kept')
+assert(sysNeutral.includes('## Tool Usage Core'), 'neutral: compact tool rules kept')
+
+const sysVisual = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '给我展示一个进度面板' })
+assert(sysVisual.includes('## Visual Surfaces'), 'visual request: Visual Surfaces injected')
+assert(sysVisual.includes('### Kinds & Composition'), 'visual request: kind catalog injected')
+const sysVoice = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '你好', isVoiceTurn: true })
+assert(sysVoice.includes('## Voice Input: Spoken Brevity'), 'voice turn: spoken brevity injected')
+const sysTick = buildSystemPrompt({ agentName: 'Longma', persona: 'p', isTick: true })
+assert(sysTick.includes('## TICK Handling'), 'tick turn: TICK rules injected')
+assert(sysTick.includes('## Presence Sense And Spoken Proactivity'), 'tick turn: presence rules injected')
+assert(sysTick.includes('## Visual Surfaces'), 'tick turn: autonomous visual rules injected')
 
 // 8.1 Music gate
 const sysMusic = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '放首周杰伦的歌' })
@@ -234,22 +246,22 @@ const sysSb2 = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessag
 assert(sysSb2.includes('## Security Sandbox'), 'english sandbox: Security Sandbox injected')
 
 // 8.8 Platform Routing gate
-const sysPlatCN = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '你好', currentCountryCode: 'CN' })
+const sysPlatCN = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '帮我找一个视频', currentCountryCode: 'CN' })
 assert(sysPlatCN.includes('## Platform Routing'), 'CN country: Platform Routing injected')
-const sysPlatTZ = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '你好', currentTimezone: 'Asia/Shanghai' })
+const sysPlatTZ = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '查一下这个明星的资料', currentTimezone: 'Asia/Shanghai' })
 assert(sysPlatTZ.includes('## Platform Routing'), 'CN timezone: Platform Routing injected')
-const sysPlatUS = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '你好', currentCountryCode: 'US', currentTimezone: 'America/New_York' })
+const sysPlatUS = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '帮我找一个视频', currentCountryCode: 'US', currentTimezone: 'America/New_York' })
 assert(!sysPlatUS.includes('## Platform Routing'), 'US country+tz: Platform Routing NOT injected')
-// 保守 fallback：geo 都缺失 → 注入 CN 路径
-const sysPlatUnknown = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '你好' })
-assert(sysPlatUnknown.includes('## Platform Routing'), 'unknown geo: Platform Routing injected (default-to-CN)')
+// 保守 fallback 只在确实需要选平台时注入；普通聊天不再承担这段成本。
+const sysPlatUnknown = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '帮我找一个视频' })
+assert(sysPlatUnknown.includes('## Platform Routing'), 'route-relevant request with unknown geo: default-to-CN injected')
+assert(!sysNeutral.includes('## Platform Routing'), 'neutral request: Platform Routing omitted')
 
 // 8.9 CORE 永远在 —— 不论 gate 命中与否
 for (const s of [sysNeutral, sysMusic, sysVideo, sysWeather, sysWcConn, sysWcOut, sysFocus, sysSb, sysPlatCN, sysPlatUS]) {
   assert(s.includes('## Relationship Posture'), 'CORE: Relationship Posture always present')
   assert(s.includes('## Response Rules'), 'CORE: Response Rules always present')
   assert(s.includes('## Self-Sufficient Execution'), 'CORE: Self-Sufficient Execution always present')
-  assert(s.includes('## Visual Surfaces'), 'CORE: Visual Surfaces always present')
 }
 
 // 8.10 Token 节省估算：neutral baseline vs full-injection
@@ -261,7 +273,9 @@ const sysAllScenarios = buildSystemPrompt({
   hasActiveFocus: true,
   currentCountryCode: 'CN',
 })
-console.log(`\n[wave2] neutral CN-fallback length: ${sysNeutral.length} chars`)
+assert(sysNeutral.length < 26000, 'neutral prompt: stays below the 26K character budget')
+assert(sysAllScenarios.length < 36000, 'all-scenarios prompt: stays below the 36K character budget')
+console.log(`\n[wave2] neutral gated length: ${sysNeutral.length} chars`)
 console.log(`[wave2] all-scenarios injection length: ${sysAllScenarios.length} chars`)
 console.log(`[wave2] potential saving vs all-on: ${sysAllScenarios.length - sysNeutral.length} chars (~${Math.round((sysAllScenarios.length - sysNeutral.length) / 4)} tokens)`)
 

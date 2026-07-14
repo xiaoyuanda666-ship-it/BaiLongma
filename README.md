@@ -127,6 +127,8 @@ http://127.0.0.1:3721
 | `POST` | `/activate` | 写入 Provider 配置并激活 |
 | `POST` | `/settings/model` | 切换模型 |
 | `POST` | `/settings/temperature` | 调整温度 |
+| `GET` | `/settings/heartbeat` | 获取心跳开关和默认间隔 |
+| `POST` | `/settings/heartbeat` | 保存心跳开关和默认间隔 |
 | `GET` | `/settings/voice` | 获取语音识别设置 |
 | `POST` | `/settings/voice` | 保存语音识别设置 |
 | `GET` | `/settings/tts` | 获取 TTS 设置 |

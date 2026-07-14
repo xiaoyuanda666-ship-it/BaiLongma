@@ -8,7 +8,8 @@
 //   1) 按"动作意图"匹配（动词为主），不复用 keywords.js 的话题抽取
 //   2) ActionLog 保活：最近 10 次工具调用强制注入，保证跨轮连贯
 //   3) TICK 心跳保持精简：给自主判断、记忆和节奏控制；其它能力由 find_tool 按判断加载
-//   4) Fallback 安全网：最终工具数 < 8 时补 web + filesystem（最常用兜底）
+//   4) 不做通用 web/filesystem fallback：普通闲聊保持真正精简；漏掉的能力由
+//      常驻 find_tool 按需发现并装载。
 //   5) 用户轮保留已安装工具；Tick 通过 find_tool 按判断发现，避免安装等同于永久自治授权
 //   6) 多模态生成工具：mmCaps 已配置 AND 关键词命中才注入，避免太激进
 //
@@ -41,9 +42,6 @@ const CORE_TOOLS = [
   // 工具（比如关键词没命中导致 generate_image / exec_command 没进来），可调 find_tool 搜出来并当场装载。
   'find_tool',
   'ui_set',
-  // voice_retire：收起悬浮语音球。常驻很轻（一个小 schema），但保证语音对话轮一定可用；
-  // 何时调由 prompt 的 Voice Orb 段（仅语音轮注入）指导，非语音轮虽在工具表但不会被提示使用。
-  'voice_retire',
 ]
 
 const TASK_CTRL_FULL    = ['set_task', 'complete_task', 'update_task_step', 'review_work']
@@ -204,6 +202,19 @@ const REVIEW_TRIGGERS = [
   'review', 'double-check', 'double check', 'verify the work', 'check my work', 'sanity check',
 ]
 
+// 这些意图不需要在日常闲聊里常驻 schema：命中时才给，未命中时仍可通过
+// find_tool 的 TOOL_GROUPS 发现。任务词刻意保持偏窄，漏掉的任务只是不建
+// 持久 task，不会阻止 Agent 直接完成用户请求。
+const TASK_START_TRIGGERS = [
+  '多步任务', '分步任务', '创建任务', '开始任务', '建立任务', '任务计划',
+  '项目计划', '项目任务', '待办', 'todo', '里程碑', '路线图',
+  'multi-step task', 'start a task', 'create a task', 'task plan', 'roadmap', 'milestone',
+]
+const MEMORY_LOOKUP_TRIGGERS = [
+  '你记得', '还记得', '记不记得', '记忆', '回忆', '之前说过', '以前说过', '之前提过', '以前提过',
+  'remember', 'memory', 'recall',
+]
+
 // 触发词 → 工具组的单一数据源。selectTools（按轮注入）和 find_tool（模型主动搜工具）
 // 共用它，避免两处各维护一份中文关键词。注：CORE / task / memory / 多模态 mmCaps gate 等
 // 特殊注入逻辑仍在 selectTools 里，这里只收录"纯关键词触发的专业组"，正好是 find_tool 要搜的范围。
@@ -226,6 +237,8 @@ export const TOOL_GROUPS = [
   { triggers: MUSIC_GEN_TRIGGERS,    tools: [MM_GEN_TOOLS.music] },
   { triggers: IMAGE_GEN_TRIGGERS,    tools: [MM_GEN_TOOLS.image] },
   { triggers: REVIEW_TRIGGERS,       tools: REVIEW_TOOLS },
+  { triggers: TASK_START_TRIGGERS,   tools: TASK_CTRL_OPENER },
+  { triggers: MEMORY_LOOKUP_TRIGGERS, tools: ['search_memory', 'probe_memory'] },
 ]
 
 // 通用辅助：消息正文里是否含有给定触发词之一（lower-case 包含）。
@@ -309,6 +322,7 @@ export function selectTools(ctx = {}) {
     senderId = null,
     hasTask = false,
     hasRecall = false,
+    isVoiceTurn = false,
     mmCaps = [],
     recentActionLog = [],
     installedToolNames = [],
@@ -323,15 +337,22 @@ export function selectTools(ctx = {}) {
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
   const suppressed = new Set(['generate_video'])
 
-  // 任务控制：有任务 → 全组；没任务 → 仅 set_task（用户能开任务）
-  for (const t of (hasTask ? TASK_CTRL_FULL : TASK_CTRL_OPENER)) out.add(t)
+  // 任务控制只在已有任务或明确要求建立任务时出现。普通聊天无需为此携带
+  // task schema；没有命中的任务请求仍可通过 find_tool 按需发现 set_task。
+  if (hasTask || hits(body, TASK_START_TRIGGERS)) {
+    for (const t of (hasTask ? TASK_CTRL_FULL : TASK_CTRL_OPENER)) out.add(t)
+  }
 
-  // 记忆搜索：跟原行为对齐
-  if (senderId || hasRecall || isTick) out.add('search_memory')
+  const memoryLookup = hits(body, MEMORY_LOOKUP_TRIGGERS)
+  // 记忆已由 injector 自动召回并注入 context。search/probe 只在显式记忆
+  // 查询、深度 recall 后续轮，或 TICK 自主判断时提供。
+  if (memoryLookup || hasRecall || isTick) out.add('search_memory')
 
-  // probe_memory：无副作用的诊断工具，主 agent 想自检"如果现在问 X，会拉到什么"时用。
-  // 跟 search_memory 同一触发条件——任何会需要 search_memory 的场景都可能想用 probe_memory。
-  if (senderId || hasRecall || isTick) out.add('probe_memory')
+  // probe_memory 是诊断工具，不应因每条用户消息自动暴露。
+  if (memoryLookup || hasRecall || isTick) out.add('probe_memory')
+
+  // 语音悬浮球只存在于语音轮；普通 TUI 文本轮不需要此 schema。
+  if (isVoiceTurn) out.add('voice_retire')
 
   // 启动自检：一次性固定流程，依次检查文件读写、热点面板和视频模式。
   if (startupSelfCheckActive) {
@@ -433,15 +454,6 @@ export function selectTools(ctx = {}) {
   // 当前实现里 fastUserPath 只是个 hint——上面的策略已经天然偏紧；这里仅
   // 防御性地不做扩张。（不在 fastpath 里删工具，避免误删导致 agent "我不能"）
   void fastUserPath
-
-  // —— Fallback 安全网 ——
-  // 目标：避免"消息没传明确意图、agent 啥专业能力都没有"的尴尬。
-  // 阈值算法：CORE=7 + 通常 set_task=1 + senderId 带来 search_memory=1 = 9 是常态基线。
-  // < 12 大致表示"基线之外几乎没多组专业能力"，此时补两组最常用兜底（web + filesystem）。
-  if (!isTick && out.size < 12) {
-    for (const t of WEB_TOOLS) out.add(t)
-    for (const t of FILESYSTEM_TOOLS) out.add(t)
-  }
 
   // 最后一道兜底:被 suppressed 的工具不论谁加回来都剃掉。
   // 防御未来扩展时(新分组、新 fallback、新 marketplace 路径)破坏抑制语义。

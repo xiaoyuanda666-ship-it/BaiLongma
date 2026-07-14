@@ -14,7 +14,7 @@ function assert(condition, label) {
   console.error(`FAIL: ${label}`)
 }
 
-function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRevision = () => 0 } = {}) {
+function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRevision = () => 0, heartbeatEnabled = true, running = false } = {}) {
   let consumed = 0
   let awakened = 0
   let loop = null
@@ -36,7 +36,8 @@ function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRev
     consumeTickerTick: () => { consumed++ },
     decrementAwakeningTick: () => { awakened++ },
     isStartupSelfCheckActive: () => false,
-    isRunning: () => false,
+    isHeartbeatEnabled: () => heartbeatEnabled,
+    isRunning: () => running,
     setScheduler: () => {},
     setInterruptCallback: () => {},
     isRateLimited: () => false,
@@ -59,6 +60,22 @@ function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRev
     loop,
     counts: () => ({ consumed, awakened }),
   }
+}
+
+{
+  let turns = 0
+  const h = makeHarness({ heartbeatEnabled: false, running: true, run: async () => { turns++ } })
+  await h.loop.start({ runImmediateTick: true })
+  assert(turns === 0, 'disabled heartbeat skips the autonomous startup Tick')
+  await h.loop.onTick()
+  assert(turns === 0, 'disabled heartbeat rejects a direct autonomous Tick trigger')
+}
+
+{
+  let turns = 0
+  const h = makeHarness({ queuedMessage: true, heartbeatEnabled: false, run: async () => { turns++ } })
+  await h.loop.onTick()
+  assert(turns === 1, 'disabled heartbeat does not block queued user messages')
 }
 
 {

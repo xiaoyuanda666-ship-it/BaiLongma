@@ -98,6 +98,27 @@ async function loadFresh(json) {
   assert(config.needsActivation === true, 'D: 损坏文件 → 未激活且不崩溃')
 }
 
+// ── 场景 HB：心跳开关和默认间隔可持久化，并同步运行时默认节奏 ──
+{
+  const { config, getHeartbeatConfig, setHeartbeatConfig } = await loadFresh({
+    heartbeat: { enabled: false, defaultIntervalMinutes: 45 },
+  })
+  const loaded = getHeartbeatConfig()
+  assert(loaded.enabled === false, 'HB: 已保存的心跳关闭状态被加载')
+  assert(loaded.defaultIntervalMinutes === 45, 'HB: 已保存的默认心跳间隔被加载')
+  assert(config.tickInterval === 45 * 60 * 1000, 'HB: 默认心跳间隔同步到运行时毫秒值')
+
+  const updated = setHeartbeatConfig({ enabled: true, defaultIntervalMinutes: 90 })
+  assert(updated.enabled === true && updated.defaultIntervalMinutes === 90, 'HB: 心跳设置可即时更新')
+  const stored = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(stored.heartbeat.enabled === true, 'HB: 心跳开关写入 config.json')
+  assert(stored.heartbeat.defaultIntervalMinutes === 90, 'HB: 默认心跳间隔写入 config.json')
+  let invalidRejected = false
+  try { setHeartbeatConfig({ enabled: false, defaultIntervalMinutes: 0 }) } catch { invalidRejected = true }
+  assert(invalidRejected, 'HB: 拒绝超出范围的默认心跳间隔')
+  assert(getHeartbeatConfig().enabled === true, 'HB: 非法请求不会部分修改运行时心跳状态')
+}
+
 // ── 场景 E：schema 迁移 v0 → v3，旧版 seedance、LLM 和 voice 块拆到独立文件 ──
 {
   const seedanceFile = path.join(tmp, 'seedance.json')

@@ -37,7 +37,7 @@ function hasNone(tools, names) {
   assert(hasAll(tools, ['read_file', 'write_file', 'list_dir']),
     `1) filesystem keywords → fs group injected (got: ${tools.join(',')})`)
   assert(has(tools, 'send_message'), '1) core send_message present')
-  assert(has(tools, 'search_memory'), '1) senderId present → search_memory in')
+  assert(!has(tools, 'search_memory'), '1) ordinary filesystem request does not expose memory diagnostics')
 }
 
 // ====== 2) Web 触发 ======
@@ -64,17 +64,19 @@ function hasNone(tools, names) {
     `3) reminder keyword → manage_reminder injected (got: ${tools.join(',')})`)
 }
 
-// ====== 4) 短闲聊 → Fallback 安全网 ======
+// ====== 4) 短闲聊 → 真正精简基线 ======
 {
   const tools = selectTools({
     messageBody: '闲聊两句',
     isTick: false,
     senderId: 'ID:000001',
   })
-  // 没有强意图关键词，fallback 应该补 web + filesystem
-  assert(hasAll(tools, ['web_search', 'read_file']),
-    `4) sparse msg → fallback adds web + fs (got: ${tools.join(',')})`)
+  // 没有强意图关键词时，不应补 web/filesystem；Agent 可经 find_tool 按需发现。
+  assert(hasNone(tools, ['web_search', 'read_file', 'write_file', 'delete_file', 'make_dir']),
+    `4) sparse msg stays sparse (got: ${tools.join(',')})`)
   assert(has(tools, 'send_message'), '4) core still present')
+  assert(hasNone(tools, ['set_task', 'search_memory', 'probe_memory', 'voice_retire']),
+    '4) sparse msg excludes task, memory diagnostics, and voice-only tool')
 }
 
 // ====== 5) TICK 精简基线 + 按需发现 ======
@@ -89,7 +91,7 @@ function hasNone(tools, names) {
   assert(has(tools, 'find_tool'), '5) TICK has capability discovery')
   assert(has(tools, 'search_memory'), '5) TICK has search_memory')
   assert(has(tools, 'set_tick_interval'), '5) TICK has set_tick_interval')
-  assert(tools.length === 9, `5) clean TICK baseline stays compact at 9 tools (got ${tools.length}: ${tools.join(',')})`)
+  assert(tools.length === 7, `5) clean TICK baseline stays compact at 7 tools (got ${tools.length}: ${tools.join(',')})`)
   assert(hasNone(tools, [
     'web_search', 'read_file', 'manage_reminder', 'manage_prefetch_task',
     'hotspot_mode', 'exec_command', 'install_tool', 'media_mode',
@@ -125,7 +127,7 @@ function hasNone(tools, names) {
     '6) hasTask also unlocks focus_banner')
 }
 
-// ====== 6b) hasTask=false → 只 set_task（opener） ======
+// ====== 6b) 无任务闲聊不暴露 set_task；明确任务意图才给 ======
 {
   const tools = selectTools({
     messageBody: '正常闲聊',
@@ -133,9 +135,37 @@ function hasNone(tools, names) {
     senderId: 'ID:000001',
     hasTask: false,
   })
-  assert(has(tools, 'set_task'), '6b) no task → set_task still available (opener)')
+  assert(!has(tools, 'set_task'), '6b) no task + no task intent → set_task omitted')
   assert(hasNone(tools, ['complete_task', 'update_task_step']),
     '6b) no task → no complete_task / update_task_step')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '帮我创建一个多步任务，分阶段完成这个项目',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'set_task'), '6c) explicit task intent → set_task injected')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '你还记得我们之前说过的部署方案吗？',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(hasAll(tools, ['search_memory', 'probe_memory']), '6d) explicit memory intent → memory tools injected')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '先这样，再见',
+    isTick: false,
+    senderId: 'ID:000001',
+    isVoiceTurn: true,
+  })
+  assert(has(tools, 'voice_retire'), '6e) voice turn → voice_retire injected')
 }
 
 // ====== 7) Installed 工具：用户轮直给，Tick 按需发现 ======

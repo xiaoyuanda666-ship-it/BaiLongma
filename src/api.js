@@ -1,5 +1,4 @@
 import http from 'http'
-import fs from 'fs'
 import crypto from 'crypto'
 import { WebSocketServer } from 'ws'
 import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-server.js'
@@ -7,8 +6,7 @@ import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
 import { getConfig, insertUISignal } from './db.js'
 import { emitEvent, setStickyEvent } from './events.js'
-import { getNetworkConfig, getSecurity, setSecurity } from './config.js'
-import { paths } from './paths.js'
+import { getNetworkConfig, getSecurity, getVoiceRuntimeConfig, setSecurity } from './config.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { jsonResponse } from './api/utils.js'
 import { handleActivationRoutes } from './api/routes/activation.js'
@@ -157,11 +155,11 @@ function attachCloudASR() {
         try {
           const msg = JSON.parse(raw.toString())
           if (msg.type !== 'config') return
-          let rawCfg = {}
-          try { rawCfg = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
-          const provider = rawCfg.voiceProvider || msg.provider || 'aliyun'
+          const rawCfg = getVoiceRuntimeConfig(msg.provider || 'aliyun')
+          const provider = rawCfg.provider
+          const lang = msg.lang || rawCfg.lang || 'zh'
           session = createCloudASRSession(
-            { provider, lang: msg.lang || 'zh', ...rawCfg },
+            { ...rawCfg, provider, lang },
             (text, isFinal, seg) => {
               try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg })) } catch {}
             },
@@ -174,7 +172,14 @@ function attachCloudASR() {
             },
           )
           configured = true
-        } catch {}
+        } catch (err) {
+          try {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: `ASR 初始化失败: ${err?.message || String(err)}`,
+            }))
+          } catch {}
+        }
         return
       }
 

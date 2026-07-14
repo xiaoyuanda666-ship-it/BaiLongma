@@ -9,6 +9,7 @@ export async function selectInjectorTools({
   hasRecall = false,
   actionLog = [],
   startupSelfCheckActive = false,
+  isVoiceTurn = false,
 } = {}) {
   const { listCapabilities } = await import('../../providers/registry.js')
   const mmCaps = listCapabilities()
@@ -24,6 +25,7 @@ export async function selectInjectorTools({
     recentActionLog: actionLog,
     installedToolNames: installedNames,
     startupSelfCheckActive,
+    isVoiceTurn,
     // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
   })
 }
