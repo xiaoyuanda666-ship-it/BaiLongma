@@ -87,46 +87,94 @@ const createPrimaryPanel = () => `
 
 const createSecondaryPanel = () => `
 <aside id="panel-l2" class="panel">
-  <header class="panel-stats">
-    <div class="stat">
-      <span class="stat-label">状态</span>
-      <div class="stat-value live" id="conn-state"><span class="live-dot"></span>Token流</div>
-    </div>
-    <div class="stat">
-      <span class="stat-label">节点</span>
-      <div class="stat-value" id="node-count">0</div>
-    </div>
-    <div class="stat">
-      <span class="stat-label">连线</span>
-      <div class="stat-value" id="link-count">0</div>
-    </div>
-    <div class="stat">
-      <span class="stat-label">tok/s</span>
-      <div class="stat-value" id="tok-rate">—</div>
-    </div>
-    <div class="stat" id="mem-recall-stat" title="近 1 小时记忆召回次数 / 平均拉取条数。点击查看明细">
-      <span class="stat-label">召回/h</span>
-      <div class="stat-value" id="mem-recall-rate">—</div>
-    </div>
-    <div class="stat" id="mem-extract-stat" title="近 1 小时记忆抽取次数 / 平均写入条数。点击查看明细">
-      <span class="stat-label">抽取/h</span>
-      <div class="stat-value" id="mem-extract-rate">—</div>
-    </div>
-  </header>
-
   <!-- 专注帧 UI 已隐藏（后端 focus stack 仍在工作，给 LLM 注入上下文）。
        要恢复观察面板时把对应 HTML 还原即可——app.js 渲染逻辑保留着，靠 getElementById 返回 null 自动 no-op。 -->
 
-  <div class="stream-meta">
-    <div>
-      <div class="stream-title-text">自主行动机制 · Tick</div>
-      <div class="stream-subtitle">心跳 · 思考 · 工具</div>
-    </div>
-    <span class="pill pill-warm" id="pill-l2">流式传输</span>
-  </div>
+  <div class="l2-dashboard">
+    <section class="l2-module heartbeat-monitor" aria-labelledby="heartbeat-monitor-title">
+      <header class="panel-stats heartbeat-stats">
+        <div class="stat">
+          <span class="stat-label">状态</span>
+          <div class="stat-value live" id="conn-state"><span class="live-dot"></span>Token流</div>
+        </div>
+        <div class="stat">
+          <span class="stat-label">节点</span>
+          <div class="stat-value" id="node-count">0</div>
+        </div>
+        <div class="stat">
+          <span class="stat-label">连线</span>
+          <div class="stat-value" id="link-count">0</div>
+        </div>
+        <div class="stat">
+          <span class="stat-label">tok/s</span>
+          <div class="stat-value" id="tok-rate">—</div>
+        </div>
+        <div class="stat" id="mem-recall-stat" title="近 1 小时记忆召回次数 / 平均拉取条数。点击查看明细">
+          <span class="stat-label">召回/h</span>
+          <div class="stat-value" id="mem-recall-rate">—</div>
+        </div>
+        <div class="stat" id="mem-extract-stat" title="近 1 小时记忆抽取次数 / 平均写入条数。点击查看明细">
+          <span class="stat-label">抽取/h</span>
+          <div class="stat-value" id="mem-extract-rate">—</div>
+        </div>
+      </header>
+      <div class="l2-module-head">
+        <div>
+          <div class="l2-module-kicker">HEARTBEAT</div>
+          <h2 class="l2-module-title" id="heartbeat-monitor-title">意识心跳</h2>
+        </div>
+        <span class="heartbeat-state" id="heartbeat-state" data-state="waiting">
+          <span class="heartbeat-state-dot"></span>
+          <span id="heartbeat-state-label">等待连接</span>
+        </span>
+      </div>
+      <div class="heartbeat-chart" id="heartbeat-chart" role="img" aria-label="意识心跳实时波形">
+        <svg viewBox="0 0 320 72" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="heartbeat-fill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--warm)" stop-opacity="0.24"></stop>
+              <stop offset="100%" stop-color="var(--warm)" stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+          <path class="heartbeat-gridline" d="M0 36 H320"></path>
+          <path class="heartbeat-area" id="heartbeat-area"></path>
+          <path class="heartbeat-wave" id="heartbeat-wave"></path>
+        </svg>
+        <span class="heartbeat-sweep" aria-hidden="true"></span>
+      </div>
+      <div class="heartbeat-facts">
+        <span><b id="heartbeat-count">0</b> 次心跳</span>
+        <span id="heartbeat-last">等待首次 Tick</span>
+      </div>
+    </section>
 
-  <div class="stream">
-    <div class="stream-inner" id="si-l2"></div>
+    <section class="l2-module action-log-module" aria-labelledby="action-log-title">
+      <div class="l2-module-head compact">
+        <div>
+          <div class="l2-module-kicker">ACTION LOG</div>
+          <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
+        </div>
+        <span class="l2-module-count" id="action-log-count">0</span>
+      </div>
+      <div class="action-log" id="action-log" aria-live="polite">
+        <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
+      </div>
+    </section>
+
+    <section class="l2-module cognition-module" aria-labelledby="cognition-title">
+      <div class="l2-module-head compact cognition-head">
+        <div>
+          <div class="l2-module-kicker">LIVE COGNITION</div>
+          <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
+        </div>
+        <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
+      </div>
+      <div class="stream cognition-stream">
+        <div class="stream-inner" id="si-l2">
+          <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+        </div>
+      </div>
+    </section>
   </div>
 </aside>
 `;

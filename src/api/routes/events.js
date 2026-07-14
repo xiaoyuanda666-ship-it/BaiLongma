@@ -1,8 +1,17 @@
 import { addSSEClient, flushStickyEvents, removeSSEClient } from '../../events.js'
+import { getBrainUiEventHistory } from '../../db.js'
 import { getTerminalStreamSnapshot } from '../../terminal-stream.js'
 import { jsonResponse } from '../utils.js'
 
 export async function handleEventRoutes(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/events/history') {
+    const requestedPath = url.searchParams.get('path')
+    const path = requestedPath === 'all' ? 'all' : (requestedPath === 'l1' ? 'l1' : 'l2')
+    const limit = Number(url.searchParams.get('limit') || 160)
+    jsonResponse(res, 200, { ok: true, ...getBrainUiEventHistory({ path, limit }) })
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname === '/events') {
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',

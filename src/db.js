@@ -7,6 +7,7 @@ export * from './db/repositories/reminders.js'
 export * from './db/repositories/prefetch.js'
 export * from './db/repositories/media-library.js'
 export * from './db/repositories/audits.js'
+export * from './db/repositories/brain-ui-events.js'
 export * from './db/repositories/thread-state.js'
 
 const CANONICAL_AGENT_ENTITY = 'agent:jarvis'

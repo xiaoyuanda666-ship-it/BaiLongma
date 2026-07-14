@@ -165,7 +165,23 @@ body {
 }
 
 #panel-l1 { left: 20px; }
-#panel-l2 { right: 20px; }
+#panel-l2 {
+  right: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  overflow: hidden;
+}
+
+#panel-l2 .heartbeat-stats {
+  gap: 12px;
+  padding: 0 0 12px;
+  margin-bottom: 12px;
+}
 
 .panel-identity {
   display: flex;
@@ -514,6 +530,317 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+}
+
+/* ── L2 / 自主意识观测台 ─────────────────────────────────────── */
+.l2-dashboard {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.l2-module {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--warm) 4%, transparent), transparent 45%),
+    color-mix(in srgb, var(--panel) 84%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+}
+
+.l2-module-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.l2-module-head.compact {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.l2-module-kicker {
+  margin-bottom: 2px;
+  color: var(--dim);
+  font: 500 8px/1.2 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.18em;
+}
+
+.l2-module-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.heartbeat-state,
+.cognition-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 21px;
+  padding: 2px 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: 0.04em;
+}
+
+.heartbeat-state-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 currentColor;
+}
+
+.heartbeat-state[data-state="alive"] {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 35%, transparent);
+  background: color-mix(in srgb, var(--warm) 8%, transparent);
+}
+
+.heartbeat-state[data-state="alive"] .heartbeat-state-dot {
+  animation: heartbeat-state-pulse 1.8s ease-in-out infinite;
+}
+
+.heartbeat-state[data-state="offline"] {
+  color: #d58d8d;
+  border-color: rgba(213, 141, 141, 0.28);
+}
+
+@keyframes heartbeat-state-pulse {
+  0%, 100% { opacity: 0.45; box-shadow: 0 0 0 0 color-mix(in srgb, var(--warm) 0%, transparent); }
+  45% { opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--warm) 10%, transparent); }
+}
+
+.heartbeat-chart {
+  position: relative;
+  height: 72px;
+  margin: 0 -2px;
+  overflow: hidden;
+  border-radius: 7px;
+  background:
+    linear-gradient(color-mix(in srgb, var(--warm) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--warm) 5%, transparent) 1px, transparent 1px);
+  background-size: 16px 18px;
+}
+
+.heartbeat-chart svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.heartbeat-gridline {
+  fill: none;
+  stroke: color-mix(in srgb, var(--warm) 13%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 5;
+}
+
+.heartbeat-area {
+  fill: url(#heartbeat-fill);
+  stroke: none;
+}
+
+.heartbeat-wave {
+  fill: none;
+  stroke: var(--warm);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--warm) 42%, transparent));
+}
+
+.heartbeat-sweep {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 42px;
+  opacity: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--warm) 8%, transparent));
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+
+.heartbeat-monitor[data-beat="active"] .heartbeat-sweep {
+  animation: heartbeat-sweep 0.72s ease-out;
+}
+
+@keyframes heartbeat-sweep {
+  0% { opacity: 0; transform: translateX(-100%); }
+  18% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(330px); }
+}
+
+.heartbeat-facts {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+  color: var(--dim);
+  font: 500 8.5px/1.4 "JetBrains Mono", ui-monospace, monospace;
+}
+
+.heartbeat-facts b {
+  color: var(--warm);
+  font-weight: 600;
+}
+
+.action-log-module {
+  height: clamp(180px, 25vh, 220px);
+  display: flex;
+  flex-direction: column;
+}
+
+.l2-module-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--line-strong) 42%, transparent);
+  font: 500 9px/1 "JetBrains Mono", ui-monospace, monospace;
+}
+
+.action-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.action-log-empty,
+.cognition-empty {
+  color: var(--dim);
+  font-size: 9.5px;
+  line-height: 1.6;
+}
+
+.action-log-empty {
+  padding: 20px 12px 3px;
+  text-align: center;
+}
+
+.action-log-entry {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
+  color: var(--ink2);
+  font-size: 9.5px;
+}
+
+.action-log-entry:first-child {
+  border-top: 0;
+}
+
+.action-log-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warm);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--warm) 42%, transparent);
+}
+
+.action-log-entry[data-kind="complete"] .action-log-dot {
+  background: #7fcf8f;
+  box-shadow: none;
+}
+
+.action-log-entry[data-kind="failed"] .action-log-dot {
+  background: var(--dim);
+  box-shadow: none;
+}
+
+.action-log-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-log-time {
+  color: var(--dim);
+  font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
+}
+
+.cognition-module {
+  flex: 1 1 180px;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+}
+
+.cognition-state[data-state="thinking"],
+.cognition-state[data-state="tool"] {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 35%, transparent);
+  background: color-mix(in srgb, var(--warm) 8%, transparent);
+}
+
+.cognition-state[data-state="thinking"]::before,
+.cognition-state[data-state="tool"]::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: neb-blink 1.2s ease-in-out infinite;
+}
+
+.cognition-state[data-state="done"] {
+  color: #7fcf8f;
+  border-color: rgba(127, 207, 143, 0.28);
+}
+
+.cognition-stream {
+  margin-right: 0;
+  padding-right: 0;
+}
+
+.cognition-stream .stream-inner {
+  min-height: 100%;
+}
+
+.cognition-stream .stream-line:first-of-type {
+  padding-top: 4px;
+}
+
+.cognition-empty {
+  margin: auto 0;
+  padding: 18px 14px;
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heartbeat-state[data-state="alive"] .heartbeat-state-dot,
+  .cognition-state[data-state="thinking"]::before,
+  .cognition-state[data-state="tool"]::before {
+    animation: none;
+  }
 }
 
 .panel-actions {

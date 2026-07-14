@@ -1018,6 +1018,379 @@ const L2 = new ThoughtStream("si-l2", "warm", {
   toolDetailLength: 220,
 });
 
+// ── L2 意识观测：心跳图、行动日志、实时认知状态 ────────────────
+// 波形表达 SSE 意识循环仍然在线；真正的 Tick 到来时会触发更强的一次脉冲。
+// 行动日志只存工具动作的人类可读摘要；完整参数/结果不写入浏览器存储。
+const ACTION_LOG_KEY = "bailongma-action-log-v1";
+const HEARTBEAT_COUNT_KEY = "bailongma-heartbeat-count-v1";
+const ACTION_LOG_LIMIT = 40;
+const heartbeatMonitorEl = document.querySelector(".heartbeat-monitor");
+const heartbeatWaveEl = document.getElementById("heartbeat-wave");
+const heartbeatAreaEl = document.getElementById("heartbeat-area");
+const heartbeatStateEl = document.getElementById("heartbeat-state");
+const heartbeatStateLabelEl = document.getElementById("heartbeat-state-label");
+const heartbeatCountEl = document.getElementById("heartbeat-count");
+const heartbeatLastEl = document.getElementById("heartbeat-last");
+const actionLogEl = document.getElementById("action-log");
+const actionLogCountEl = document.getElementById("action-log-count");
+const cognitionStateEl = document.getElementById("cognition-state");
+const cognitionEmptyEl = document.getElementById("cognition-empty");
+
+function readHeartbeatStorage(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value == null ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+let actionLog = readHeartbeatStorage(ACTION_LOG_KEY, []);
+if (!Array.isArray(actionLog)) actionLog = [];
+actionLog = actionLog
+  .filter(entry => entry && typeof entry.text === "string" && Number.isFinite(Number(entry.ts)))
+  .slice(-ACTION_LOG_LIMIT);
+let heartbeatCount = Math.max(0, Number(readHeartbeatStorage(HEARTBEAT_COUNT_KEY, 0)) || 0);
+let lastHeartbeatAt = 0;
+let activeHeartbeatRound = false;
+let heartbeatConnected = false;
+
+function heartbeatClock(ts) {
+  return new Date(Number(ts) || Date.now()).toLocaleTimeString("zh-CN", {
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function renderActionLog() {
+  if (!actionLogEl) return;
+  actionLogEl.replaceChildren();
+  const visibleEntries = actionLog.slice().reverse();
+  if (visibleEntries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "action-log-empty";
+    empty.id = "action-log-empty";
+    empty.textContent = "Agent 最近执行的文件、命令和工具动作会显示在这里";
+    actionLogEl.appendChild(empty);
+  } else {
+    for (const entry of visibleEntries) {
+      const row = document.createElement("div");
+      row.className = "action-log-entry";
+      row.dataset.kind = entry.kind || "action";
+      const dot = document.createElement("span");
+      dot.className = "action-log-dot";
+      const textEl = document.createElement("span");
+      textEl.className = "action-log-text";
+      textEl.textContent = entry.text;
+      textEl.title = entry.text;
+      const timeEl = document.createElement("time");
+      timeEl.className = "action-log-time";
+      timeEl.dateTime = new Date(entry.ts).toISOString();
+      timeEl.textContent = heartbeatClock(entry.ts);
+      row.append(dot, textEl, timeEl);
+      actionLogEl.appendChild(row);
+    }
+  }
+  if (actionLogCountEl) actionLogCountEl.textContent = String(actionLog.length);
+}
+
+function describeAction(name, args = {}, result = "") {
+  const parsedResult = L2.parseJsonResult(result);
+  const label = L2.toolLabel(name || "tool");
+  const subject = L2.formatToolSubject(name, args, parsedResult);
+  return subject ? `${label} · ${subject}` : label;
+}
+
+function addActionLogEntry(name, args = {}, result = "", ok = true, ts = Date.now()) {
+  actionLog.push({
+    text: describeAction(name, args, result),
+    kind: ok === false ? "failed" : "action",
+    tool: String(name || "tool"),
+    ts: Number(ts) || Date.now(),
+  });
+  actionLog = actionLog.slice(-ACTION_LOG_LIMIT);
+  try { localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(actionLog)); } catch {}
+  renderActionLog();
+}
+
+function beginHeartbeatRound(ts = Date.now()) {
+  activeHeartbeatRound = true;
+  lastHeartbeatAt = Number(ts) || Date.now();
+  heartbeatCount += 1;
+  try { localStorage.setItem(HEARTBEAT_COUNT_KEY, JSON.stringify(heartbeatCount)); } catch {}
+  updateHeartbeatFacts();
+  triggerHeartbeatPulse(1);
+}
+
+function finishHeartbeatRound() {
+  if (!activeHeartbeatRound) return;
+  activeHeartbeatRound = false;
+}
+
+function rebuildActionLogFromHistory(events) {
+  return events
+    .filter(event => event?.type === "tool_call" && event?.data?.name)
+    .map(event => ({
+      text: describeAction(event.data.name, event.data.args, event.data.result),
+      kind: event.data.ok === false ? "failed" : "action",
+      tool: String(event.data.name),
+      ts: Date.parse(event.ts) || Date.now(),
+    }))
+    .slice(-ACTION_LOG_LIMIT);
+}
+
+function updateHeartbeatFacts() {
+  if (heartbeatCountEl) heartbeatCountEl.textContent = String(heartbeatCount);
+  if (!heartbeatLastEl) return;
+  if (!lastHeartbeatAt) {
+    heartbeatLastEl.textContent = "等待首次 Tick";
+    return;
+  }
+  const elapsed = Math.max(0, Date.now() - lastHeartbeatAt);
+  if (elapsed < 60_000) heartbeatLastEl.textContent = "刚刚发生";
+  else if (elapsed < 3_600_000) heartbeatLastEl.textContent = `${Math.floor(elapsed / 60_000)} 分钟前`;
+  else if (elapsed < 86_400_000) heartbeatLastEl.textContent = `${Math.floor(elapsed / 3_600_000)} 小时前`;
+  else heartbeatLastEl.textContent = `${Math.floor(elapsed / 86_400_000)} 天前`;
+}
+
+function setHeartbeatConnection(state, label) {
+  heartbeatConnected = state === "alive";
+  if (heartbeatStateEl) heartbeatStateEl.dataset.state = state;
+  if (heartbeatStateLabelEl) heartbeatStateLabelEl.textContent = label;
+}
+
+function setCognitionState(label, state = "idle") {
+  if (!cognitionStateEl) return;
+  cognitionStateEl.textContent = label;
+  cognitionStateEl.dataset.state = state;
+}
+
+function revealCognitionStream() {
+  if (cognitionEmptyEl?.parentElement) cognitionEmptyEl.remove();
+}
+
+function restoreUserStreamHistory(events) {
+  const history = Array.isArray(events) ? events.slice(-120) : [];
+  if (history.length === 0 || !L1.el) return;
+
+  L1.beginRound();
+  L1.el.replaceChildren();
+  let roundActive = false;
+
+  for (const event of history) {
+    const type = event?.type;
+    const data = event?.data || {};
+    switch (type) {
+      case "message_received": {
+        roundActive = true;
+        L1.beginRound();
+        const parsed = parseUserMessageInput(data.input);
+        L1.newLine("user message received", {
+          content: parsed.content,
+          time: parsed.time || heartbeatClock(Date.parse(event.ts) || Date.now()),
+        });
+        L1.startThinkingSession();
+        break;
+      }
+      case "stream_start":
+        if (roundActive) L1.startThinkingSession();
+        break;
+      case "stream_end":
+        if (roundActive) L1.stopThinking();
+        break;
+      case "tool_preparing": {
+        if (!roundActive) break;
+        const label = data.name ? L1.toolLabel(data.name) : "工具";
+        L1.setStatus(`准备调用 ${label}…`, "busy");
+        break;
+      }
+      case "tool_executing": {
+        if (!roundActive) break;
+        const label = data.name ? L1.toolLabel(data.name) : "工具";
+        L1.setStatus(`正在执行 ${label}…`, "busy");
+        break;
+      }
+      case "tool_call":
+        if (roundActive) L1.tool(data.name, data.args, data.result, data.ok);
+        break;
+      case "response":
+        if (roundActive) L1.end();
+        roundActive = false;
+        break;
+      case "processing_preempted":
+      case "message_dropped":
+      case "protocol_violation":
+      case "error":
+        if (roundActive) L1.end();
+        roundActive = false;
+        break;
+      case "llm_retry":
+      case "message_requeued":
+        if (roundActive) L1.setStatus("等待重试…", "busy");
+        break;
+    }
+  }
+
+  if (roundActive) {
+    L1.stopThinking();
+    L1.setStatus("上次会话未完成", "failed");
+  }
+}
+
+function restoreCognitionHistory(events) {
+  const history = Array.isArray(events) ? events.slice(-120) : [];
+  if (history.length === 0 || !L2.el) return;
+
+  L2.beginRound();
+  L2.el.replaceChildren();
+  let roundActive = false;
+  let lastSettledState = "idle";
+
+  for (const event of history) {
+    const type = event?.type;
+    const data = event?.data || {};
+    switch (type) {
+      case "tick":
+        roundActive = true;
+        L2.beginRound();
+        L2.newLine("heartbeat tick", { time: heartbeatClock(Date.parse(event.ts) || Date.now()) });
+        L2.startThinkingSession();
+        lastSettledState = "thinking";
+        break;
+      case "stream_start":
+        if (roundActive) L2.startThinkingSession();
+        break;
+      case "stream_end":
+        if (roundActive) L2.stopThinking();
+        break;
+      case "tool_preparing": {
+        if (!roundActive) break;
+        const label = data.name ? L2.toolLabel(data.name) : "工具";
+        L2.setStatus(`准备调用 ${label}…`, "busy");
+        lastSettledState = "tool";
+        break;
+      }
+      case "tool_executing": {
+        if (!roundActive) break;
+        const label = data.name ? L2.toolLabel(data.name) : "工具";
+        L2.setStatus(`正在执行 ${label}…`, "busy");
+        lastSettledState = "tool";
+        break;
+      }
+      case "tool_call":
+        if (roundActive) {
+          L2.tool(data.name, data.args, data.result, data.ok);
+          lastSettledState = "tool";
+        }
+        break;
+      case "response":
+        if (roundActive) L2.end();
+        roundActive = false;
+        lastSettledState = "done";
+        break;
+      case "processing_preempted":
+      case "message_dropped":
+      case "protocol_violation":
+      case "error":
+        if (roundActive) L2.end();
+        roundActive = false;
+        lastSettledState = "interrupted";
+        break;
+      case "llm_retry":
+      case "message_requeued":
+        if (roundActive) L2.setStatus("等待重试…", "busy");
+        break;
+    }
+  }
+
+  if (roundActive) {
+    L2.stopThinking();
+    L2.clearStatus();
+    setCognitionState("上次未完成", "idle");
+  } else if (lastSettledState === "done") {
+    setCognitionState("最近一轮完成", "done");
+  } else if (lastSettledState === "interrupted") {
+    setCognitionState("最近一轮中止", "idle");
+  }
+}
+
+async function loadBrainUiHistory() {
+  try {
+    const response = await fetch(`${API}/events/history?path=all&limit=240`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok || !Array.isArray(payload.events)) throw new Error(payload.error || "历史读取失败");
+
+    const l1Events = payload.events.filter(event => event?.path === "l1");
+    const l2Events = payload.events.filter(event => !event?.path || event.path === "l2");
+    actionLog = rebuildActionLogFromHistory(payload.events);
+    heartbeatCount = Math.max(0, Number(payload.heartbeatCount) || 0);
+    lastHeartbeatAt = l2Events.filter(event => event?.type === "tick").at(-1)?.ts || 0;
+    if (lastHeartbeatAt) lastHeartbeatAt = Date.parse(lastHeartbeatAt) || 0;
+    try {
+      localStorage.setItem(ACTION_LOG_KEY, JSON.stringify(actionLog));
+      localStorage.setItem(HEARTBEAT_COUNT_KEY, JSON.stringify(heartbeatCount));
+    } catch {}
+    renderActionLog();
+    updateHeartbeatFacts();
+    restoreUserStreamHistory(l1Events);
+    restoreCognitionHistory(l2Events);
+  } catch (err) {
+    // 旧后端或临时不可用时继续使用 localStorage 快照；实时 SSE 仍然照常连接。
+    console.warn("[brain-ui] heartbeat history unavailable:", err?.message || err);
+  }
+}
+
+const HEARTBEAT_SAMPLE_COUNT = 64;
+const heartbeatSamples = Array.from({ length: HEARTBEAT_SAMPLE_COUNT }, () => 0);
+let heartbeatPulseQueue = [];
+let heartbeatAnimationTick = 0;
+
+function renderHeartbeatWave() {
+  if (!heartbeatWaveEl || !heartbeatAreaEl) return;
+  const width = 320;
+  const baseline = 36;
+  const amplitude = 28;
+  const points = heartbeatSamples.map((sample, index) => {
+    const x = index * width / (HEARTBEAT_SAMPLE_COUNT - 1);
+    const y = baseline - sample * amplitude;
+    return `${x.toFixed(1)} ${y.toFixed(1)}`;
+  });
+  const line = `M${points.join(" L")}`;
+  heartbeatWaveEl.setAttribute("d", line);
+  heartbeatAreaEl.setAttribute("d", `${line} L320 ${baseline} L0 ${baseline} Z`);
+}
+
+function triggerHeartbeatPulse(strength = 1) {
+  const s = Math.max(0.25, Number(strength) || 1);
+  heartbeatPulseQueue.push(0.02, 0.08, -0.08 * s, 0.2 * s, 0.92 * s, -0.4 * s, 0.34 * s, 0.1 * s, 0.02);
+  if (!heartbeatMonitorEl) return;
+  heartbeatMonitorEl.removeAttribute("data-beat");
+  void heartbeatMonitorEl.offsetWidth;
+  heartbeatMonitorEl.dataset.beat = "active";
+  setTimeout(() => heartbeatMonitorEl?.removeAttribute("data-beat"), 760);
+}
+
+function advanceHeartbeatWave() {
+  heartbeatAnimationTick += 1;
+  if (heartbeatPulseQueue.length === 0 && heartbeatConnected && heartbeatAnimationTick % 30 === 0) {
+    triggerHeartbeatPulse(0.42);
+  }
+  const next = heartbeatPulseQueue.length
+    ? heartbeatPulseQueue.shift()
+    : (heartbeatConnected ? (Math.random() - 0.5) * 0.018 : 0);
+  heartbeatSamples.push(next);
+  heartbeatSamples.shift();
+  renderHeartbeatWave();
+}
+
+renderActionLog();
+updateHeartbeatFacts();
+renderHeartbeatWave();
+setInterval(advanceHeartbeatWave, 120);
+setInterval(updateHeartbeatFacts, 30_000);
+
 // L1 = processing flow triggered by user messages; L2 = processing flow triggered by TICK.
 // stream_*/tool_call events emitted by the backend carry no path tag;
 // routing to the correct panel is determined by the most recent message_received / tick event.
@@ -1255,9 +1628,13 @@ function flashFocusCompressed() {
 
 function connectSSE() {
   setConnectionState("连接中", true);
+  setHeartbeatConnection("waiting", "连接中");
   const es = new EventSource(`${API}/events`);
 
-  es.onopen = () => setConnectionState("已连接", true);
+  es.onopen = () => {
+    setConnectionState("已连接", true);
+    setHeartbeatConnection("alive", "意识在线");
+  };
 
   es.onmessage = event => {
     try { handle(JSON.parse(event.data)); } catch (_) {}
@@ -1265,6 +1642,7 @@ function connectSSE() {
 
   es.onerror = () => {
     setConnectionState("重连中", false);
+    setHeartbeatConnection("offline", "连接中断");
     es.close();
     setTimeout(connectSSE, 3000);
   };
@@ -1276,9 +1654,13 @@ function extractNids(memList) {
     .filter(Boolean);
 }
 
-function handle({ type, data = {} }) {
+function handle({ type, data = {}, ts = null }) {
   switch (type) {
     case "message_received": {
+      if (activeHeartbeatRound) {
+        finishHeartbeatRound("interrupted", "收到用户消息，心跳让路");
+        setCognitionState("已让路", "idle");
+      }
       currentPath = "l1";
       // 兜底：上一轮若被打断、message/response 均未到达，实时气泡会成孤儿、流式会话可能还挂着麦克风
       // ——定稿气泡、收尾流式会话（恢复麦克风）、复位状态，再开新一轮。
@@ -1300,11 +1682,18 @@ function handle({ type, data = {} }) {
     }
     case "tick":
       currentPath = "l2";
+      revealCognitionStream();
+      beginHeartbeatRound(Date.parse(ts) || Date.now());
+      setCognitionState("正在思考", "thinking");
       L2.beginRound();
       L2.newLine("heartbeat tick");
       L2.startThinkingSession();
       break;
     case "stream_start":
+      if (currentPath === "l2") {
+        revealCognitionStream();
+        setCognitionState("正在思考", "thinking");
+      }
       currentStream().startThinkingSession();
       // 正文流（plainReply）：把 token 实时打进聊天气泡。一轮可能有多段正文（正文→工具→正文），
       // 只在尚未开始时建气泡，后续段累积进同一个。speak 轮（语音）额外开启逐句流式合成。
@@ -1331,6 +1720,7 @@ function handle({ type, data = {} }) {
       break;
     case "stream_end":
       currentStream().stopThinking();
+      if (currentPath === "l2" && activeHeartbeatRound) setCognitionState("判断下一步", "thinking");
       // 正文段结束：把残句先送去合成，降低尾句延迟（不结束会话，可能还有后续正文段）
       if (data.mode === "text" && sttsActive) flushStreamingTTSBuf();
       break;
@@ -1338,25 +1728,40 @@ function handle({ type, data = {} }) {
       // 思考动画已停，但工具尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "";
+      if (currentPath === "l2") {
+        revealCognitionStream();
+        setCognitionState(label ? `准备 · ${label}` : "准备工具", "tool");
+      }
       stream.setStatus(label ? `准备调用 ${label}…` : "准备工具调用…", "busy");
       break;
     }
     case "tool_executing": {
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "工具";
+      if (currentPath === "l2") setCognitionState(`执行 · ${label}`, "tool");
       stream.setTimedStatus(`正在执行 ${label}…`, "busy", {
         staleAfterMs: 45000,
         staleText: `执行 ${label} 时间偏长，仍在等结果…`,
       });
       break;
     }
-    case "tool_call":
-      currentStream().tool(data.name, data.args, data.result, data.ok);
+    case "tool_call": {
+      const stream = currentStream();
+      if (currentPath === "l2") {
+        setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolLabel(data.name)}`, "tool");
+      }
+      addActionLogEntry(data.name, data.args, data.result, data.ok, Date.parse(ts) || Date.now());
+      stream.tool(data.name, data.args, data.result, data.ok);
       recordAiActivity(data.name);
       break;
+    }
     case "response":
       // Round complete — stop all animations
       currentStream().end();
+      if (currentPath === "l2") {
+        finishHeartbeatRound("complete");
+        setCognitionState("本轮完成", "done");
+      }
       // 兜底：本轮结束时（response 必在 message 之后发）若流式合成会话仍开着——极少见，模型只调了工具
       // 没产出可投递正文、message 未到达——标记正文已尽让队列放完即恢复麦克风，避免麦克风一直挂起。
       // 正常情况 message 已 finalize 过，此处幂等无副作用，不会打断仍在播放的尾句。
@@ -1366,6 +1771,10 @@ function handle({ type, data = {} }) {
       break;
     case "processing_preempted":
       currentStream().end();
+      if (currentPath === "l2") {
+        finishHeartbeatRound("interrupted");
+        setCognitionState("已中止", "idle");
+      }
       break;
     case "llm_retry": {
       currentStream().startThinkingSession();
@@ -1383,6 +1792,10 @@ function handle({ type, data = {} }) {
     case "message_dropped":
       currentStream().startThinkingSession();
       currentStream().setStatus("LLM 繁忙，重试次数已达上限", "failed");
+      if (currentPath === "l2") {
+        finishHeartbeatRound("interrupted", "心跳处理未完成 · 重试已用尽");
+        setCognitionState("未完成", "idle");
+      }
       break;
     case "error":
       if (isBusyErrorMessage(data.error)) {
@@ -1391,10 +1804,18 @@ function handle({ type, data = {} }) {
       } else {
         currentStream().stopThinking();
         currentStream().setStatus(data.error || "处理失败", "failed");
+        if (currentPath === "l2") {
+          finishHeartbeatRound("interrupted", "心跳处理遇到异常");
+          setCognitionState("异常", "idle");
+        }
       }
       break;
     case "protocol_violation":
       currentStream().end();
+      if (currentPath === "l2") {
+        finishHeartbeatRound("interrupted", "心跳协议校验未通过");
+        setCognitionState("未完成", "idle");
+      }
       break;
     case "injector_result": {
       const nids = [...extractNids(data.matchedMemories), ...extractNids(data.recallMemories)];
@@ -2111,7 +2532,7 @@ if (MEMORY_GRAPH_ENABLED) {
     loadMemories();
   }, 5 * 60 * 1000);
 }
-connectSSE();
+loadBrainUiHistory().finally(connectSSE);
 loadAgentProfile();
 initPersonCard();
 initDocPanel().catch((err) => console.warn('[DocPanel] init failed:', err));

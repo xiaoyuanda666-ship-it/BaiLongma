@@ -48,6 +48,14 @@ function sendFile(res, filePath) {
 
 function createServer() {
   const sseClients = new Set()
+  const brainUiEvents = []
+  const persistedTypes = new Set([
+    'message_received', 'tick', 'stream_start', 'stream_end', 'tool_preparing', 'tool_executing', 'tool_call',
+    'response', 'processing_preempted', 'llm_retry', 'message_requeued', 'message_dropped',
+    'error', 'protocol_violation',
+  ])
+  let brainUiPath = null
+  let heartbeatCount = 0
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1')
 
@@ -65,6 +73,19 @@ function createServer() {
       const relativePath = decodeURIComponent(url.pathname.slice('/src/ui/brain-ui/'.length))
       const assetPath = path.resolve(brainUiRoot, relativePath)
       if (!isPathInside(brainUiRoot, assetPath)) {
+        res.writeHead(403)
+        res.end('forbidden')
+        return
+      }
+      sendFile(res, assetPath)
+      return
+    }
+
+    if (url.pathname.startsWith('/src/ui/scene-shell/')) {
+      const sceneShellRoot = path.join(root, 'src', 'ui', 'scene-shell')
+      const relativePath = decodeURIComponent(url.pathname.slice('/src/ui/scene-shell/'.length))
+      const assetPath = path.resolve(sceneShellRoot, relativePath)
+      if (!isPathInside(sceneShellRoot, assetPath)) {
         res.writeHead(403)
         res.end('forbidden')
         return
@@ -195,6 +216,11 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/events/history') {
+      sendJson(res, { ok: true, events: brainUiEvents.slice(-160), heartbeatCount })
+      return
+    }
+
     if (url.pathname === '/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -223,6 +249,18 @@ function createServer() {
     sseClients.clear()
   }
   server.emitSse = (event) => {
+    if (event?.type === 'message_received') brainUiPath = 'l1'
+    if (event?.type === 'tick') {
+      brainUiPath = 'l2'
+      heartbeatCount += 1
+    }
+    if ((brainUiPath === 'l1' || brainUiPath === 'l2') && persistedTypes.has(event?.type)) {
+      brainUiEvents.push({ ...event, path: brainUiPath })
+      if (brainUiEvents.length > 800) brainUiEvents.shift()
+    }
+    if (['response', 'processing_preempted', 'message_dropped', 'protocol_violation'].includes(event?.type)) {
+      brainUiPath = null
+    }
     for (const client of sseClients) {
       try { client.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
     }
@@ -240,7 +278,8 @@ function listen(server) {
 const server = createServer()
 const port = await listen(server)
 const baseUrl = `http://127.0.0.1:${port}`
-const browser = await chromium.launch()
+const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined
+const browser = await chromium.launch(executablePath ? { executablePath } : {})
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } })
 await page.addInitScript(() => {
   localStorage.setItem('bailongma-memory-graph-enabled', 'true')
@@ -249,6 +288,7 @@ const errors = []
 page.on('pageerror', err => errors.push(err.message))
 page.on('console', msg => {
   if (msg.text().includes('/acui') && msg.text().includes('WebSocket connection')) return
+  if (msg.text().includes("/scene") && msg.text().includes('WebSocket connection')) return
   if (msg.text().includes('Failed to load resource: the server responded with a status of 404')) return
   if (msg.type() === 'error') errors.push(msg.text())
 })
@@ -263,6 +303,40 @@ try {
   await page.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#graph circle', { timeout: 5000 })
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: { path: 'src/example.js' }, result: 'smoke file', ok: true }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#heartbeat-count')?.textContent === '1'
+    && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
+    && document.querySelector('#cognition-state')?.dataset.state === 'done'
+    && Boolean(document.querySelector('#heartbeat-wave')?.getAttribute('d')))
+  server.emitSse({ type: 'message_received', data: { input: '请更新配置文件' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'write_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_call', data: { name: 'write_file', args: { path: 'src/config-demo.js' }, result: '{"ok":true}', ok: true }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
+    && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
+    && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
+  await page.evaluate(() => {
+    localStorage.removeItem('bailongma-action-log-v1')
+    localStorage.removeItem('bailongma-heartbeat-count-v1')
+  })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() =>
+    document.querySelector('#heartbeat-count')?.textContent === '1'
+    && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
+    && document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
+    && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
+    && document.querySelector('#si-l1')?.textContent.includes('写入文件')
+    && document.querySelector('#cognition-state')?.textContent.includes('最近一轮完成')
+    && document.querySelector('#si-l2')?.textContent.includes('读取文件'))
   await page.fill('#msg-input', '马云是谁')
   await page.click('#send-btn')
   await page.waitForTimeout(300)
@@ -285,7 +359,11 @@ try {
     d3: Boolean(window.d3),
     nodes: document.querySelectorAll('#graph circle').length,
     links: document.querySelectorAll('#graph line').length,
-    acuiHost: Boolean(document.getElementById('acui-host')),
+    sceneStage: Boolean(document.getElementById('stage')),
+    heartbeatCount: document.querySelector('#heartbeat-count')?.textContent || '',
+    actionLog: document.querySelector('#action-log')?.textContent || '',
+    l1History: document.querySelector('#si-l1')?.textContent || '',
+    cognitionState: document.querySelector('#cognition-state')?.textContent || '',
     personCard: document.querySelector('#pc-name')?.textContent || '',
     personSummary: document.querySelector('#pc-summary')?.textContent || '',
     personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
@@ -296,7 +374,12 @@ try {
 
   if (!snapshot.d3) throw new Error('d3 global missing')
   if (snapshot.nodes < 2) throw new Error(`expected at least 2 graph nodes, saw ${snapshot.nodes}`)
-  if (!snapshot.acuiHost) throw new Error('ACUI host was not bootstrapped')
+  if (!snapshot.sceneStage) throw new Error('scene shell was not bootstrapped')
+  if (snapshot.heartbeatCount !== '1') throw new Error('heartbeat monitor did not count the Tick')
+  if (!snapshot.actionLog.includes('读取文件 · src/example.js')) throw new Error('action log did not recover the file action')
+  if (!snapshot.actionLog.includes('写入文件 · src/config-demo.js')) throw new Error('action log did not recover the L1 write action')
+  if (!snapshot.l1History.includes('请更新配置文件') || !snapshot.l1History.includes('写入文件')) throw new Error('L1 processing history did not recover after reload')
+  if (!snapshot.cognitionState.includes('最近一轮完成')) throw new Error('cognition history did not recover after reload')
   if (!snapshot.personCard.includes('马云')) throw new Error('person card did not render the requested person')
   if (!snapshot.personSummary.includes('阿里巴巴集团创始人')) throw new Error('person card did not absorb assistant summary')
   if (!snapshot.personKnownFor.includes('淘宝')) throw new Error('person card did not absorb assistant known-for items')
@@ -320,6 +403,7 @@ try {
   console.log('[PASS] brain-ui smoke')
   console.log(JSON.stringify(snapshot, null, 2))
 } finally {
+  if (errors.length) console.error(`[brain-ui smoke diagnostics]\n${errors.join('\n')}`)
   await browser.close()
   server.closeAllSse()
   await new Promise(resolve => server.close(resolve))

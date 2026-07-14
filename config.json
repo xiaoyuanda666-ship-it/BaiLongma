@@ -1,16 +1,10 @@
 {
   "clawbot": {},
-  "voice": {
-    "whisperModel": "small",
-    "voiceProvider": "volcengine",
-    "volcAsrApiKey": "0f9a6c2b-8d91-4f2b-92b0-531c357b24da",
-    "volcAsrResourceId": "volc.bigasr.sauc.duration"
-  },
   "tts": {
     "ttsProvider": "doubao",
     "ttsVoiceId": "zh_female_xiaohe_uranus_bigtts",
     "doubaoKey": "0f9a6c2b-8d91-4f2b-92b0-531c357b24da"
   },
   "embedding": {},
-  "schemaVersion": 2
+  "schemaVersion": 3
 }

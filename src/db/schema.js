@@ -253,6 +253,25 @@ export function initializeSchema(db) {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_status ON action_logs(status)`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_risk ON action_logs(risk)`) } catch {}
 
+  // Brain UI 观测历史：只保存经过裁剪/脱敏的 L2 展示事件，让动态端口或应用重启后
+  // 仍能恢复心跳、最近思考与工具轨迹。事件表有界，累计心跳数单独保存在 state 表。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS brain_ui_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp    TEXT    NOT NULL,
+      path         TEXT    NOT NULL DEFAULT 'l2',
+      event_type   TEXT    NOT NULL,
+      payload_json TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_brain_ui_events_path_id ON brain_ui_events(path, id);
+
+    CREATE TABLE IF NOT EXISTS brain_ui_state (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS reminders (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
