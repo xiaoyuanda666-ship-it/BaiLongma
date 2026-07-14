@@ -30,6 +30,7 @@ import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile }
 import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
+import { execBrowserAct, execBrowserClose, execBrowserInspect, execBrowserOpen, execBrowserSessions, execBrowserTabs, shutdownBrowserTools } from './tools/browser-tools.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
@@ -41,6 +42,7 @@ import { deliverMessage } from '../runtime/delivery.js'
 export { calculateNextDueAt } from './tools/reminders.js'
 export { autoSpeakForVoiceReply } from './tools/media.js'
 export { detectOpenFollowupQuestion } from '../runtime/delivery.js'
+export { shutdownBrowserTools }
 
 import { config, setSecurity } from '../config.js'
 import { isExternalChannel } from '../identity.js'
@@ -251,6 +253,18 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execFetchUrl(args, context)
       case 'browser_read':
         return await execBrowserRead(args, context)
+      case 'browser_sessions':
+        return await execBrowserSessions(args, context)
+      case 'browser_open':
+        return await execBrowserOpen(args, context)
+      case 'browser_inspect':
+        return await execBrowserInspect(args, context)
+      case 'browser_act':
+        return await execBrowserAct(args, context)
+      case 'browser_tabs':
+        return await execBrowserTabs(args, context)
+      case 'browser_close':
+        return await execBrowserClose(args, context)
       case 'search_memory':
         return await execSearchMemory(args)
       case 'probe_memory':
@@ -376,6 +390,7 @@ export async function executeTool(name, args, context = {}) {
   if (!policy.allowed) {
     const result = toolJson({
       ok: false,
+      code: 'PERMISSION_DENIED',
       tool: name,
       error: 'permission denied',
       policy: {
@@ -1079,9 +1094,9 @@ function execConnectFeishu() {
   })
 }
 
-function execSetSecurity({ file_sandbox, exec_sandbox, reason = '' }) {
-  if (file_sandbox === undefined && exec_sandbox === undefined) {
-    return toolJson({ ok: false, error: '至少指定 file_sandbox 或 exec_sandbox 之一' })
+function execSetSecurity({ file_sandbox, exec_sandbox, browser_private_network, reason = '' }) {
+  if (file_sandbox === undefined && exec_sandbox === undefined && browser_private_network === undefined) {
+    return toolJson({ ok: false, error: '至少指定 file_sandbox、exec_sandbox 或 browser_private_network 之一' })
   }
   if (sceneClientCount() === 0) {
     return toolJson({ ok: false, error: '当前没有界面客户端，无法弹出确认框。请告知用户到设置页面手动修改安全沙箱配置。' })
@@ -1091,6 +1106,7 @@ function execSetSecurity({ file_sandbox, exec_sandbox, reason = '' }) {
   const changeLines = []
   if (file_sandbox !== undefined) changeLines.push(`文件沙箱将${file_sandbox ? '开启' : '关闭'}`)
   if (exec_sandbox !== undefined) changeLines.push(`执行沙箱将${exec_sandbox ? '开启' : '关闭'}`)
+  if (browser_private_network !== undefined) changeLines.push(`交互浏览器私网访问将${browser_private_network ? '授权' : '撤销'}`)
   const prompt = [reason, changeLines.join('；')].filter(Boolean).join('\n') || '确认安全设置变更？'
 
   // 待应用的变更随 surface 走（存 data.pending）：让 SceneStore 继续做唯一真相源，
@@ -1099,6 +1115,7 @@ function execSetSecurity({ file_sandbox, exec_sandbox, reason = '' }) {
   const pending = {}
   if (file_sandbox !== undefined) pending.file_sandbox = file_sandbox
   if (exec_sandbox !== undefined) pending.exec_sandbox = exec_sandbox
+  if (browser_private_network !== undefined) pending.browser_private_network = browser_private_network
 
   const id = `security-confirm-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
   sceneStore.set(id, {

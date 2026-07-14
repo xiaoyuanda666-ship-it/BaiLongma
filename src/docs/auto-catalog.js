@@ -13,6 +13,7 @@ import { commsSchemas } from '../capabilities/schemas/comms.js'
 import { filesystemSchemas } from '../capabilities/schemas/filesystem.js'
 import { shellSchemas } from '../capabilities/schemas/shell.js'
 import { webSchemas } from '../capabilities/schemas/web.js'
+import { browserSchemas } from '../capabilities/schemas/browser.js'
 import { mediaSchemas } from '../capabilities/schemas/media.js'
 import { memorySchemas } from '../capabilities/schemas/memory.js'
 import { uiSchemas } from '../capabilities/schemas/ui.js'
@@ -29,6 +30,7 @@ const TOOL_CATEGORIES = [
   { label: '文件系统', schemas: filesystemSchemas },
   { label: 'Shell / 进程', schemas: shellSchemas },
   { label: '上网', schemas: webSchemas },
+  { label: '交互浏览器', schemas: browserSchemas },
   { label: '媒体（语音 / 音乐 / 图像 / 视频）', schemas: mediaSchemas },
   { label: '记忆', schemas: memorySchemas },
   { label: '界面 / 面板', schemas: uiSchemas },

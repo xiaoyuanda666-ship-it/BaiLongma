@@ -29,7 +29,14 @@
 // 输出：去重后的 tools: string[]
 
 // 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
-import { WEB_TOOLS, capabilityToolsFor } from '../capabilities/capability-registry.js'
+import {
+  BROWSER_TOOLS,
+  WEB_TOOLS,
+  capabilityToolsFor,
+  isStatefulBrowserIntent,
+  isStatelessWebReadIntent,
+  isTerseBrowserFollowup,
+} from '../capabilities/capability-registry.js'
 import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
 
 // ---- 工具分组 ----
@@ -329,9 +336,14 @@ export function selectTools(ctx = {}) {
     startupSelfCheckActive = false,
     localVisualTurn = true,
     fastUserPath = false,
+    activeBrowserSessionCount = 0,
+    recentPlaywrightAction = false,
   } = ctx
 
   const body = (messageBody || '').toLowerCase()
+  const statefulBrowserIntent = isStatefulBrowserIntent(messageBody)
+  const statelessWebReadIntent = isStatelessWebReadIntent(messageBody)
+  const terseBrowserFollowup = isTerseBrowserFollowup(messageBody)
   const out = new Set(CORE_TOOLS)
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
@@ -389,7 +401,7 @@ export function selectTools(ctx = {}) {
   // —— 能力注册表：已迁能力（web / hotspot / worldcup / software-install）的工具注入 ——
   // 每个能力用自己的 toolWhen 门（web=关键词、hotspot/worldcup=不自动、
   // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
-  const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
+  const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask, activeBrowserSessionCount }
   for (const t of capabilityToolsFor(capCtx)) out.add(t)
   if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
 
@@ -447,6 +459,21 @@ export function selectTools(ctx = {}) {
     for (const name of installedToolNames) {
       if (name && !suppressed.has(name)) out.add(name)
     }
+  }
+
+  // A live Playwright session is stronger continuity evidence than pronoun or
+  // keyword matching. Keep the whole stateful group available so a terse
+  // follow-up can inspect/act/close the existing page without switching tools.
+  const browserContinuity = Number(activeBrowserSessionCount) > 0 || (recentPlaywrightAction && terseBrowserFollowup)
+  if (browserContinuity) {
+    for (const name of BROWSER_TOOLS) out.add(name)
+  }
+
+  // Avoid offering the stateless renderer as an attractive substitute for an
+  // explicitly interactive/stateful request. It remains available when the
+  // user explicitly asks to read/extract/summarize webpage body text.
+  if ((statefulBrowserIntent || (browserContinuity && terseBrowserFollowup)) && !statelessWebReadIntent) {
+    out.delete('browser_read')
   }
 
   // —— Fastpath 收紧（可选） ——

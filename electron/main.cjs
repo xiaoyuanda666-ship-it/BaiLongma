@@ -25,8 +25,10 @@ const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
+const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
 
 const IS_DEV = !app.isPackaged
+configurePackagedPlaywright({ isPackaged: !IS_DEV })
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
 
 function resolvePortableRoot() {
@@ -1362,8 +1364,29 @@ app.on('window-all-closed', () => {
   // 只有托盘菜单「退出」才真正退出
 })
 
-app.on('before-quit', () => {
+let browserShutdownBeforeQuit = null
+let browserShutdownComplete = false
+app.on('before-quit', (event) => {
   app.isQuiting = true
+  if (browserShutdownComplete) return
+  const shutdown = globalThis.shutdownBailongmaBrowserTools
+  if (typeof shutdown !== 'function') {
+    browserShutdownComplete = true
+    return
+  }
+  event.preventDefault()
+  if (browserShutdownBeforeQuit) return
+  // The backend runs in this process. Wait for Playwright cleanup, with a hard
+  // upper bound so a broken browser connection cannot trap the quit loop.
+  let browserShutdownTimer
+  browserShutdownBeforeQuit = Promise.race([
+    Promise.resolve().then(() => shutdown()).catch(() => {}),
+    new Promise(resolve => { browserShutdownTimer = setTimeout(resolve, 5_000) }),
+  ]).finally(() => {
+    clearTimeout(browserShutdownTimer)
+    browserShutdownComplete = true
+    app.quit() // second before-quit observes browserShutdownComplete and proceeds
+  })
 })
 
 app.whenReady().then(async () => {

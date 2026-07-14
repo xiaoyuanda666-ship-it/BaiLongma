@@ -977,6 +977,7 @@ export const config = {
   security: {
     fileSandbox: true,
     execSandbox: true,
+    browserPrivateNetwork: false,
     blockedTools: [],
     updatedAt: null,
   },
@@ -1015,6 +1016,7 @@ if (parsedConfig) {
     const s = parsedConfig.security
     if (typeof s.fileSandbox === 'boolean') config.security.fileSandbox = s.fileSandbox
     if (typeof s.execSandbox === 'boolean') config.security.execSandbox = s.execSandbox
+    if (typeof s.browserPrivateNetwork === 'boolean') config.security.browserPrivateNetwork = s.browserPrivateNetwork
     if (Array.isArray(s.blockedTools)) config.security.blockedTools = s.blockedTools
     if (typeof s.updatedAt === 'string') config.security.updatedAt = s.updatedAt
   }
@@ -1399,6 +1401,7 @@ export function getSecurity() {
   return {
     fileSandbox: config.security.fileSandbox,
     execSandbox: config.security.execSandbox,
+    browserPrivateNetwork: config.security.browserPrivateNetwork === true,
     blockedTools: [...config.security.blockedTools],
     updatedAt: config.security.updatedAt || null,
   }
@@ -1408,11 +1411,13 @@ export function setSecurity(updates) {
   const before = getSecurity()
   if (typeof updates.fileSandbox === 'boolean') config.security.fileSandbox = updates.fileSandbox
   if (typeof updates.execSandbox === 'boolean') config.security.execSandbox = updates.execSandbox
+  if (typeof updates.browserPrivateNetwork === 'boolean') config.security.browserPrivateNetwork = updates.browserPrivateNetwork
   if (Array.isArray(updates.blockedTools)) {
     config.security.blockedTools = updates.blockedTools.filter(t => typeof t === 'string')
   }
   const changed = before.fileSandbox !== config.security.fileSandbox
     || before.execSandbox !== config.security.execSandbox
+    || before.browserPrivateNetwork !== config.security.browserPrivateNetwork
     || JSON.stringify(before.blockedTools) !== JSON.stringify(config.security.blockedTools)
   if (changed) config.security.updatedAt = nowTimestamp()
   patchConfig({ security: { ...config.security } })

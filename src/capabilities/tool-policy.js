@@ -48,6 +48,12 @@ const TOOL_RISK = {
   web_search: 'high',
   fetch_url: 'high',
   browser_read: 'high',
+  browser_sessions: 'low',
+  browser_open: 'medium',
+  browser_inspect: 'low',
+  browser_act: 'high',
+  browser_tabs: 'medium',
+  browser_close: 'low',
   speak: 'high',
   generate_lyrics: 'high',
   generate_music: 'high',
@@ -86,6 +92,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_capability',
   'run_api_capability',
   'analyze_image',
+  'browser_act',
 ])
 export function classifyTool(name) {
   return TOOL_RISK[name] || 'medium'
@@ -124,6 +131,17 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
     && !context.allowHighRiskAutonomy
   ) {
     return { allowed: false, risk, reason: 'autonomous Tick may inspect rules, but changing persistent rules requires an explicit user-driven context' }
+  }
+  if (
+    context.autonomous
+    && name === 'browser_open'
+    && (
+      args.visible !== false
+      || (args.persistent !== undefined && args.persistent !== false)
+    )
+    && !context.allowHighRiskAutonomy
+  ) {
+    return { allowed: false, risk, reason: 'an autonomous Tick cannot open a visible or persistent browser profile without explicit user authority' }
   }
   if (context.autonomous && AUTONOMOUS_USER_AUTH_REQUIRED.has(name) && !context.allowHighRiskAutonomy) {
     return { allowed: false, risk, reason: 'this authority-changing, destructive, or unbudgeted tool requires an explicit user-driven context' }

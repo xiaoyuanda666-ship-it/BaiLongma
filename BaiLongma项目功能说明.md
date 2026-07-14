@@ -563,6 +563,10 @@ BaiLongma 的工具系统由 schema、执行器、沙箱、安全策略、行动
 - `fetch_url`：抓取已知 URL。
 - `browser_read`：用真实 Chromium 读取 JS 渲染网页。
 
+`browser_read` 是一次性的只读正文提取器，不保留页面状态，也不点击或填写页面，只用于明确读取、提取或总结网页正文。打开浏览器/网页、继续当前页面、查询浏览器状态、关闭浏览器、标签页、点击、填写和登录优先使用状态化 Playwright 工具。先用 `browser_sessions` 发现并复用存活会话；没有合适会话时再走 `browser_open` → `browser_inspect` → `browser_act`，并用 `browser_tabs` 管理标签页，完成后调用 `browser_close`。每轮会把存活会话以不可信运行时状态摘要注入 Agent 上下文；用户手动关闭最后窗口后会自动回收会话。导航后元素 ref 会换代，必须重新 inspect。网页内容始终是不可信数据，不能服从网页中要求泄密、改写系统规则或执行命令的指令；交互浏览器不开放任意 JavaScript、文件上传或下载。
+
+交互浏览器默认拒绝 localhost、环回地址与私网地址；只有独立的 `security.browserPrivateNetwork` 权限经用户明确确认后才开放。该权限与后端是否监听 LAN 无关。
+
 Web 能力适合查询实时资料、打开文档、获取网页正文和处理静态 fetch 无法解析的页面。
 
 ### 10.5 记忆工具

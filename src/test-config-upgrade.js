@@ -41,12 +41,12 @@ async function loadFresh(json) {
 
 // ── 场景 A：provider 是新版不认识的名字（模拟改名/删除的旧 provider）──
 {
-  const { config, getVoiceConfig } = await loadFresh({
+  const { config, getSecurity, getVoiceConfig, setSecurity } = await loadFresh({
     provider: 'some-removed-provider',
     apiKey: 'sk-whatever-old-key-1234567890',
     model: 'old-model',
     temperature: 1.3,
-    security: { fileSandbox: false, execSandbox: false, blockedTools: ['exec_command'] },
+    security: { fileSandbox: false, execSandbox: false, browserPrivateNetwork: true, blockedTools: ['exec_command'] },
     voice: { voiceProvider: 'aliyun', aliyunApiKey: 'sk-aliyunkeyplaceholder1234567890' },
   })
   assert(config.needsActivation === true, 'A: 未知 provider → LLM 标记为待激活')
@@ -56,6 +56,11 @@ async function loadFresh(json) {
   assert(config.security.execSandbox === false, 'A: execSandbox=false 被保留（不会悄悄重新开启沙盒）')
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
   assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command']), 'A: blockedTools 被保留')
+  assert(getSecurity().browserPrivateNetwork === true, 'A: 独立 browserPrivateNetwork 权限被读取')
+  setSecurity({ browserPrivateNetwork: false })
+  assert(getSecurity().browserPrivateNetwork === false, 'A: setSecurity 可独立撤销 browserPrivateNetwork')
+  assert(JSON.parse(fs.readFileSync(configFile, 'utf-8')).security.browserPrivateNetwork === false,
+    'A: browserPrivateNetwork 变更持久化到 config.json')
   const after = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
   assert(after.voice === undefined, 'A: voice 块已从 config.json 拆出')
   assert(getVoiceConfig().aliyunApiKey.configured === true, 'A: 拆分后 Aliyun ASR key 仍可被读取')
@@ -75,6 +80,7 @@ async function loadFresh(json) {
   assert(config.provider === 'deepseek', 'B: provider 正确')
   assert(config.model === 'deepseek-some-retired-model', 'B: official provider preserves unknown model names for manual entry')
   assert(config.security.execSandbox === false, 'B: 激活路径下 security 同样保留')
+  assert(config.security.browserPrivateNetwork === false, 'B: 旧配置缺字段时 browserPrivateNetwork 默认 false')
 }
 
 // ── 场景 C：custom provider（baseURL + model 齐全）正常激活 ──

@@ -665,6 +665,7 @@ const HIGH_RISK_TOOLS = new Set([
   'web_search',
   'fetch_url',
   'browser_read',
+  'browser_act',
   'speak',
   'generate_lyrics',
   'generate_music',
@@ -690,6 +691,7 @@ function isHighRiskTool(name) {
 const PARALLEL_SAFE_TOOLS = new Set([
   'read_file',
   'list_dir',
+  'browser_sessions',
   'web_search',
   'fetch_url',
   'browser_read',

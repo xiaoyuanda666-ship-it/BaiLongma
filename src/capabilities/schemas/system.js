@@ -139,7 +139,7 @@ export const systemSchemas = {
     type: 'function',
     function: {
       name: 'set_security',
-      description: 'Request a sandbox security setting change. Shows a confirmation card to the user — the change only takes effect after explicit user approval. Call ONLY when the user explicitly asks to disable or enable the file sandbox or exec sandbox. Do not call speculatively.',
+      description: 'Request a security setting change. Shows a confirmation card to the user — the change only takes effect after explicit user approval. Call ONLY when the user explicitly asks to change a sandbox setting or grant/revoke browser private-network access. Do not call speculatively.',
       parameters: {
         type: 'object',
         properties: {
@@ -150,6 +150,10 @@ export const systemSchemas = {
           exec_sandbox: {
             type: 'boolean',
             description: 'New value for exec sandbox. false = disable (allow absolute paths and home dir). Omit if not changing.'
+          },
+          browser_private_network: {
+            type: 'boolean',
+            description: 'Grant or revoke the interactive browser\'s access to localhost, loopback, and private-network addresses. Default false. This is independent of backend LAN listening.'
           },
           reason: {
             type: 'string',

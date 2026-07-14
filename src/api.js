@@ -223,6 +223,7 @@ function attachSceneProtocol() {
         const updates = {}
         if (pending.file_sandbox !== undefined) updates.fileSandbox = pending.file_sandbox === true
         if (pending.exec_sandbox !== undefined) updates.execSandbox = pending.exec_sandbox === true
+        if (pending.browser_private_network !== undefined) updates.browserPrivateNetwork = pending.browser_private_network === true
         const result = Object.keys(updates).length > 0 ? setSecurity(updates) : getSecurity()
         const desc = Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')
         pushMessage(

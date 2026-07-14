@@ -27,7 +27,10 @@ export function invalidateSharedBrowser() {
 
 async function launchReadableBrowser() {
   const chromium = await getPlaywrightChromium()
-  const launchOptions = { headless: true }
+  const launchOptions = getPrimaryChromiumLaunchOptions()
+  if (launchOptions.channel === 'chromium') {
+    return chromium.launch(launchOptions)
+  }
   try {
     return await chromium.launch(launchOptions)
   } catch (firstError) {
@@ -38,6 +41,12 @@ async function launchReadableBrowser() {
     }
     throw firstError
   }
+}
+
+export function getPrimaryChromiumLaunchOptions(env = process.env) {
+  return env.BAILONGMA_BUNDLED_PLAYWRIGHT === '1'
+    ? { headless: true, channel: 'chromium' }
+    : { headless: true }
 }
 
 async function getPlaywrightChromium() {
