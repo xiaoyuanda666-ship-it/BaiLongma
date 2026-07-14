@@ -48,6 +48,8 @@
     "smoke:feishu-ws": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-feishu-ws.mjs\""
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.79.3",
+    "@earendil-works/pi-coding-agent": "^0.79.3",
     "@huggingface/transformers": "^3.0.0",
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "better-sqlite3": "^12.8.0",
