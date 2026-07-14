@@ -304,7 +304,16 @@ try {
   await page.waitForSelector('#graph circle', { timeout: 5000 })
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  const heartbeatChartHeight = await page.locator('#heartbeat-chart').evaluate(element => element.getBoundingClientRect().height)
+  if (heartbeatChartHeight < 92) throw new Error(`heartbeat chart is too short: ${heartbeatChartHeight}px`)
+  const idleHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
+  await page.waitForTimeout(4000)
+  const settledHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
+  if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without a real L2 Tick')
   server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
+  await page.waitForFunction(previousPath => (
+    document.querySelector('#heartbeat-wave')?.getAttribute('d') !== previousPath
+  ), idleHeartbeatPath)
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_preparing', data: { name: 'read_file' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: { path: 'src/example.js' }, result: 'smoke file', ok: true }, ts: new Date().toISOString() })
@@ -314,7 +323,12 @@ try {
     && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
     && document.querySelector('#cognition-state')?.dataset.state === 'done'
     && Boolean(document.querySelector('#heartbeat-wave')?.getAttribute('d')))
+  await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
   server.emitSse({ type: 'message_received', data: { input: '请更新配置文件' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="active"]')
+  if (await page.locator('#heartbeat-count').textContent() !== '1') {
+    throw new Error('L1 message pulse must not increment the L2 heartbeat count')
+  }
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_preparing', data: { name: 'write_file' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_call', data: { name: 'write_file', args: { path: 'src/config-demo.js' }, result: '{"ok":true}', ok: true }, ts: new Date().toISOString() })
@@ -398,6 +412,41 @@ try {
     document.body.classList.contains('person-card-mode')
     || document.querySelector('#person-card-panel')?.classList.contains('pc-visible'))
   if (falsePersonCard) throw new Error('person card opened for a non-person introduction request')
+
+  server.emitSse({ type: 'message_received', data: { input: 'action log limit smoke' }, ts: new Date().toISOString() })
+  server.emitSse({
+    type: 'tool_call',
+    data: { name: 'read_file', args: { path: 'failed-action.js' }, result: 'failed', ok: false },
+    ts: new Date().toISOString(),
+  })
+  for (let index = 0; index < 60; index += 1) {
+    server.emitSse({
+      type: 'tool_call',
+      data: { name: 'read_file', args: { path: `bulk-${index}.js` }, result: 'ok', ok: true },
+      ts: new Date(Date.now() + index).toISOString(),
+    })
+  }
+  server.emitSse({ type: 'response', data: {}, ts: new Date(Date.now() + 60).toISOString() })
+  await page.waitForFunction(() => {
+    const log = document.querySelector('#action-log')
+    return document.querySelector('#action-log-count')?.textContent === '58'
+      && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('bulk-1.js')
+      && log?.textContent.includes('bulk-2.js')
+      && log?.textContent.includes('bulk-59.js')
+  })
+
+  await page.evaluate(() => localStorage.removeItem('bailongma-action-log-v1'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() => {
+    const log = document.querySelector('#action-log')
+    return document.querySelector('#action-log-count')?.textContent === '58'
+      && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('bulk-1.js')
+      && log?.textContent.includes('bulk-2.js')
+      && log?.textContent.includes('bulk-59.js')
+  })
   if (errors.length) throw new Error(`browser errors:\n${errors.join('\n')}`)
 
   console.log('[PASS] brain-ui smoke')

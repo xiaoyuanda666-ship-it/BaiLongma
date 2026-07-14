@@ -1019,11 +1019,12 @@ const L2 = new ThoughtStream("si-l2", "warm", {
 });
 
 // ── L2 意识观测：心跳图、行动日志、实时认知状态 ────────────────
-// 波形表达 SSE 意识循环仍然在线；真正的 Tick 到来时会触发更强的一次脉冲。
+// 波形表达真实的意识唤醒：L2 Tick 或用户消息都会触发；
+// 底部计数仍只统计 L2 Tick，SSE 是否在线则由右上角状态灯单独表达。
 // 行动日志只存工具动作的人类可读摘要；完整参数/结果不写入浏览器存储。
 const ACTION_LOG_KEY = "bailongma-action-log-v1";
 const HEARTBEAT_COUNT_KEY = "bailongma-heartbeat-count-v1";
-const ACTION_LOG_LIMIT = 40;
+const ACTION_LOG_LIMIT = 58;
 const heartbeatMonitorEl = document.querySelector(".heartbeat-monitor");
 const heartbeatWaveEl = document.getElementById("heartbeat-wave");
 const heartbeatAreaEl = document.getElementById("heartbeat-area");
@@ -1048,12 +1049,16 @@ function readHeartbeatStorage(key, fallback) {
 let actionLog = readHeartbeatStorage(ACTION_LOG_KEY, []);
 if (!Array.isArray(actionLog)) actionLog = [];
 actionLog = actionLog
-  .filter(entry => entry && typeof entry.text === "string" && Number.isFinite(Number(entry.ts)))
+  .filter(entry => (
+    entry
+    && entry.kind !== "failed"
+    && typeof entry.text === "string"
+    && Number.isFinite(Number(entry.ts))
+  ))
   .slice(-ACTION_LOG_LIMIT);
 let heartbeatCount = Math.max(0, Number(readHeartbeatStorage(HEARTBEAT_COUNT_KEY, 0)) || 0);
 let lastHeartbeatAt = 0;
 let activeHeartbeatRound = false;
-let heartbeatConnected = false;
 
 function heartbeatClock(ts) {
   return new Date(Number(ts) || Date.now()).toLocaleTimeString("zh-CN", {
@@ -1104,9 +1109,10 @@ function describeAction(name, args = {}, result = "") {
 }
 
 function addActionLogEntry(name, args = {}, result = "", ok = true, ts = Date.now()) {
+  if (ok === false) return;
   actionLog.push({
     text: describeAction(name, args, result),
-    kind: ok === false ? "failed" : "action",
+    kind: "action",
     tool: String(name || "tool"),
     ts: Number(ts) || Date.now(),
   });
@@ -1131,10 +1137,14 @@ function finishHeartbeatRound() {
 
 function rebuildActionLogFromHistory(events) {
   return events
-    .filter(event => event?.type === "tool_call" && event?.data?.name)
+    .filter(event => (
+      event?.type === "tool_call"
+      && event?.data?.name
+      && event.data.ok !== false
+    ))
     .map(event => ({
       text: describeAction(event.data.name, event.data.args, event.data.result),
-      kind: event.data.ok === false ? "failed" : "action",
+      kind: "action",
       tool: String(event.data.name),
       ts: Date.parse(event.ts) || Date.now(),
     }))
@@ -1156,7 +1166,6 @@ function updateHeartbeatFacts() {
 }
 
 function setHeartbeatConnection(state, label) {
-  heartbeatConnected = state === "alive";
   if (heartbeatStateEl) heartbeatStateEl.dataset.state = state;
   if (heartbeatStateLabelEl) heartbeatStateLabelEl.textContent = label;
 }
@@ -1343,9 +1352,9 @@ async function loadBrainUiHistory() {
 }
 
 const HEARTBEAT_SAMPLE_COUNT = 64;
+const HEARTBEAT_FRAME_INTERVAL_MS = 120;
 const heartbeatSamples = Array.from({ length: HEARTBEAT_SAMPLE_COUNT }, () => 0);
 let heartbeatPulseQueue = [];
-let heartbeatAnimationTick = 0;
 
 function renderHeartbeatWave() {
   if (!heartbeatWaveEl || !heartbeatAreaEl) return;
@@ -1373,13 +1382,10 @@ function triggerHeartbeatPulse(strength = 1) {
 }
 
 function advanceHeartbeatWave() {
-  heartbeatAnimationTick += 1;
-  if (heartbeatPulseQueue.length === 0 && heartbeatConnected && heartbeatAnimationTick % 30 === 0) {
-    triggerHeartbeatPulse(0.42);
-  }
+  // 没有真实 Tick 时回到平直基线；不用连接状态或随机噪声伪造心跳。
   const next = heartbeatPulseQueue.length
     ? heartbeatPulseQueue.shift()
-    : (heartbeatConnected ? (Math.random() - 0.5) * 0.018 : 0);
+    : 0;
   heartbeatSamples.push(next);
   heartbeatSamples.shift();
   renderHeartbeatWave();
@@ -1388,7 +1394,7 @@ function advanceHeartbeatWave() {
 renderActionLog();
 updateHeartbeatFacts();
 renderHeartbeatWave();
-setInterval(advanceHeartbeatWave, 120);
+setInterval(advanceHeartbeatWave, HEARTBEAT_FRAME_INTERVAL_MS);
 setInterval(updateHeartbeatFacts, 30_000);
 
 // L1 = processing flow triggered by user messages; L2 = processing flow triggered by TICK.
@@ -1657,6 +1663,8 @@ function extractNids(memList) {
 function handle({ type, data = {}, ts = null }) {
   switch (type) {
     case "message_received": {
+      // L1 也是一次真实意识唤醒：只驱动波形，不累加 L2 心跳计数。
+      triggerHeartbeatPulse(1);
       if (activeHeartbeatRound) {
         finishHeartbeatRound("interrupted", "收到用户消息，心跳让路");
         setCognitionState("已让路", "idle");

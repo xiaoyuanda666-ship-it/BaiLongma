@@ -629,14 +629,14 @@ body {
 
 .heartbeat-chart {
   position: relative;
-  height: 72px;
+  height: 92px;
   margin: 0 -2px;
   overflow: hidden;
   border-radius: 7px;
   background:
     linear-gradient(color-mix(in srgb, var(--warm) 5%, transparent) 1px, transparent 1px),
     linear-gradient(90deg, color-mix(in srgb, var(--warm) 5%, transparent) 1px, transparent 1px);
-  background-size: 16px 18px;
+  background-size: 16px 23px;
 }
 
 .heartbeat-chart svg {
