@@ -56,7 +56,7 @@ const REVIEW_TOOLS      = ['review_work']
 // WEB_TOOLS 由能力注册表提供（见顶部 import），并被 media / fallback 复用。WORLDCUP_TOOLS /
 // SOFTWARE_INSTALL_TOOLS 已随能力迁出本文件。
 const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
-const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'download_file', 'kill_process', 'list_processes']
+const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'run_cli', 'download_file', 'kill_process', 'list_processes']
 const MEDIA_TOOLS       = ['media_mode', 'music']
 const REMINDER_TOOLS    = ['manage_reminder']
 const PREFETCH_TOOLS    = ['manage_prefetch_task']

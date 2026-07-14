@@ -1,4 +1,5 @@
 import { createMarkdownBody } from "./markdown.js";
+import { isAlertEnabled } from "./alert-sound-pref.js";
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -160,10 +161,8 @@ export function initChat({
   }
 
   async function playJarvisAlert() {
-    // 消息提示音已取消：很多用户在深夜处理工作，不希望任何声音打扰（含文本回复与语音识别后的回复）。
-    // 这里直接返回，让两个调用点（普通消息 / 流式直播气泡）静默。TTS 朗读不受影响。
-    return;
-    // eslint-disable-next-line no-unreachable
+    // 回复提示音开关（默认开）：用户可在设置里关闭。深夜工作可静音，TTS 朗读不受影响。
+    if (!isAlertEnabled()) return;
     const ctx = ensureAudioContext();
     if (!ctx) return;
     try { if (ctx.state === "suspended") await ctx.resume(); } catch { return; }

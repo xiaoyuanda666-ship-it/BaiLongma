@@ -211,6 +211,13 @@ const createSettingsModal = () => `
               <input id="settings-memory-graph-toggle" type="checkbox" style="width:auto;flex:none;">
               <span class="settings-feedback" id="settings-memory-graph-feedback" style="margin-left:8px;"></span>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="alert-sound-toggle">回复提示音</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:var(--ink2);">
+                <input type="checkbox" id="alert-sound-toggle" />
+                Jarvis 回复时的提示音（默认开）
+              </label>
+            </div>
           </div>
         </div>
 

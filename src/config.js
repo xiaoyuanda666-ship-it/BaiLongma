@@ -54,6 +54,11 @@ export const MINIMAX_MODELS = [
     label: 'MiniMax-M1',
     deprecated: false,
   },
+  {
+    id: 'MiniMax-M3',
+    label: 'MiniMax-M3',
+    deprecated: false,
+  },
 ]
 
 export const OPENAI_MODELS = [
