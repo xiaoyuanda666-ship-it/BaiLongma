@@ -28,7 +28,7 @@ import { sceneClientCount } from '../scene/scene-server.js'
 import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
-import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
+import { execBackgroundCommand, execCommand, execCommandNoShell, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
@@ -441,7 +441,9 @@ function toolJson(payload) {
 }
 
 // run_cli：白名单驱动的本机 CLI 调用（exec_command 的受限安全档）。
-// 校验 cmd ∈ 白名单 → 否则拒绝；放行后复用 exec_command 的 runner（沙箱/审计/超时/截断）。
+// 关键安全约束：args 经 execCommandNoShell 以 argv 直传 spawn(shell:false)——
+// 参数里的 `;` `$()` 反引号等都是字面量，不经 shell 解释，杜绝注入。
+// 仅 cmd 受白名单约束；args 不再拼接进 shell 字符串。
 async function execRunCli({ cmd, args } = {}, context = {}) {
   const name = String(cmd || '').trim()
   if (!name) return toolJson({ ok: false, error: 'cmd 必填' })
@@ -450,8 +452,16 @@ async function execRunCli({ cmd, args } = {}, context = {}) {
   }
   const entry = getCliEntry(name)
   const bin = entry?.path || name   // path 避开 Electron PATH 缺失用户级 bin 的问题
-  const argStr = Array.isArray(args) ? args.map(String).join(' ') : String(args || '')
-  return await execCommand({ command: `${bin} ${argStr}`.trim() }, context)
+  // args 形态：数组（推荐）→ 原样；字符串 → 按 shell 字段拆分（仅拆分、不解释元字符）。
+  // 拆分后每个 token 作为独立 argv 传给 spawn(shell:false)，CLI 自行解析。
+  let argv
+  if (Array.isArray(args)) {
+    argv = args.map(a => String(a))
+  } else {
+    const s = String(args || '').trim()
+    argv = s ? s.split(/\s+/) : []
+  }
+  return await execCommandNoShell({ bin, args: argv }, context)
 }
 
 // ─── 工具市场执行函数 ──────────────────────────────────────────────────────────

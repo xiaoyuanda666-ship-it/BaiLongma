@@ -389,6 +389,88 @@ export async function execBackgroundCommand(args, context = {}) {
   return execProfiledCommand('exec_background_command', 'background', args, context, { background: true })
 }
 
+// run_cli 专用：无 shell 执行（spawn(..., { shell:false })），杜绝 args 经 shell 元字符注入。
+// bin + argsArray 直接作为 argv 传给 spawn——参数里的 `;`、`$()`、反引号都是字面量，不会被 shell 解释。
+// 复用沙盒 cwd / 超时 / abort / 输出截断，与 exec_command 同档安全约束；只是不再走 shell 字符串拼接。
+// 之所以独立于 execCommand：execCommand 接收单一 `command` 字符串并强制 shell:true，无法表达"参数已拆分"。
+export async function execCommandNoShell({ bin, args = [], timeout, cwd } = {}, context = {}) {
+  throwIfAborted(context.signal)
+  const argv = Array.isArray(args) ? args.map(String) : []
+  let execCwd
+  try {
+    execCwd = resolveExecCwd(cwd || '')
+  } catch (err) {
+    return toolJson({ ok: false, tool: 'run_cli', error: err.message })
+  }
+  const timeoutMs = resolveProfileTimeout({ timeout }, { defaultTimeoutSec: 60, maxTimeoutSec: 120 })
+  const command = `${bin} ${argv.join(' ')}`  // 仅用于日志/事件展示，不参与执行
+  console.log(`[run_cli] no-shell · ${command} (cwd: ${execCwd})`)
+  emitEvent('run_cli', { command, cwd: execCwd })
+
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timer = null
+
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      merged?.cleanup()
+      resolve(value)
+    }
+
+    const merged = createMergedAbortSignal(context.signal, timeoutMs)
+    const onAbort = () => {
+      terminateProcessTree(child)
+      finish(toolJson({
+        ok: false, tool: 'run_cli', command, cwd: execCwd,
+        aborted: true,
+        stdout: trimCommandOutput(stdout), stderr: trimCommandOutput(stderr),
+        error: 'command aborted',
+      }))
+    }
+    if (merged?.signal.aborted) { onAbort(); return }
+    merged?.signal.addEventListener('abort', onAbort, { once: true })
+
+    const child = spawn(bin, argv, { cwd: execCwd, shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d) => { stdout += d })
+    child.stderr?.on('data', (d) => { stderr += d })
+
+    timer = setTimeout(() => {
+      terminateProcessTree(child)
+      finish(toolJson({
+        ok: false, tool: 'run_cli', command, cwd: execCwd,
+        timed_out: true,
+        stdout: trimCommandOutput(stdout), stderr: trimCommandOutput(stderr),
+        error: `command timed out after ${timeoutMs}ms`,
+      }))
+    }, timeoutMs)
+
+    child.on('error', (err) => {
+      finish(toolJson({
+        ok: false, tool: 'run_cli', command, cwd: execCwd,
+        stdout: trimCommandOutput(stdout), stderr: trimCommandOutput(stderr),
+        error: `failed to spawn: ${err.message}`,
+      }))
+    })
+    child.on('close', (code) => {
+      const ok = code === 0
+      const failureHint = ok ? null : getCommandFailureHint(command, stderr, stdout)
+      finish(toolJson({
+        ok, tool: 'run_cli', command, cwd: execCwd,
+        exit_code: code,
+        stdout: trimCommandOutput(stdout), stderr: trimCommandOutput(stderr),
+        error: ok ? null : `command exited with code ${code}`,
+        hint: ok ? 'Command completed successfully.' : (failureHint || 'Inspect stderr/stdout before retrying.'),
+      }))
+    })
+  })
+}
+
 function resolveDownloadOutputPath(outputPath) {
   const raw = String(outputPath || '').trim()
   if (!raw) throw new Error('missing output_path')

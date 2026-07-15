@@ -14,8 +14,9 @@ console.log('test-cli-whitelist: 白名单纯逻辑\n')
 // --- 默认白名单含 gbrain ---
 {
   assert.ok(DEFAULT_WHITELIST.some(e => e.name === 'gbrain'))
-  assert.ok(DEFAULT_WHITELIST.find(e => e.name === 'gbrain').path, 'gbrain 应有 path（避开 Electron PATH 问题）')
-  ok('默认白名单含 gbrain 且带绝对 path')
+  // 默认不带绝对 path（本机路径不应进源码）；path 由各机器在 config 里覆盖
+  assert.equal(DEFAULT_WHITELIST.find(e => e.name === 'gbrain').path, undefined, '默认白名单不应带本机绝对 path')
+  ok('默认白名单含 gbrain，且不带本机绝对 path（按机器在 config 覆盖）')
 }
 
 // --- isAllowed：gbrain 放行，危险/未列名拒绝 ---
@@ -65,7 +66,8 @@ console.log('test-cli-whitelist: 白名单纯逻辑\n')
   assert.equal(isCliAllowed('curl'), false)
   const gb = getCliEntry('gbrain')
   assert.ok(gb, 'getCliEntry(gbrain) 应返回条目')
-  assert.ok(gb.path, 'gbrain 条目应带 path')
+  // 默认不带 path（本机路径不进源码）；走 PATH 解析
+  assert.equal(gb.path, undefined, '默认 gbrain 条目不应带 path')
   const list = listAllowedClis()
   assert.ok(list.some(e => e.name === 'gbrain'))
   assert.ok(!list.some(e => e.name === 'curl'))

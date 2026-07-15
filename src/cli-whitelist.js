@@ -2,13 +2,15 @@
 // run_cli 只放行白名单内的 CLI（比 exec_command 的任意 shell 更窄、更安全）。
 // 纯逻辑（+ 读 config.json 块），可在纯 node 下单测。见 .claude/plans/cli-tool-invocation.plan.md M1。
 
-// 默认白名单。path 可选——Electron 进程 PATH 常缺失用户级 bin（如 ~/.bun/bin），
-// 故 gbrain 用实测到的绝对路径，避免"command not found"。可在 config 覆盖。
+// 默认白名单。path 省略 → 走 PATH 解析（execCommand/execCommandNoShell 已回退到 PATH）。
+// 不把绝对路径写进源码：那是本机/某用户私有路径，分发到其他机器会 ENOENT，且泄露维护者目录。
+// 若你的 Electron 环境确实缺 PATH（GUI 启动拿不到 ~/.bun/bin 等），在本地 config.json 的
+// cli_whitelist 块里给该 CLI 配 path（按机器覆盖，不进仓库）：
+//   { "cli_whitelist": [{ "name": "gbrain", "path": "/Users/you/.bun/bin/gbrain" }] }
 export const DEFAULT_WHITELIST = [
   {
     name: 'gbrain',
     description: '本地知识库 gbrain（只读优先：search/query/ask/get/list/tags/backlinks/graph；put/delete/import/sync/embed 为写操作，TICK 自主时慎用）',
-    path: '/Users/richard/.bun/bin/gbrain',
   },
 ]
 

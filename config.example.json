@@ -1,0 +1,10 @@
+{
+  "clawbot": {},
+  "tts": {
+    "ttsProvider": "doubao",
+    "ttsVoiceId": "zh_female_xiaohe_uranus_bigtts",
+    "doubaoKey": "REPLACE_WITH_YOUR_DOUBAO_KEY"
+  },
+  "embedding": {},
+  "schemaVersion": 3
+}
