@@ -75,6 +75,11 @@ const fixture = http.createServer((request, response) => {
         <div id="dedupe-child" aria-label="Smallest click target" onclick="event.stopPropagation(); document.querySelector('#dedupe-output').textContent = 'child'">Smallest target</div>
       </div>
       <div id="dedupe-output">No dedupe click</div>
+      <div id="covered-button-wrap" style="position:relative;width:max-content">
+        <button id="covered-button" onclick="document.querySelector('#covered-output').textContent = 'Covered button activated'">Covered submit</button>
+        <span class="byte-tooltip__wrapper" style="position:absolute;inset:0;z-index:2">Tooltip</span>
+      </div>
+      <p id="covered-output">Covered button waiting</p>
       <div id="static-div" aria-label="Static container">Static non-interactive div</div>
       <div id="hidden-click" aria-label="Hidden click target" style="display:none" onclick="void 0">Hidden</div>
       <button id="disabled-button" disabled>Disabled button</button>
@@ -146,11 +151,13 @@ try {
   const pointerTarget = first.elements.find(element => element.name === 'Pointer target')
   const propertyTarget = first.elements.find(element => element.name === 'DOM property target')
   const smallestTarget = first.elements.find(element => element.name === 'Smallest click target')
+  const coveredButton = first.elements.find(element => element.name === 'Covered submit')
   assert.ok(plainDiv?.ref, 'ordinary div with an explicit click handler gets a ref')
   assert.ok(reactRegion?.ref, 'React-style handler props on a nested region get a ref')
   assert.ok(pointerTarget?.ref, 'cursor:pointer region gets a ref')
   assert.ok(propertyTarget?.ref, 'safely readable DOM property handler gets a ref')
   assert.ok(smallestTarget?.ref, 'smallest nested click target gets a ref')
+  assert.ok(coveredButton?.ref, 'button covered by a tooltip keeps its exact ref')
   assert.equal(first.elements.some(element => element.name === 'Parent click target'), false)
   assert.equal(first.elements.some(element => element.name === 'Static container'), false)
   assert.equal(first.elements.some(element => element.name === 'Hidden click target'), false)
@@ -187,6 +194,18 @@ try {
   await manager.act({ session_id: opened.session_id, action: 'click', ref: pointerTarget.ref })
   await manager.act({ session_id: opened.session_id, action: 'click', ref: propertyTarget.ref })
   await manager.act({ session_id: opened.session_id, action: 'click', ref: smallestTarget.ref })
+  const interruptedCoveredClick = new AbortController()
+  const pendingCoveredClick = manager.act({
+    session_id: opened.session_id, action: 'click', ref: coveredButton.ref, timeout_ms: 5_000,
+  }, { signal: interruptedCoveredClick.signal })
+  setTimeout(() => interruptedCoveredClick.abort('user stopped the click'), 50)
+  await assert.rejects(pendingCoveredClick, error => error.name === 'AbortError')
+  const afterInterruptedClick = await manager.inspect({ session_id: opened.session_id })
+  assert.match(afterInterruptedClick.text, /Covered button waiting/)
+  const coveredClick = await manager.act({
+    session_id: opened.session_id, action: 'click', ref: coveredButton.ref, timeout_ms: 5_000,
+  })
+  assert.equal(coveredClick.click_method, 'keyboard_enter')
   const updated = await manager.inspect({ session_id: opened.session_id })
   assert.match(updated.text, /Hello Bailongma/)
   assert.match(updated.text, /Plain div expanded content/)
@@ -196,6 +215,7 @@ try {
   assert.ok(updated.elements.find(element => element.name === 'DOM property clicked')?.ref)
   assert.doesNotMatch(updated.text, /Getter executed/)
   assert.match(updated.text, /child/)
+  assert.match(updated.text, /Covered button activated/)
   assert.equal(updated.elements.find(element => element.tag === 'input').ref, input.ref)
   assert.ok(updated.elements.find(element => element.name === 'Dynamic')?.ref)
   assert.equal(new Set(updated.elements.map(element => element.ref)).size, updated.elements.length)

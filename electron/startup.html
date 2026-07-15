@@ -23,6 +23,37 @@
 
     * { box-sizing: border-box; }
 
+    .startup-titlebar { display: none; }
+
+    .windows-titlebar-overlay body::before {
+      content: "";
+      position: fixed;
+      inset: 0 0 auto;
+      z-index: 19;
+      height: env(titlebar-area-height, 38px);
+      pointer-events: none;
+      background: var(--bg);
+      border-bottom: 1px solid rgba(141, 154, 167, 0.14);
+    }
+
+    .windows-titlebar-overlay .startup-titlebar {
+      position: fixed;
+      inset: 0 auto auto 0;
+      z-index: 20;
+      width: env(titlebar-area-width, calc(100% - 138px));
+      height: env(titlebar-area-height, 38px);
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 14px;
+      color: var(--text);
+      background: transparent;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      -webkit-app-region: drag;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -43,6 +74,21 @@
       gap: 32px;
       align-items: center;
       padding: clamp(24px, 4vw, 48px) clamp(28px, 5vw, 72px);
+    }
+
+    .windows-titlebar-overlay .shell {
+      min-height: calc(100vh - 38px);
+      margin-top: 38px;
+    }
+
+    .windows-titlebar-overlay.window-fullscreen body::before,
+    .windows-titlebar-overlay.window-fullscreen .startup-titlebar {
+      display: none;
+    }
+
+    .windows-titlebar-overlay.window-fullscreen .shell {
+      min-height: 100vh;
+      margin-top: 0;
     }
 
     .identity {
@@ -289,8 +335,14 @@
       }
     }
   </style>
+  <script>
+    if (window.bailongma?.isElectron && window.bailongma?.platform === 'win32') {
+      document.documentElement.classList.add('windows-titlebar-overlay');
+    }
+  </script>
 </head>
 <body>
+  <header class="startup-titlebar" aria-label="Window drag area"></header>
   <main class="shell">
     <section class="identity" aria-live="polite">
       <div class="brand-row">
@@ -399,6 +451,11 @@
 
     const bridge = window.bailongma;
     if (bridge) {
+      const setFullScreenClass = (fullscreen) => {
+        document.documentElement.classList.toggle('window-fullscreen', Boolean(fullscreen));
+      };
+      bridge.onFullScreenChange?.(setFullScreenClass);
+      bridge.isFullScreen?.().then(setFullScreenClass).catch(() => {});
       bridge.getVersion?.().then((version) => {
         if (version) versionEl.textContent = `Desktop Agent ${version}`;
       }).catch(() => {});

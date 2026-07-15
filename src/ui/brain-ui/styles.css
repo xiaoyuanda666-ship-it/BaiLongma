@@ -1,4 +1,5 @@
 :root {
+  --app-titlebar-height: 38px;
   --bg0: #111821;
   --bg1: #172231;
   --bg-deep: #0d141d;
@@ -110,6 +111,49 @@ body {
   transition: background 0.6s ease, color 0.6s ease;
 }
 
+.app-titlebar {
+  display: none;
+}
+
+.windows-titlebar-overlay body::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 9999;
+  height: env(titlebar-area-height, var(--app-titlebar-height));
+  pointer-events: none;
+  background: var(--bg0);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  transition: background 0.6s ease, border-color 0.6s ease;
+}
+
+.windows-titlebar-overlay .app-titlebar {
+  position: fixed;
+  inset: 0 auto auto 0;
+  z-index: 10000;
+  width: env(titlebar-area-width, calc(100% - 138px));
+  height: env(titlebar-area-height, var(--app-titlebar-height));
+  display: block;
+  background: transparent;
+  -webkit-app-region: drag;
+}
+
+.windows-titlebar-overlay .app-viewport {
+  position: fixed;
+  inset: env(titlebar-area-height, var(--app-titlebar-height)) 0 0;
+  overflow: hidden;
+  transform: translateZ(0);
+}
+
+.windows-titlebar-overlay.window-fullscreen body::before,
+.windows-titlebar-overlay.window-fullscreen .app-titlebar {
+  display: none;
+}
+
+.windows-titlebar-overlay.window-fullscreen .app-viewport {
+  inset: 0;
+}
+
 .grid-overlay {
   display: none;
 }
@@ -193,16 +237,13 @@ body {
 }
 
 .brand-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 34% 28%, #ffffff 0 8%, transparent 9%),
-    radial-gradient(circle at 45% 42%, var(--cool), var(--warm) 58%, #2a1708 100%);
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: url("/site-assets/icon.png") center / cover no-repeat;
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 0 18px color-mix(in srgb, var(--warm) 48%, transparent);
-  animation: neb-blink 2.6s ease-in-out infinite;
+    0 0 18px color-mix(in srgb, var(--cool) 34%, transparent);
   flex-shrink: 0;
 }
 
@@ -1985,6 +2026,22 @@ body {
   font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 .settings-feedback.error { color: var(--warm); }
+
+.settings-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--cool);
+  cursor: pointer;
+}
+
+.settings-range-value {
+  width: 44px;
+  text-align: right;
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--ink);
+  flex-shrink: 0;
+}
 
 .settings-toggle {
   position: relative;

@@ -7,6 +7,7 @@ import {
   config,
   getActivationStatus,
   getEmbeddingConfig,
+  getContextWindowConfig,
   getHeartbeatConfig,
   getMinimaxKey,
   getNetworkConfig,
@@ -18,6 +19,7 @@ import {
   getWebSearchConfig,
   saveLLMSettings,
   setEmbeddingConfig,
+  setContextWindowConfig,
   setHeartbeatConfig,
   setMinimaxKey,
   setNetworkConfig,
@@ -58,6 +60,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         models: status.models,
         temperature: config.temperature,
         thinking: config.thinking === true,
+        contextWindow: getContextWindowConfig(),
         apiKey: config.apiKey || '',
       },
       providers: getProviderSummaries(),
@@ -115,6 +118,17 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const { thinking } = await readJsonBody(req)
       const result = setThinking(thinking)
       jsonResponse(res, 200, { ok: true, ...result })
+    } catch (err) {
+      jsonResponse(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/settings/context-window') {
+    try {
+      const updates = await readJsonBody(req)
+      const contextWindow = setContextWindowConfig(updates)
+      jsonResponse(res, 200, { ok: true, contextWindow })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }

@@ -217,6 +217,15 @@ FunctionEnd
 !macro customInstall
   Call BailongmaRepairAndValidateInstalledPayload
 
+  ; Keep the shortcut icon outside $INSTDIR. During an upgrade the old payload
+  ; is removed before the new payload is copied, so an icon that points at
+  ; Bailongma.exe temporarily disappears. Explorer can cache that missing icon
+  ; as a blank document and keep showing it even after the new EXE arrives.
+  ; This stable copy survives upgrades and is refreshed on every install.
+  CreateDirectory "$APPDATA\Bailongma"
+  SetOutPath "$APPDATA\Bailongma"
+  File /oname=shortcut-icon.ico "${PROJECT_DIR}\build\icon.ico"
+
   ; Avoid electron-builder's WinShell plugin for shortcuts. Plain NSIS
   ; shortcuts are enough because the app itself sets AppUserModelID at runtime.
   SetOutPath "$INSTDIR"
@@ -224,7 +233,12 @@ FunctionEnd
   Delete "$SMPROGRAMS\Bailongma\Bailongma.lnk"
   RMDir "$SMPROGRAMS\Bailongma"
   Delete "$DESKTOP\Bailongma.lnk"
-  CreateShortCut "$DESKTOP\Bailongma.lnk" "$INSTDIR\Bailongma.exe" "" "$INSTDIR\Bailongma.exe" 0
+  CreateShortCut "$DESKTOP\Bailongma.lnk" "$INSTDIR\Bailongma.exe" "" "$APPDATA\Bailongma\shortcut-icon.ico" 0
+
+  ; The shortcut path and target remain the same across upgrades. Explicitly
+  ; invalidate Explorer's icon cache so it notices the restored shortcut and
+  ; the stable icon location immediately instead of retaining a blank icon.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
   WriteRegStr SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" "KeepShortcuts" "true"
   ${if} $installMode == "all"
     WriteRegStr SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}" "UninstallString" '"$INSTDIR\Uninstall Bailongma.exe" /allusers --keep-shortcuts'
@@ -324,6 +338,7 @@ FunctionEnd
   Delete "$SMPROGRAMS\Bailongma.lnk"
   Delete "$SMPROGRAMS\Bailongma\Bailongma.lnk"
   RMDir "$SMPROGRAMS\Bailongma"
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
   Delete "$INSTDIR\resources\app.asar"
   Delete "$INSTDIR\resources\app-update.yml"
@@ -403,6 +418,10 @@ FunctionEnd
   ; 那种情况绝不能删数据，否则更新一次记忆全没——所以只在“真卸载”时弹窗。
   ; /SD IDNO 让静默卸载默认走“保留”，不打扰、不误删。
   ${ifNot} ${isUpdated}
+    ; The stable shell icon is installer-owned, not user data. Remove it on a
+    ; real uninstall even when the user chooses to retain conversations and
+    ; settings for a future reinstall.
+    Delete "$APPDATA\Bailongma\shortcut-icon.ico"
     MessageBox MB_YESNO|MB_ICONQUESTION "是否同时删除白龙马的全部用户数据？$\r$\n$\r$\n包括：对话与记忆数据库、配置（含 API Key）、沙盒文件、下载的音乐等。$\r$\n$\r$\n选择「是」将彻底清除且无法恢复；选择「否」保留数据，方便以后重装时继续使用。" /SD IDNO IDNO keepUserData
       ; userData 目录 = %APPDATA%\<productName>，即 $APPDATA\Bailongma
       RMDir /r "$APPDATA\Bailongma"

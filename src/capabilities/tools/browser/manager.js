@@ -17,6 +17,47 @@ const ALLOWED_ACTIONS = new Set([
   'scroll', 'wait', 'back', 'forward', 'reload',
 ])
 
+const POINTER_CLICK_PROBE_TIMEOUT_MS = 1_500
+const POINTER_INTERCEPTION_RE = /intercepts pointer events/i
+
+function supportsKeyboardClickFallback(element = {}) {
+  const tag = String(element.tag || '').toLowerCase()
+  const role = String(element.role || '').toLowerCase()
+  const type = String(element.type || '').toLowerCase()
+  return tag === 'button'
+    || tag === 'a'
+    || role === 'button'
+    || role === 'link'
+    || (tag === 'input' && ['button', 'submit', 'reset', 'image'].includes(type))
+}
+
+async function clickElement(target, refEntry, timeout, signal) {
+  const pointerTimeout = Math.min(timeout, POINTER_CLICK_PROBE_TIMEOUT_MS)
+  const startedAt = Date.now()
+  try {
+    // A trial performs Playwright's complete actionability check without
+    // dispatching the click. It lets us identify a persistent tooltip quickly
+    // while preserving the caller's full timeout budget for every other kind
+    // of transient page state.
+    await target.click({ timeout: pointerTimeout, trial: true })
+  } catch (error) {
+    if (POINTER_INTERCEPTION_RE.test(error?.message || '')
+        && supportsKeyboardClickFallback(refEntry?.element)) {
+      // Playwright cannot abort a running ElementHandle.click. Keep the
+      // pointer probe short, then observe the turn signal before attempting a
+      // fallback so a user interruption can never become a delayed submit.
+      throwIfAborted(signal)
+      const remainingTimeout = Math.max(1, timeout - (Date.now() - startedAt))
+      await target.press('Enter', { timeout: remainingTimeout })
+      return 'keyboard_enter'
+    }
+  }
+  throwIfAborted(signal)
+  const remainingTimeout = Math.max(1, timeout - (Date.now() - startedAt))
+  await target.click({ timeout: remainingTimeout })
+  return 'pointer'
+}
+
 export class BrowserSessionError extends Error {
   constructor(code, message, cause) {
     super(message, cause ? { cause } : undefined)
@@ -602,7 +643,8 @@ export class BrowserSessionManager {
         }
       }
       const target = refEntry?.handle
-      if (action === 'click') await target.click({ timeout })
+      let clickMethod = null
+      if (action === 'click') clickMethod = await clickElement(target, refEntry, timeout, context.signal)
       else if (action === 'fill') await target.fill(String(args.value ?? ''), { timeout })
       else if (action === 'press') await target.press(String(args.key || args.value || ''), { timeout })
       else if (action === 'select') {
@@ -636,7 +678,8 @@ export class BrowserSessionManager {
       }
       return {
         ok: true, session_id: session.id, page_id: pageState.id,
-        action, url: page.url(), title: await page.title(),
+        action, ...(clickMethod ? { click_method: clickMethod } : {}),
+        url: page.url(), title: await page.title(),
       }
     })
   }

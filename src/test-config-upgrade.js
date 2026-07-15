@@ -125,6 +125,37 @@ async function loadFresh(json) {
   assert(getHeartbeatConfig().enabled === true, 'HB: 非法请求不会部分修改运行时心跳状态')
 }
 
+// Context-window message limits default to 10, persist independently, and reject invalid updates atomically.
+{
+  const defaults = await loadFresh({})
+  assert(defaults.getContextWindowConfig().conversationMessageLimit === 10,
+    'CTX: normal conversation context defaults to 10 messages')
+  assert(defaults.getContextWindowConfig().tickMessageLimit === 10,
+    'CTX: Tick context defaults to 10 messages')
+
+  const mod = await loadFresh({
+    contextWindow: { conversationMessageLimit: 12, tickMessageLimit: 34 },
+  })
+  assert(mod.getContextWindowConfig().conversationMessageLimit === 12,
+    'CTX: saved normal conversation limit loads')
+  assert(mod.getContextWindowConfig().tickMessageLimit === 34,
+    'CTX: saved Tick limit loads')
+
+  const updated = mod.setContextWindowConfig({ conversationMessageLimit: 7, tickMessageLimit: 31 })
+  assert(updated.conversationMessageLimit === 7 && updated.tickMessageLimit === 31,
+    'CTX: both context limits update immediately')
+  const stored = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(stored.contextWindow.conversationMessageLimit === 7 && stored.contextWindow.tickMessageLimit === 31,
+    'CTX: context limits persist to config.json')
+
+  let invalidRejected = false
+  try { mod.setContextWindowConfig({ conversationMessageLimit: 8, tickMessageLimit: 41 }) } catch { invalidRejected = true }
+  assert(invalidRejected, 'CTX: limits outside 1 to 40 are rejected')
+  assert(mod.getContextWindowConfig().conversationMessageLimit === 7
+    && mod.getContextWindowConfig().tickMessageLimit === 31,
+    'CTX: invalid updates do not partially change settings')
+}
+
 // ── 场景 E：schema 迁移 v0 → v3，旧版 seedance、LLM 和 voice 块拆到独立文件 ──
 {
   const seedanceFile = path.join(tmp, 'seedance.json')

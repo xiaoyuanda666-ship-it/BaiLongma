@@ -24,6 +24,7 @@ import { selectTools } from './tool-router.js'
 import { computeSelfPerception, computeSelfSnapshot } from './self-perception.js'
 import { selectActivePolicies } from './active-policies.js'
 import { formatSelfEvolutionForPrompt } from './self-evolution.js'
+import { getContextWindowConfig } from '../config.js'
 
 // runInjector 内部用到的检索/选择/解析原语（已拆到 ./injector-retrieval.js）
 import {
@@ -90,16 +91,17 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   let userProfile = null
   let conversationWindow = []
   let senderMemories = []
+  const contextWindow = getContextWindowConfig()
 
   if (senderId) {
     personMemory = getPersonMemory(senderId)
     userProfile = getUserProfile(senderId)
-    conversationWindow = getRecentConversation(senderId, 20, 24)
+    conversationWindow = getRecentConversation(senderId, contextWindow.conversationMessageLimit, 24)
     senderMemories = getMemoriesByEntity(senderId, 10)
   } else if (message && /^TICK\s/i.test(message.trim())) {
     personMemory = getPersonMemory(PRIMARY_USER_ID)
     userProfile = getUserProfile(PRIMARY_USER_ID)
-    conversationWindow = getRecentConversationTimeline(40, L2_CONTEXT_HOURS)
+    conversationWindow = getRecentConversationTimeline(contextWindow.tickMessageLimit, L2_CONTEXT_HOURS)
     senderMemories = getMemoriesByEntity(PRIMARY_USER_ID, 10)
   }
 

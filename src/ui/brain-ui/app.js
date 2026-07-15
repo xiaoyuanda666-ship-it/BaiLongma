@@ -14,6 +14,15 @@ import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
 import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx } from "./tts-fx.js";
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
+const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
+document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
+if (hasWindowsTitleBarOverlay) {
+  const setFullScreenClass = (fullscreen) => {
+    document.documentElement.classList.toggle("window-fullscreen", Boolean(fullscreen));
+  };
+  window.bailongma.onFullScreenChange?.(setFullScreenClass);
+  window.bailongma.isFullScreen?.().then(setFullScreenClass).catch(() => {});
+}
 renderBrainUiApp(document.body);
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
@@ -228,6 +237,9 @@ function refreshThemeColors() {
 function applyTheme(theme) {
   document.body.dataset.theme = theme;
   try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  if (hasWindowsTitleBarOverlay) {
+    window.bailongma?.setTitleBarTheme?.(theme).catch(() => {});
+  }
   document.querySelectorAll(".theme-dot").forEach(el => {
     el.classList.toggle("active", el.dataset.t === theme);
   });
@@ -2923,6 +2935,12 @@ function initTTSSettings() {
   const tempFeedback    = document.getElementById("settings-temperature-feedback");
   const thinkingToggle  = document.getElementById("settings-thinking");
   const thinkingFeedback = document.getElementById("settings-thinking-feedback");
+  const conversationContextSlider = document.getElementById("settings-conversation-context-limit");
+  const conversationContextVal = document.getElementById("settings-conversation-context-limit-val");
+  const tickContextSlider = document.getElementById("settings-tick-context-limit");
+  const tickContextVal = document.getElementById("settings-tick-context-limit-val");
+  const saveContextWindowBtn = document.getElementById("settings-save-context-window");
+  const contextWindowFeedback = document.getElementById("settings-context-window-feedback");
   const minimaxKeyInput = document.getElementById("settings-minimax-key");
   const saveMinimaxBtn  = document.getElementById("settings-save-minimax");
   const minimaxFeedback = document.getElementById("settings-minimax-feedback");
@@ -3125,6 +3143,13 @@ function initTTSSettings() {
         if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
       }
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
+      const contextWindow = llm.contextWindow || {};
+      const conversationMessageLimit = Number(contextWindow.conversationMessageLimit) || 10;
+      const tickMessageLimit = Number(contextWindow.tickMessageLimit) || 10;
+      if (conversationContextSlider) conversationContextSlider.value = String(conversationMessageLimit);
+      if (conversationContextVal) conversationContextVal.textContent = `${conversationMessageLimit} 条`;
+      if (tickContextSlider) tickContextSlider.value = String(tickMessageLimit);
+      if (tickContextVal) tickContextVal.textContent = `${tickMessageLimit} 条`;
     } catch {}
   }
 
@@ -3391,6 +3416,43 @@ function initTTSSettings() {
         thinkingToggle.checked = !thinking;
         showFeedback(thinkingFeedback, "请求失败", true);
       } finally { thinkingToggle.disabled = false; }
+    });
+  }
+
+  if (conversationContextSlider && conversationContextVal) {
+    conversationContextSlider.addEventListener("input", () => {
+      conversationContextVal.textContent = `${conversationContextSlider.value} 条`;
+    });
+  }
+  if (tickContextSlider && tickContextVal) {
+    tickContextSlider.addEventListener("input", () => {
+      tickContextVal.textContent = `${tickContextSlider.value} 条`;
+    });
+  }
+  if (saveContextWindowBtn) {
+    saveContextWindowBtn.addEventListener("click", async () => {
+      const body = {
+        conversationMessageLimit: Number(conversationContextSlider?.value || 10),
+        tickMessageLimit: Number(tickContextSlider?.value || 10),
+      };
+      saveContextWindowBtn.disabled = true;
+      try {
+        const res = await fetch(`${API}/settings/context-window`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showFeedback(contextWindowFeedback, "已保存 — 下一轮生效");
+        } else {
+          showFeedback(contextWindowFeedback, data.error || "保存失败", true);
+        }
+      } catch {
+        showFeedback(contextWindowFeedback, "请求失败", true);
+      } finally {
+        saveContextWindowBtn.disabled = false;
+      }
     });
   }
 

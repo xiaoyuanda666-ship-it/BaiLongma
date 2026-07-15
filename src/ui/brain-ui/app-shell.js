@@ -4,6 +4,10 @@ import { createTyphoonPanel } from './typhoon-panel.js';
 import { createPersonCardPanel } from './person-card-panel.js';
 import { createDocPanel } from './doc-panel.js';
 
+const createAppTitlebar = () => `
+<header class="app-titlebar" aria-label="Window drag area"></header>
+`;
+
 const createGraphStage = () => `
 <div class="grid-overlay"></div>
 <svg id="graph" aria-label="Longma 记忆节点图"></svg>
@@ -342,6 +346,24 @@ const createSettingsModal = () => `
                 <span class="settings-toggle-track"></span>
               </label>
               <span class="settings-feedback" id="settings-thinking-feedback"></span>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-label">上下文消息条数</div>
+            <p class="settings-hint">分别控制普通对话和 Tick 对话每轮注入的最近消息数量。范围 1–40 条，默认均为 10 条，修改后下一轮生效。</p>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-conversation-context-limit">普通对话</label>
+              <input class="settings-range" type="range" id="settings-conversation-context-limit" min="1" max="40" step="1" value="10">
+              <span class="settings-range-value" id="settings-conversation-context-limit-val">10 条</span>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-tick-context-limit">Tick 对话</label>
+              <input class="settings-range" type="range" id="settings-tick-context-limit" min="1" max="40" step="1" value="10">
+              <span class="settings-range-value" id="settings-tick-context-limit-val">10 条</span>
+            </div>
+            <div class="settings-row-action">
+              <button class="settings-save-btn" id="settings-save-context-window" type="button">保存</button>
+              <span class="settings-feedback" id="settings-context-window-feedback"></span>
             </div>
           </div>
         </div>
@@ -1057,7 +1079,7 @@ const createPanelTabs = () => `
 `;
 
 export function createBrainUiMarkup() {
-  return [
+  const viewportMarkup = [
     createGraphStage(),
     createPrimaryPanel(),
     createSecondaryPanel(),
@@ -1074,6 +1096,8 @@ export function createBrainUiMarkup() {
     createPersonCardPanel(),
     createDocPanel(),
   ].join("\n\n");
+
+  return `${createAppTitlebar()}\n\n<main class="app-viewport">${viewportMarkup}</main>`;
 }
 
 export function renderBrainUiApp(root = document.body) {

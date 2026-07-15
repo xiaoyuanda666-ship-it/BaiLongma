@@ -56,7 +56,7 @@ const sys2 = buildSystemPrompt({
 assert(sys1 === sys2, 'system stays stable when only dynamic fields differ')
 assert(sys1.includes('Longma'), 'system contains agent name')
 assert(sys1.includes('Curious, brief'), 'system contains persona')
-assert(sys1.includes('## Top-Level Behavior Rules'), 'system contains hard floor')
+assert(sys1.includes('## Relationship Posture'), 'system contains hard floor')
 assert(sys1.includes('neither passive nor proactive by default'), 'system gives Tick posture judgment to the model')
 assert(!sys1.includes('You are passive by default'), 'system no longer imposes a passive Tick default')
 assert(sys1.includes('Progress notes are action-first'), 'system contains action-first progress note rule')
@@ -168,7 +168,7 @@ assert(!sysNeutral.includes('WeChat Outbound Constraint'), 'neutral input: no We
 assert(!sysNeutral.includes('## Focus Banner'), 'neutral input: no Focus Banner block')
 assert(!sysNeutral.includes('## Security Sandbox'), 'neutral input: no Security Sandbox block')
 // Neutral baseline 只保留真正的 CORE；视觉、语音、TICK 等场景段不再常驻。
-assert(sysNeutral.includes('## Top-Level Behavior Rules'), 'neutral: CORE Top-Level kept')
+assert(sysNeutral.includes('## Relationship Posture'), 'neutral: CORE Relationship Posture kept')
 assert(!sysNeutral.includes('## Visual Surfaces'), 'neutral: Visual Surfaces omitted')
 assert(!sysNeutral.includes('## Voice Input: Spoken Brevity'), 'neutral: Voice rules omitted')
 assert(!sysNeutral.includes('### Kinds & Composition'), 'neutral: visual kind catalog omitted')

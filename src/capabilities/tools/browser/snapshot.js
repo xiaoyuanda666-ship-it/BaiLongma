@@ -231,13 +231,13 @@ export async function inspectPage(pageState, { maxChars, maxElements }) {
       assertSameDocument()
       const existing = pageState.refs.get(element.ref)
       if (existing?.handle) {
-        nextRefs.set(element.ref, existing)
+        nextRefs.set(element.ref, { ...existing, element })
         continue
       }
       const handle = await pageState.page.locator(`[data-bailongma-ref="${cssEscape(element.ref)}"]`).first().elementHandle()
       if (handle) createdHandles.add(handle)
       assertSameDocument()
-      if (handle) nextRefs.set(element.ref, { handle, epoch: documentEpoch })
+      if (handle) nextRefs.set(element.ref, { handle, epoch: documentEpoch, element })
     }
     assertSameDocument()
   } catch (error) {

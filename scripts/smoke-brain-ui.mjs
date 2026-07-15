@@ -14,6 +14,7 @@ function contentTypeFor(filePath) {
     case '.js': return 'text/javascript; charset=utf-8'
     case '.css': return 'text/css; charset=utf-8'
     case '.json': return 'application/json; charset=utf-8'
+    case '.png': return 'image/png'
     default: return 'text/plain; charset=utf-8'
   }
 }
@@ -66,6 +67,11 @@ function createServer() {
 
     if (url.pathname === '/vendor/d3/d3.min.js') {
       sendFile(res, path.join(root, 'node_modules', 'd3', 'dist', 'd3.min.js'))
+      return
+    }
+
+    if (url.pathname === '/site-assets/icon.png') {
+      sendFile(res, path.join(root, 'build', 'icon.png'))
       return
     }
 

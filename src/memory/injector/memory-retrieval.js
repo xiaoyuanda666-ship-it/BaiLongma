@@ -16,15 +16,17 @@ import {
   gatherTemporalRecall,
 } from '../injector-retrieval.js'
 import { buildMemorySearchPlan } from './search-plan.js'
+import { getContextWindowConfig } from '../../config.js'
 
 const L2_CONTEXT_HOURS = 24 * 7
 
 export function getParticipantMemoryContext({ senderId = null, isTickMessage = false } = {}) {
+  const contextWindow = getContextWindowConfig()
   if (senderId) {
     return {
       personMemory: getPersonMemory(senderId),
       userProfile: getUserProfile(senderId),
-      conversationWindow: getRecentConversation(senderId, 20, 24),
+      conversationWindow: getRecentConversation(senderId, contextWindow.conversationMessageLimit, 24),
       senderMemories: getMemoriesByEntity(senderId, 10),
     }
   }
@@ -33,7 +35,7 @@ export function getParticipantMemoryContext({ senderId = null, isTickMessage = f
     return {
       personMemory: getPersonMemory(PRIMARY_USER_ID),
       userProfile: getUserProfile(PRIMARY_USER_ID),
-      conversationWindow: getRecentConversationTimeline(40, L2_CONTEXT_HOURS),
+      conversationWindow: getRecentConversationTimeline(contextWindow.tickMessageLimit, L2_CONTEXT_HOURS),
       senderMemories: getMemoriesByEntity(PRIMARY_USER_ID, 10),
     }
   }

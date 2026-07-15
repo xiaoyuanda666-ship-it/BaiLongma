@@ -30,6 +30,21 @@ const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
 const IS_DEV = !app.isPackaged
 configurePackagedPlaywright({ isPackaged: !IS_DEV })
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
+const WINDOWS_TITLE_BAR_HEIGHT = 38
+const WINDOWS_TITLE_BAR_THEMES = Object.freeze({
+  startup: { color: '#0b0d10', symbolColor: '#e7edf3' },
+  midnight: { color: '#111821', symbolColor: '#f3f5fb' },
+  phosphor: { color: '#050806', symbolColor: '#c8f0c8' },
+  violet: { color: '#0d0a1a', symbolColor: '#e4deff' },
+  rose: { color: '#1a0f16', symbolColor: '#f4e0e4' },
+  arctic: { color: '#f5f7f9', symbolColor: '#1a2330' },
+  sand: { color: '#f2ede3', symbolColor: '#2a231a' },
+})
+
+function windowsTitleBarOverlay(theme = 'startup') {
+  const colors = WINDOWS_TITLE_BAR_THEMES[theme] || WINDOWS_TITLE_BAR_THEMES.midnight
+  return { ...colors, height: WINDOWS_TITLE_BAR_HEIGHT }
+}
 
 function resolvePortableRoot() {
   if (IS_DEV) return null
@@ -490,6 +505,10 @@ async function createWindow({ loadStartup = true } = {}) {
     backgroundColor: '#0b0b0e',
     title: 'Bailongma',
     icon: getAppIconPath(),
+    ...(IS_WIN ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: windowsTitleBarOverlay(),
+    } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -536,6 +555,13 @@ async function createWindow({ loadStartup = true } = {}) {
       return
     }
   })
+
+  const sendFullScreenState = (fullscreen) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+    mainWindow.webContents.send('window:fullscreen-changed', Boolean(fullscreen))
+  }
+  mainWindow.on('enter-full-screen', () => sendFullScreenState(true))
+  mainWindow.on('leave-full-screen', () => sendFullScreenState(false))
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
@@ -1260,6 +1286,18 @@ function setupAutoUpdater() {
 
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
+ipcMain.handle('window:is-full-screen', (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  return Boolean(targetWindow && !targetWindow.isDestroyed() && targetWindow.isFullScreen())
+})
+ipcMain.handle('window:set-title-bar-theme', (event, theme) => {
+  if (!IS_WIN) return false
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!targetWindow || targetWindow.isDestroyed()) return false
+  const normalizedTheme = typeof theme === 'string' ? theme.trim().toLowerCase() : 'midnight'
+  targetWindow.setTitleBarOverlay(windowsTitleBarOverlay(normalizedTheme))
+  return true
+})
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)

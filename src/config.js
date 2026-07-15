@@ -20,6 +20,10 @@ export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
 export const DEFAULT_ZHIPU_MODEL = 'glm-5.1'
 export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-pro'
 
+export const CONTEXT_MESSAGE_LIMIT_MIN = 1
+export const CONTEXT_MESSAGE_LIMIT_MAX = 40
+export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 10
+
 export const DEEPSEEK_MODELS = [
   {
     id: 'deepseek-v4-flash',
@@ -974,6 +978,10 @@ export const config = {
   // 默认关闭——只有用户在设置里显式开启才思考。这是「用户显式选择」的开关，
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
+  contextWindow: {
+    conversationMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
+    tickMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
+  },
   security: {
     fileSandbox: true,
     execSandbox: true,
@@ -1001,6 +1009,20 @@ if (parsedConfig) {
   // 缺字段（旧版升级 / 未开启过）按默认 false 处理 —— 无需 schema 迁移。
   if (typeof parsedConfig.thinking === 'boolean') {
     config.thinking = parsedConfig.thinking
+  }
+  if (parsedConfig.contextWindow && typeof parsedConfig.contextWindow === 'object') {
+    const conversationMessageLimit = Number(parsedConfig.contextWindow.conversationMessageLimit)
+    const tickMessageLimit = Number(parsedConfig.contextWindow.tickMessageLimit)
+    if (Number.isInteger(conversationMessageLimit)
+      && conversationMessageLimit >= CONTEXT_MESSAGE_LIMIT_MIN
+      && conversationMessageLimit <= CONTEXT_MESSAGE_LIMIT_MAX) {
+      config.contextWindow.conversationMessageLimit = conversationMessageLimit
+    }
+    if (Number.isInteger(tickMessageLimit)
+      && tickMessageLimit >= CONTEXT_MESSAGE_LIMIT_MIN
+      && tickMessageLimit <= CONTEXT_MESSAGE_LIMIT_MAX) {
+      config.contextWindow.tickMessageLimit = tickMessageLimit
+    }
   }
   if (parsedConfig.heartbeat && typeof parsedConfig.heartbeat === 'object') {
     const heartbeat = parsedConfig.heartbeat
@@ -1357,6 +1379,30 @@ export function setThinking(enabled) {
   config.thinking = v
   patchConfig({ thinking: v })
   return { thinking: v }
+}
+
+export function getContextWindowConfig() {
+  return {
+    conversationMessageLimit: config.contextWindow.conversationMessageLimit,
+    tickMessageLimit: config.contextWindow.tickMessageLimit,
+  }
+}
+
+export function setContextWindowConfig(updates = {}) {
+  const current = getContextWindowConfig()
+  const next = { ...current }
+  for (const key of ['conversationMessageLimit', 'tickMessageLimit']) {
+    if (!Object.prototype.hasOwnProperty.call(updates, key)) continue
+    const value = Number(updates[key])
+    if (!Number.isInteger(value)) throw new Error('上下文消息条数必须是整数')
+    if (value < CONTEXT_MESSAGE_LIMIT_MIN || value > CONTEXT_MESSAGE_LIMIT_MAX) {
+      throw new Error(`上下文消息条数必须在 ${CONTEXT_MESSAGE_LIMIT_MIN} 到 ${CONTEXT_MESSAGE_LIMIT_MAX} 之间`)
+    }
+    next[key] = value
+  }
+  config.contextWindow = next
+  patchConfig({ contextWindow: { ...next } })
+  return getContextWindowConfig()
 }
 
 export function getHeartbeatConfig() {
