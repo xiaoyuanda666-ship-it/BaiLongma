@@ -49,13 +49,17 @@ class FakeContext extends EventEmitter {
 }
 
 class FakeBrowser extends EventEmitter {
-  constructor({ contextPromise } = {}) {
+  constructor({ contextPromise, contextOptions } = {}) {
     super()
     this.closed = false
     this.contextPromise = contextPromise
+    this.contextOptions = contextOptions
   }
   isConnected() { return !this.closed }
-  async newContext() { return this.contextPromise || new FakeContext() }
+  async newContext(options) {
+    this.contextOptions?.push(options)
+    return this.contextPromise || new FakeContext()
+  }
   async close() { this.closed = true }
 }
 
@@ -88,10 +92,11 @@ try {
   assert.equal(BROWSER_ACTIONS.includes('evaluate'), false)
 
   const launchOptions = []
+  const launchContextOptions = []
   const launchDefaultsManager = fakeManager('launch-defaults', {
     launch: async options => {
       launchOptions.push(options)
-      return new FakeBrowser()
+      return new FakeBrowser({ contextOptions: launchContextOptions })
     },
   })
   const defaultOpen = await launchDefaultsManager.open({ url: 'about:blank' })
@@ -103,6 +108,9 @@ try {
   assert.equal(launchOptions.length, 2, 'visible and headless sessions use separate shared browsers')
   assert.equal(launchOptions[0].headless, false, 'default product launch is headed')
   assert.equal(launchOptions[1].headless, true, 'visible=false explicitly launches headless')
+  assert.equal(launchContextOptions[0].viewport, null, 'headed contexts use the native window viewport')
+  assert.deepEqual(launchContextOptions[1].viewport, { width: 1365, height: 900 },
+    'headless contexts retain the deterministic viewport')
   assert.equal(launchDefaultsManager.listSessions().count, 2, 'browser_sessions lists live open sessions')
   const defaultPage = launchDefaultsManager.sessions.get(defaultOpen.session_id).pages.values().next().value.page
   defaultPage.currentUrl = 'https://example.com/path/to/page?access_token=TOP_SECRET#private'
@@ -133,9 +141,11 @@ try {
 
   const defaultPersistentBrowser = new FakeBrowser()
   const defaultPersistentPaths = []
+  const defaultPersistentOptions = []
   const defaultPersistentManager = fakeManager('default-persistent', {
-    launchPersistentContext: async profilePath => {
+    launchPersistentContext: async (profilePath, options) => {
       defaultPersistentPaths.push(profilePath)
+      defaultPersistentOptions.push(options)
       return new FakeContext({ browser: defaultPersistentBrowser })
     },
   })
@@ -143,6 +153,8 @@ try {
   assert.equal(defaultPersistent.persistent, true, 'http(s) browser sessions persist by default')
   assert.equal(defaultPersistent.profile, 'default', 'implicit persistent sessions use the stable default profile name')
   assert.equal(defaultPersistentPaths.length, 1)
+  assert.equal(defaultPersistentOptions[0].viewport, null,
+    'headed persistent contexts use the native window viewport')
   await defaultPersistentManager.close({ session_id: defaultPersistent.session_id })
   await defaultPersistentManager.shutdown()
 

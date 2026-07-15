@@ -21,9 +21,14 @@ export function browserLaunchOptions({ visible = true } = {}) {
   }
 }
 
-export function browserContextOptions(options = {}) {
+export function browserContextOptions(options = {}, { visible = true } = {}) {
+  const viewport = options.viewport !== undefined
+    ? options.viewport
+    : visible ? null : BROWSER_VIEWPORT
   return {
-    viewport: options.viewport || BROWSER_VIEWPORT,
+    // A null viewport lets a headed page follow native window resizes. Keep a
+    // deterministic viewport for headless runs where there is no OS window.
+    viewport,
     locale: options.locale || 'zh-CN',
     acceptDownloads: false,
     // Service-worker requests are not visible to BrowserContext.route. Block

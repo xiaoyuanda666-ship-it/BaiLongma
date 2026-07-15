@@ -12,6 +12,7 @@ import { buildToolAuditRecord, sanitizeToolAuditArgs, summarizeToolExecution } f
 import { executeTool } from './capabilities/executor.js'
 import { config } from './config.js'
 import { browserContextOptions } from './capabilities/tools/browser/runtime.js'
+import { BROWSER_VIEWPORT } from './capabilities/tools/web/browser.js'
 import {
   createBoundedBrowserShutdown,
   formatBrowserRuntimeContext,
@@ -41,6 +42,14 @@ assert.ok(TOOL_SCHEMAS.browser_sessions.function.parameters.properties.include_p
 assert.ok(TOOL_SCHEMAS.browser_close.function.parameters.properties.clear_profile)
 assert.ok(TOOL_SCHEMAS.set_security.function.parameters.properties.browser_private_network)
 assert.equal(browserContextOptions({}).serviceWorkers, 'block', 'service workers are blocked')
+assert.equal(browserContextOptions({}, { visible: true }).viewport, null,
+  'headed browser contexts follow native window resizes')
+assert.deepEqual(browserContextOptions({}, { visible: false }).viewport, BROWSER_VIEWPORT,
+  'headless browser contexts keep a deterministic viewport')
+assert.equal(browserContextOptions({ viewport: null }, { visible: false }).viewport, null,
+  'an explicit null viewport is preserved')
+assert.deepEqual(browserContextOptions({ viewport: undefined }, { visible: false }).viewport, BROWSER_VIEWPORT,
+  'an undefined viewport retains the headless default')
 assert.ok(BROWSER_TOOLS.every(name => buildToolCatalogText().includes(name)), 'automatic tool catalog includes browser tools')
 assert.deepEqual(findCapabilitiesByQuery('fill form')[0]?.tools, BROWSER_TOOLS)
 assert.ok(BROWSER_TOOLS.every(name => selectTools({ messageBody: 'please fill form and click website', isTick: false }).includes(name)))

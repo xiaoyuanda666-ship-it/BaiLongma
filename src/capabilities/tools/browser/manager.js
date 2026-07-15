@@ -404,7 +404,7 @@ export class BrowserSessionManager {
         }
         browserContext = await raceResource(launchPersistentBrowserContext(chromium, persistentProfilePath, {
           ...browserLaunchOptions({ visible }),
-          ...browserContextOptions(args),
+          ...browserContextOptions(args, { visible }),
         }), signal, resource => {
           const closeAttempt = Promise.resolve(closePersistentContext(resource))
           // A bounded cleanup timeout lets shutdown finish, but the underlying
@@ -427,7 +427,7 @@ export class BrowserSessionManager {
       } else {
         browser = await this.#sharedBrowser(chromium, visible, signal)
         browserContext = await raceResource(
-          browser.newContext(browserContextOptions(args)),
+          browser.newContext(browserContextOptions(args, { visible })),
           signal,
           resource => resource.close(),
           this.resourceCreations,
