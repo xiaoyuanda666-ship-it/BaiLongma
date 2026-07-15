@@ -32,10 +32,23 @@ function getRuntime(apiKey) {
 const pendingRpc = new Map()
 let reqCounter = 0
 let currentTurnId = null
+let currentSession = null    // 当前活跃 session，供 abort 真正中断 session.prompt()
+let currentAborted = false   // 本轮是否已 abort——abort 后跳过投递兜底，不再发 send_message
+const RPC_TIMEOUT_MS = 60000  // 单次工具执行 RPC 超时——防止父进程不回 res 时 worker 永久挂起
 function rpcExecTool(name, params) {
   const reqId = ++reqCounter
   return new Promise(resolve => {
-    pendingRpc.set(reqId, resolve)
+    const timer = setTimeout(() => {
+      if (pendingRpc.has(reqId)) {
+        pendingRpc.delete(reqId)
+        resolve('执行失败：工具执行 RPC 超时（父进程 60s 未响应）')
+      }
+    }, RPC_TIMEOUT_MS)
+    timer.unref?.()
+    pendingRpc.set(reqId, (result) => {
+      clearTimeout(timer)
+      resolve(result)
+    })
     process.send({ type: 'exec_tool_req', reqId, turnId: currentTurnId, name, params })
   })
 }
@@ -58,6 +71,7 @@ function buildTools(toolNames) {
 async function runPrompt(msg) {
   const { id, systemPrompt, message, tools, modelId, apiKey, delivery } = msg
   currentTurnId = id
+  currentAborted = false
   try {
     const { auth, registry, loader } = getRuntime(apiKey)
     const model = getModel('minimax-cn', modelId) || registry.find('minimax-cn', modelId)
@@ -66,9 +80,15 @@ async function runPrompt(msg) {
     const customTools = buildTools(tools)
     const { session } = await createAgentSession({
       model, authStorage: auth, modelRegistry: registry,
-      tools: [...tools], customTools,
+      // noTools:'builtin' 显式关闭 Pi 内置工具（read/bash/edit/write）——
+      // BaiLongma 自己提供全部工具（customTools），不应让 Pi 的内置 shell 工具混入，
+      // 否则模型会绕过 BaiLongma 的沙箱/审计直接拿到一个无约束的 bash。
+      // （修复前 `tools:[...tools]` 被当作「内置工具白名单」，而我们传的是自己的工具名，
+      //  语义错配且无效；customTools 才是真正的注册入口。）
+      noTools: 'builtin', customTools,
       sessionManager: SessionManager.inMemory(), resourceLoader: loader,
     })
+    currentSession = session
     session.agent.state.systemPrompt = (systemPrompt || '你是 Jarvis 助手。')
       + (delivery?.mustReply && !delivery?.silentSignal
         ? '\n\n[运行时约束] 完成任何工具操作后，必须向用户给出简短中文回复：本地渠道（TUI/API/语音）直接写正文即可送达（无需 send_message）；社交渠道才调 send_message。绝不能在一轮里只调工具而不回复用户。'
@@ -94,9 +114,12 @@ async function runPrompt(msg) {
 
     try {
       await session.prompt(typeof message === 'string' ? message : String(message || ''))
+    } catch (e) {
+      // session.abort() 会让进行中的 prompt 抛出——视为中断而非错误
+      if (!currentAborted) throw e
     } finally { stop() }
 
-    // 收集本轮正文
+    // 收集本轮正文（abort 后 messages 里可能只有部分内容）
     try {
       const msgs = session.messages || []
       const last = msgs[msgs.length - 1]
@@ -104,20 +127,23 @@ async function runPrompt(msg) {
         : (Array.isArray(last?.content) ? last.content.map(b => b?.text || '').join('') : '')
     } catch { /* 正文已通过 stream_chunk 流回 */ }
 
-    // 投递兜底（与 callLLM 同契约）：RPC send_message 回父进程执行
+    // abort 后不再投递：用户已主动停止，绝不在后台再发 send_message
     let delivered = modelSent
-    if (delivery?.mustReply && !delivered && content && !delivery.silentSignal) {
+    if (currentAborted) {
+      delivered = false
+    } else if (delivery?.mustReply && !delivered && content && !delivery.silentSignal) {
       const r = await rpcExecTool('send_message', { target_id: delivery.targetId ?? null, content })
       delivered = !/^(错误|执行失败)/.test(String(r).trim())
       process.send({ type: 'tool_result', id, name: 'send_message', isError: !delivered, fallback: true })
     }
 
-    process.send({ type: 'end', id, content, delivered, aborted: false })
+    process.send({ type: 'end', id, content, delivered, aborted: currentAborted })
     try { session.dispose?.() } catch { /* 清理 */ }
   } catch (e) {
     process.send({ type: 'error', id, message: e?.message || String(e), stack: e?.stack })
   } finally {
     currentTurnId = null
+    currentSession = null
   }
 }
 
@@ -126,10 +152,16 @@ process.on('message', msg => {
   if (msg.type === 'prompt') {
     runPrompt(msg)   // 一次一个 turn（app 侧 queue 串行化）
   } else if (msg.type === 'exec_tool_res') {
-    const resolve = pendingRpc.get(msg.reqId)
-    if (resolve) { pendingRpc.delete(msg.reqId); resolve(msg.result) }
+    const settle = pendingRpc.get(msg.reqId)
+    if (settle) { pendingRpc.delete(msg.reqId); settle(msg.result) }
   } else if (msg.type === 'abort') {
-    currentTurnId = null   // 最小中断：完整 session.abort 见 Slice 3
+    // 真正中断：调 session.abort() 让进行中的 prompt 抛出并停止（修复前只清 currentTurnId，
+    // session.prompt 仍在后台跑工具/流式，abort 形同虚设）。abort 后投递兜底被 currentAborted 守卫跳过。
+    currentAborted = true
+    currentTurnId = null
+    if (currentSession) {
+      currentSession.abort?.().catch(() => { /* abort 失败不阻塞；prompt 路径仍会因 currentAborted 提前结束 */ })
+    }
   } else if (msg.type === 'ping') {
     process.send({ type: 'pong', pid: process.pid, node: process.version })
   }

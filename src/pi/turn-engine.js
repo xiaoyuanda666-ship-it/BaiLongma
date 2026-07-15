@@ -79,10 +79,15 @@ function onChildMessage(m) {
     Promise.resolve(executeTool(m.name, m.params || {}, ctx))
       .then(result => {
         const text = typeof result === 'string' ? result : JSON.stringify(result)
-        safeSend({ type: 'exec_tool_res', reqId: m.reqId, result: text })
+        // 解析 ok 字段，把结构化错误信号透传给 worker（避免 worker 靠中文前缀正则猜测）
+        let isError = false
+        try { if (JSON.parse(text)?.ok === false) isError = true } catch { /* 非 JSON，按成功 */ }
+        safeSend({ type: 'exec_tool_res', reqId: m.reqId, result: text, isError })
       })
       .catch(err => {
-        safeSend({ type: 'exec_tool_res', reqId: m.reqId, result: `执行失败：${err.message}` })
+        // 抛出异常 → 结构化错误 JSON（与 executor 的 toolJson 错误形一致），isError 让 worker 精确判定
+        const payload = JSON.stringify({ ok: false, error: err.message })
+        safeSend({ type: 'exec_tool_res', reqId: m.reqId, result: payload, isError: true })
       })
     return
   }
@@ -115,8 +120,18 @@ function onChildMessage(m) {
   }
 }
 
-function getChild() {
-  if (_child && !_child.killed && _child.exitCode === null && _child.signalCode === null) return _child
+async function getChild() {
+  // 健康检查：进程还在但卡死（IPC/WebSocket hang）时 exit 事件不会触发，复用会拿到僵尸 worker。
+  // ping/pong 超时 → 杀掉重建。串行化下只在无在途 turn 时探测（不打断进行中的 turn）。
+  if (_child && !_child.killed && _child.exitCode === null && _child.signalCode === null) {
+    if (pendingTurns.size === 0 && !isWorkerResponsive(_child)) {
+      console.warn('[pi] worker 无响应（ping 超时），重启')
+      try { _child.kill('SIGKILL') } catch { /* 忽略 */ }
+      _child = null
+    } else {
+      return _child
+    }
+  }
   const nodeBin = findNodeBin()
   if (!nodeBin) throw new Error('[pi] 找不到系统 node（Pi SDK 需系统 node 运行时）。设 JARVIS_NODE_BIN 或把 node 放进 PATH。')
   console.log(`[pi] 启动 worker · ${nodeBin} ${WORKER_PATH}`)
@@ -137,6 +152,30 @@ function getChild() {
   return _child
 }
 
+// ping/pong 健康探测：发 ping，3s 内收到 pong 视为存活。复用 worker.mjs 已有的 ping handler。
+// 卡死的 worker（IPC hang / SDK websocket 死锁）不会回 pong → 返回 false → getChild 重建。
+function isWorkerResponsive(child, timeoutMs = 3000) {
+  return new Promise(resolve => {
+    let settled = false
+    const onPong = (m) => {
+      if (m?.type === 'pong' && !settled) {
+        settled = true
+        cleanup()
+        resolve(true)
+      }
+    }
+    const timer = setTimeout(() => {
+      if (!settled) { settled = true; cleanup(); resolve(false) }
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(timer)
+      try { child.off('message', onPong) } catch { /* 忽略 */ }
+    }
+    child.on('message', onPong)
+    safeSend({ type: 'ping' })
+  })
+}
+
 // 与 callLLM 同构的回调面；返回 runTurn 读取的 { content, toolResult, aborted, delivered }。
 export async function runPiTurn({
   systemPrompt, message, messages = null, tools = [], temperature, thinking,
@@ -146,7 +185,7 @@ export async function runPiTurn({
   const apiKey = getMinimaxCnKey()
   if (!apiKey) throw new Error('[pi] 无 minimax key（config.apiKey / /tmp/pi-key / MINIMAX_API_KEY）')
   const modelId = resolveModelId()
-  const child = getChild()
+  const child = await getChild()
   const id = ++_turnSeq
   toolContextByTurn.set(id, toolContext)
   const delivery = {

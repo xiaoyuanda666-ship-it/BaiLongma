@@ -8,7 +8,7 @@
 // 修复：加 thinkFromField 标志——字段式(DeepSeek)=true 走早关；内联 <think> 标签式(minimax)=false
 // 不走早关，think 流由 </think> 闭合。本测试用合成客户端（绕过网络）断言两条路径的路由正确。
 import assert from 'node:assert/strict'
-import { streamOnce, _setClientForTest, _clearClientForTest } from './llm.js'
+import { streamOnce } from './llm.js'
 
 // 合成 OpenAI 客户端：chat.completions.create 返回一段"增量流"（数组即可，for-await 能迭代）
 function fakeClient(deltas) {
@@ -30,12 +30,13 @@ function chunkModes(events) {
 
 async function run(deltas) {
   const events = []
-  _setClientForTest(fakeClient(deltas))
-  try {
-    await streamOnce({ messages: [{ role: 'user', content: '推导 13×17' }], toolSchemas: [], onStream: e => events.push(e) })
-  } finally {
-    _clearClientForTest()
-  }
+  // 用 client 参数注入合成客户端（绕过网络 + 绕过全局 _clientOverride，无并行污染）
+  await streamOnce({
+    messages: [{ role: 'user', content: '推导 13×17' }],
+    toolSchemas: [],
+    onStream: e => events.push(e),
+    client: fakeClient(deltas),
+  })
   return chunkModes(events)
 }
 

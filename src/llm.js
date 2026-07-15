@@ -127,7 +127,8 @@ function buildChatCompletionRequestParams({ messages, toolSchemas = [], temperat
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-export async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model }) {
+// client 可选：测试注入合成客户端（无网络），优先级高于 getClient()；避免全局 _clientOverride 的并行污染。
+export async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model, client = null }) {
   const requestParams = buildChatCompletionRequestParams({
     model,
     messages,
@@ -196,7 +197,7 @@ export async function streamOnce({ messages, toolSchemas, temperature, topP, max
 
   try {
   // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
-  const stream = await getClient().chat.completions.create(requestParams, { signal: reqController.signal })
+  const stream = await (client || getClient()).chat.completions.create(requestParams, { signal: reqController.signal })
   for await (const chunk of stream) {
     armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break

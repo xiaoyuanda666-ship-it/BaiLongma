@@ -3343,6 +3343,8 @@ function initTTSSettings() {
   if (alertToggle) {
     alertToggle.checked = isAlertEnabled();
     alertToggle.addEventListener("change", () => setAlertEnabled(alertToggle.checked));
+  } else {
+    console.warn("[alert-sound] #alert-sound-toggle 未在设置 DOM 中找到——开关静默失效，请检查 app-shell.js 的设置模板");
   }
 
   function openSettings(tab = null) {
