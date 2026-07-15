@@ -1474,7 +1474,7 @@ const AI_TOOL_GROUPS = {
   "扫描文件": new Set(["read_file", "list_dir"]),
   "改动文件": new Set(["write_file", "make_dir", "delete_file"]),
   "执行命令": new Set(["exec_command", "exec_quick_command", "exec_task_command", "exec_background_command", "download_file", "kill_process", "list_processes"]),
-  "上网": new Set(["fetch_url", "web_search", "browser_read"]),
+  "上网": new Set(["web_search", "web_read"]),
   "调取记忆": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
   "推送界面": new Set(["ui_set", "focus_banner"]),
   "处理多媒体": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),

@@ -29,8 +29,8 @@ import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
 import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
-import { execBrowserRead, execFetchUrl, execWebSearch } from './tools/web.js'
-import { execBrowserAct, execBrowserClose, execBrowserInspect, execBrowserOpen, execBrowserSessions, execBrowserTabs, shutdownBrowserTools } from './tools/browser-tools.js'
+import { execBrowserRead, execFetchUrl, execWebRead, execWebSearch } from './tools/web.js'
+import { execBrowserAct, execBrowserClose, execBrowserInspect, execBrowserNavigate, execBrowserOpen, execBrowserSessions, execBrowserTabs, shutdownBrowserTools } from './tools/browser-tools.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
 import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
@@ -249,6 +249,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execListProcessesWithSoftwareJobs(args)
       case 'web_search':
         return await execWebSearch(args, context)
+      case 'web_read':
+        return await execWebRead(args, context)
       case 'fetch_url':
         return await execFetchUrl(args, context)
       case 'browser_read':
@@ -257,6 +259,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execBrowserSessions(args, context)
       case 'browser_open':
         return await execBrowserOpen(args, context)
+      case 'browser_navigate':
+        return await execBrowserNavigate(args, context)
       case 'browser_inspect':
         return await execBrowserInspect(args, context)
       case 'browser_act':
@@ -813,10 +817,10 @@ function execSetTask({ description, steps = [] }, context) {
 }
 
 // 收尾软门（2026-06-10）：complete_task 照常执行（不拦截——第一原则），但 runtime 查一眼
-// action_log——任务期间产出过文件/执行过命令、却没有任何验证类动作（fetch_url / browser_read /
+// action_log——任务期间产出过文件/执行过命令、却没有任何验证类动作（web_read /
 // review_work）时，把这个事实作为证据附在返回值里。实测失败模式：写完文件开个浏览器就汇报
 // 做好了，页面 404 两次都是用户先发现的。
-const VERIFY_TOOL_NAMES = new Set(['fetch_url', 'browser_read', 'review_work'])
+const VERIFY_TOOL_NAMES = new Set(['web_read', 'fetch_url', 'browser_read', 'review_work'])
 const ARTIFACT_TOOL_NAMES = new Set(['write_file', 'make_dir'])
 
 function unverifiedDeliveryNotice() {
@@ -838,7 +842,7 @@ function unverifiedDeliveryNotice() {
       if (t === 'exec_command' && /curl|invoke-webrequest|invoke-restmethod|--check|--test/i.test(summary)) return ''
       if (t === 'read_file') return ''   // 读回产物也算一种核对
     }
-    return '注意：本任务产出了文件/起了服务，但收尾前没有任何验证动作（fetch_url / browser_read / review_work / 读回产物）。任务已照常收尾——如果你还没亲自确认成果真的能跑，现在就去验证；发现问题立刻修复并如实告知用户，别等用户先发现。'
+    return '注意：本任务产出了文件/起了服务，但收尾前没有任何验证动作（web_read / review_work / 读回产物）。任务已照常收尾——如果你还没亲自确认成果真的能跑，现在就去验证；发现问题立刻修复并如实告知用户，别等用户先发现。'
   } catch {
     return ''
   }
@@ -1148,7 +1152,7 @@ function agentDocsHint(agent) {
   const hint = {}
   if (agent.docs_url) {
     hint.docs_url = agent.docs_url
-    hint.docs_hint = `调用失败。建议先用 fetch_url("${agent.docs_url}") 查阅 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的参数格式后重试。`
+    hint.docs_hint = `调用失败。建议先用 web_read("${agent.docs_url}") 查阅 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的参数格式后重试。`
   } else if (agent.docs_search_query) {
     hint.docs_search_query = agent.docs_search_query
     hint.docs_hint = `调用失败。建议先用 web_search("${agent.docs_search_query}") 查找 ${agent.name} 当前版本（${agent.version || 'unknown'}）的使用文档，确认正确的调用方式后重试。`

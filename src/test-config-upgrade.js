@@ -46,7 +46,7 @@ async function loadFresh(json) {
     apiKey: 'sk-whatever-old-key-1234567890',
     model: 'old-model',
     temperature: 1.3,
-    security: { fileSandbox: false, execSandbox: false, browserPrivateNetwork: true, blockedTools: ['exec_command'] },
+    security: { fileSandbox: false, execSandbox: false, browserPrivateNetwork: true, blockedTools: ['exec_command', 'fetch_url', 'browser_read'] },
     voice: { voiceProvider: 'aliyun', aliyunApiKey: 'sk-aliyunkeyplaceholder1234567890' },
   })
   assert(config.needsActivation === true, 'A: 未知 provider → LLM 标记为待激活')
@@ -55,7 +55,7 @@ async function loadFresh(json) {
   assert(config.temperature === 1.3, 'A: temperature 在 LLM 不可用时仍被保留')
   assert(config.security.execSandbox === false, 'A: execSandbox=false 被保留（不会悄悄重新开启沙盒）')
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
-  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command']), 'A: blockedTools 被保留')
+  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command', 'web_read']), 'A: legacy web read blocks migrate and deduplicate')
   assert(getSecurity().browserPrivateNetwork === true, 'A: 独立 browserPrivateNetwork 权限被读取')
   setSecurity({ browserPrivateNetwork: false })
   assert(getSecurity().browserPrivateNetwork === false, 'A: setSecurity 可独立撤销 browserPrivateNetwork')

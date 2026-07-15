@@ -1017,7 +1017,7 @@ if (parsedConfig) {
     if (typeof s.fileSandbox === 'boolean') config.security.fileSandbox = s.fileSandbox
     if (typeof s.execSandbox === 'boolean') config.security.execSandbox = s.execSandbox
     if (typeof s.browserPrivateNetwork === 'boolean') config.security.browserPrivateNetwork = s.browserPrivateNetwork
-    if (Array.isArray(s.blockedTools)) config.security.blockedTools = s.blockedTools
+    if (Array.isArray(s.blockedTools)) config.security.blockedTools = normalizeBlockedTools(s.blockedTools)
     if (typeof s.updatedAt === 'string') config.security.updatedAt = s.updatedAt
   }
   if (parsedConfig.network && typeof parsedConfig.network === 'object') {
@@ -1407,13 +1407,19 @@ export function getSecurity() {
   }
 }
 
+function normalizeBlockedTools(values = []) {
+  return [...new Set(values
+    .filter(value => typeof value === 'string')
+    .map(value => ['fetch_url', 'browser_read'].includes(value) ? 'web_read' : value))]
+}
+
 export function setSecurity(updates) {
   const before = getSecurity()
   if (typeof updates.fileSandbox === 'boolean') config.security.fileSandbox = updates.fileSandbox
   if (typeof updates.execSandbox === 'boolean') config.security.execSandbox = updates.execSandbox
   if (typeof updates.browserPrivateNetwork === 'boolean') config.security.browserPrivateNetwork = updates.browserPrivateNetwork
   if (Array.isArray(updates.blockedTools)) {
-    config.security.blockedTools = updates.blockedTools.filter(t => typeof t === 'string')
+    config.security.blockedTools = normalizeBlockedTools(updates.blockedTools)
   }
   const changed = before.fileSandbox !== config.security.fileSandbox
     || before.execSandbox !== config.security.execSandbox

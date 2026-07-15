@@ -58,7 +58,7 @@ const INTENT_LEXICON = [
     ],
     terms: [
       'web_research', 'search', 'web', 'url', 'source', 'citation', 'latest',
-      'news', 'browse', 'fetch_url', '\u641c\u7d22', '\u7f51\u9875',
+      'news', 'browse', 'web_read', 'fetch_url', '\u641c\u7d22', '\u7f51\u9875',
       '\u94fe\u63a5', '\u6765\u6e90', '\u6700\u65b0',
     ],
   },

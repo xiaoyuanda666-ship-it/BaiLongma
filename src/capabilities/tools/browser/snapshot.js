@@ -8,13 +8,37 @@ function cssEscape(value) {
 }
 
 export async function clearPageRefs(pageState) {
-  const handles = [...pageState.refs.values()].map(entry => entry.handle).filter(Boolean)
+  const handles = new Set([
+    ...[...pageState.refs.values()].map(entry => entry.handle).filter(Boolean),
+    ...(pageState.retiredRefs || []),
+  ])
   pageState.refs.clear()
-  await Promise.allSettled(handles.map(handle => handle.dispose()))
+  pageState.retiredRefs?.clear()
+  await Promise.allSettled([...handles].map(handle => handle.dispose()))
+}
+
+export async function extractReadablePage(page, { maxChars = 20_000 } = {}) {
+  return page.evaluate(({ maxChars }) => {
+    const clean = value => String(value || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+    const candidates = [
+      ...document.querySelectorAll('article, main, [role="main"], .article, .post, .content, .entry-content, #content, #main'),
+    ]
+    const best = candidates
+      .map(element => ({ text: clean(element.innerText) }))
+      .sort((a, b) => b.text.length - a.text.length)[0]
+    const bodyText = clean(document.body?.innerText)
+    const text = best?.text?.length > 300 ? best.text : bodyText
+    return {
+      title: String(document.title || '').trim(),
+      text: text.slice(0, maxChars),
+      textLength: text.length,
+    }
+  }, { maxChars })
 }
 
 export async function inspectPage(pageState, { maxChars, maxElements }) {
-  const prefix = `${pageState.refToken}-${pageState.documentEpoch}-`
+  const documentEpoch = pageState.documentEpoch
+  const prefix = `${pageState.refToken}-${documentEpoch}-`
   const snapshot = await pageState.page.evaluate(({ selector, maxChars, maxElements, prefix }) => {
     const bodyText = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim()
     const allElements = [...document.querySelectorAll('*')]
@@ -192,15 +216,33 @@ export async function inspectPage(pageState, { maxChars, maxElements }) {
     }
   }, { selector: INTERACTIVE_SELECTOR, maxChars, maxElements, prefix })
 
+  const assertSameDocument = () => {
+    if (pageState.documentEpoch === documentEpoch) return
+    const error = new Error('Page document changed while browser_inspect was creating element refs')
+    error.code = 'DOCUMENT_CHANGED'
+    throw error
+  }
+  assertSameDocument()
+
   const nextRefs = new Map()
-  for (const element of snapshot.elements) {
-    const existing = pageState.refs.get(element.ref)
-    if (existing?.handle) {
-      nextRefs.set(element.ref, existing)
-      continue
+  const createdHandles = new Set()
+  try {
+    for (const element of snapshot.elements) {
+      assertSameDocument()
+      const existing = pageState.refs.get(element.ref)
+      if (existing?.handle) {
+        nextRefs.set(element.ref, existing)
+        continue
+      }
+      const handle = await pageState.page.locator(`[data-bailongma-ref="${cssEscape(element.ref)}"]`).first().elementHandle()
+      if (handle) createdHandles.add(handle)
+      assertSameDocument()
+      if (handle) nextRefs.set(element.ref, { handle, epoch: documentEpoch })
     }
-    const handle = await pageState.page.locator(`[data-bailongma-ref="${cssEscape(element.ref)}"]`).first().elementHandle()
-    if (handle) nextRefs.set(element.ref, { handle, epoch: pageState.documentEpoch })
+    assertSameDocument()
+  } catch (error) {
+    await Promise.allSettled([...createdHandles].map(handle => handle.dispose()))
+    throw error
   }
   for (const [ref, entry] of pageState.refs) {
     if (!nextRefs.has(ref)) entry.handle?.dispose().catch(() => {})

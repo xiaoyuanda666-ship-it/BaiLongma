@@ -1,12 +1,12 @@
-// 联网工具 schema：web_search / fetch_url / browser_read
-// 注意：fetch_url / browser_read 在 function 外层带 recognizer_highlights，
+// 联网工具 schema：web_search / web_read
+// 注意：web_read 在 function 外层带 recognizer_highlights，
 // 供识别器使用，getToolSchemas 会在发给 LLM 前剥离该字段。
 export const webSchemas = {
   web_search: {
     type: 'function',
     function: {
       name: 'web_search',
-      description: 'Search the web for current or unknown information. Use this before fetch_url when you do not already know the exact reliable URL. Returns structured JSON with result titles, URLs, snippets, and ok/error status.',
+      description: 'One-shot stateless web search for current or unknown information when no exact reliable URL is known. Returns structured JSON with result titles, URLs, snippets, and ok/error status. Use web_read on reliable result URLs when source content is needed. Search and stateful browser tools may be combined when the user asks to find a site and then interact with it.',
       parameters: {
         type: 'object',
         properties: {
@@ -24,46 +24,41 @@ export const webSchemas = {
     }
   },
 
-  fetch_url: {
+  web_read: {
     type: 'function',
     recognizer_highlights: ['body_path', 'title', 'url', 'content_length'],
     function: {
-      name: 'fetch_url',
-      description: 'Open a known URL with a lightweight HTTP request. Returns structured JSON with ok/status/title/content/body_path/error. Long articles (>=2000 chars) are auto-saved to sandbox/articles/ and content is truncated to a short excerpt; use the returned body_path with read_file to open the full text. Do not use this tool as a search engine. If ok is false because content is empty, blocked, or JS-rendered, try browser_read or another URL; never summarize an error as page content.',
+      name: 'web_read',
+      description: 'Read and extract content from one known URL without retaining a browser session. In auto mode it tries a protected direct HTTP read, upgrades to local headless Playwright when rendering is needed, and may use the remote Jina Reader only as a final fallback. Do not use it as a search engine or for clicking, login, forms, tabs, screenshots, or browser continuity. Returns structured JSON with ok/status/title/content/body_path/error. Long articles are saved under sandbox/articles/.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           url: {
             type: 'string',
-            description: 'URL to open. Prefer reliable source pages found through web_search.'
-          }
-        },
-        required: ['url']
-      }
-    }
-  },
-
-  browser_read: {
-    type: 'function',
-    recognizer_highlights: ['body_path', 'title', 'url', 'content_length'],
-    function: {
-      name: 'browser_read',
-      description: 'Use a real headless Chromium browser to open and render a webpage, wait for JavaScript, scroll, and extract readable text. Use this when fetch_url returns no readable content, a waiting page, or a JS-rendered page. Returns structured JSON with ok/title/content/body_path/error. Long articles (>=2000 chars) are auto-saved to sandbox/articles/ and content is truncated to a short excerpt; use body_path with read_file to open the full text.',
-      parameters: {
-        type: 'object',
-        properties: {
-          url: {
+            description: 'Known http/https URL to read. Prefer reliable source pages found through web_search.'
+          },
+          render: {
             type: 'string',
-            description: 'URL to open in the browser.'
+            enum: ['auto', 'http', 'browser'],
+            description: 'Read strategy. auto (default) starts with HTTP and upgrades locally; http disables browser/remote fallbacks; browser forces local Playwright rendering.'
+          },
+          fresh: {
+            type: 'boolean',
+            description: 'Bypass the short-lived read cache when current data is required.'
+          },
+          remote_fallback: {
+            type: 'boolean',
+            description: 'Allow the final Jina Reader fallback after local methods fail. Default true. Set false when the URL must not be sent to that third party.'
           },
           timeout_ms: {
-            type: 'number',
-            description: 'Navigation/render timeout in milliseconds, default 20000, max 45000.'
+            type: 'integer', minimum: 1000, maximum: 45000,
+            description: 'Per-strategy timeout in milliseconds.'
           },
           max_chars: {
-            type: 'number',
-            description: 'Maximum extracted characters to return, default 8000, max 12000.'
-          }
+            type: 'integer', minimum: 1000, maximum: 20000,
+            description: 'Maximum inline content before truncation; long articles are also saved to body_path.'
+          },
         },
         required: ['url']
       }

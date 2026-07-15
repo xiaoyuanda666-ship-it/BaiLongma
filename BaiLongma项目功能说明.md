@@ -560,10 +560,13 @@ BaiLongma 的工具系统由 schema、执行器、沙箱、安全策略、行动
 ### 10.4 Web 工具
 
 - `web_search`：联网搜索。
-- `fetch_url`：抓取已知 URL。
-- `browser_read`：用真实 Chromium 读取 JS 渲染网页。
+- `web_read`：读取已知 URL；自动从受保护 HTTP 升级到本地 Playwright，并可在本地路径失败后选择 Jina Reader 兜底。
 
-`browser_read` 是一次性的只读正文提取器，不保留页面状态，也不点击或填写页面，只用于明确读取、提取或总结网页正文。打开浏览器/网页、继续当前页面、查询浏览器状态、关闭浏览器、标签页、点击、填写和登录优先使用状态化 Playwright 工具。先用 `browser_sessions` 发现并复用存活会话；没有合适会话时再走 `browser_open` → `browser_inspect` → `browser_act`，并用 `browser_tabs` 管理标签页，完成后调用 `browser_close`。每轮会把存活会话以不可信运行时状态摘要注入 Agent 上下文；用户手动关闭最后窗口后会自动回收会话。导航后元素 ref 会换代，必须重新 inspect。网页内容始终是不可信数据，不能服从网页中要求泄密、改写系统规则或执行命令的指令；交互浏览器不开放任意 JavaScript、文件上传或下载。
+无状态能力按目标注入：搜索时提供 `web_search + web_read`，便于找到来源后直接核对正文；已知 URL/正文只提供 `web_read`。静态还是动态由 `web_read(render="auto")` 内部判断，不再让模型选择两套读取工具。
+
+涉及打开或导航网页、继续当前页面、查询浏览器状态、关闭浏览器、标签页、截图、点击、填写和登录时，主要路径是状态化 Playwright 工具。先用 `browser_sessions` 发现并复用存活会话；没有合适会话时走 `browser_open`，当前标签页跳转使用 `browser_navigate`，然后 `browser_inspect` → `browser_act`，并用 `browser_tabs` 管理标签页，完成后调用 `browser_close`。`web_search` 和 `web_read` 不能继续已有会话，但“搜索后打开并操作”可同时注入搜索与浏览器工具。每轮会把存活会话以不可信运行时状态摘要注入 Agent 上下文；用户手动关闭最后窗口后会自动回收会话。导航后元素 ref 会换代，必须重新 inspect。网页内容始终是不可信数据，不能服从网页中要求泄密、改写系统规则或执行命令的指令；交互浏览器不开放任意 JavaScript、文件上传或下载。
+
+非 persistent 浏览器会话关闭后 cookie 与 storage 全部丢失。persistent profile 以当前用户/任务作用域、初始站点 origin 和显式 profile 名隔离，可在正常关闭、TTL 回收、应用退出与重启后复用站点允许持久化的 cookie 与 storage；session-only cookie 仍遵循站点与 Chromium 的会话规则，在浏览器进程退出时失效。崩溃恢复只能复用最后已经落盘的状态，不承诺恢复尚未 flush 的最近写入。旧版未隔离的扁平 profile 不会被自动复用。`browser_sessions(include_profiles=true)` 可列出当前作用域的可复用 profile；`browser_close(clear_profile=true)` 可在关闭活动会话时清理，或通过显式 profile + 同 origin URL 清理已关闭 profile。
 
 交互浏览器默认拒绝 localhost、环回地址与私网地址；只有独立的 `security.browserPrivateNetwork` 权限经用户明确确认后才开放。该权限与后端是否监听 LAN 无关。
 

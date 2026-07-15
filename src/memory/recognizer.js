@@ -92,7 +92,7 @@ When in doubt, use 3. Reserve 5 for things you would expect to still matter a ye
 
 ## Special Handling For Article Memories
 
-If the tool log contains a fetch_url or browser_read result with body_path, the system has already saved the full text in sandbox. In that case:
+If the tool log contains a web_read result (or a legacy fetch_url/browser_read result) with body_path, the system has already saved the full text in sandbox. In that case:
 - Use type=article.
 - Use the article title as title.
 - Write content as a concise summary, <= 200 Chinese characters, covering core arguments, conclusions, or data.

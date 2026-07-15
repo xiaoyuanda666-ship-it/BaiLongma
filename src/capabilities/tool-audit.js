@@ -22,6 +22,7 @@ export function summarizeToolExecution(name, args = {}) {
       return `exec_command(${String(args.command || args.cmd || '?').slice(0, 100)})`
     case 'install_software':
       return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 100)})`
+    case 'web_read':
     case 'fetch_url':
     case 'browser_read':
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
@@ -29,6 +30,8 @@ export function summarizeToolExecution(name, args = {}) {
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
     case 'browser_open':
       return `browser_open(${String(args.url || 'about:blank').slice(0, 120)})`
+    case 'browser_navigate':
+      return `browser_navigate(session=${String(args.session_id || '?').slice(0, 80)}, url=${String(args.url || '?').slice(0, 120)})`
     case 'browser_sessions':
       return 'browser_sessions()'
     case 'browser_inspect':
@@ -63,9 +66,26 @@ function redactAuditValue(value) {
   return out
 }
 
+function sanitizeBrowserAuditUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''))
+    parsed.username = ''
+    parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.href.slice(0, 240)
+  } catch {
+    return '[redacted-invalid-url]'
+  }
+}
+
 export function sanitizeToolAuditArgs(name, args = {}) {
   const redacted = redactAuditValue(args)
-  if (name !== 'browser_act' || !redacted || typeof redacted !== 'object') return redacted
+  if (!redacted || typeof redacted !== 'object') return redacted
+  if (['browser_open', 'browser_navigate', 'browser_tabs', 'browser_close'].includes(name) && Object.prototype.hasOwnProperty.call(redacted, 'url')) {
+    redacted.url = sanitizeBrowserAuditUrl(redacted.url)
+  }
+  if (name !== 'browser_act') return redacted
   const safe = { ...redacted }
   // Form text can be a password, token, personal data, or arbitrary prose. It
   // must never reach args_json/detail even when the key is merely "value".

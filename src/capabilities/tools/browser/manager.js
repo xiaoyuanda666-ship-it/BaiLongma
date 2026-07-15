@@ -9,7 +9,8 @@ import {
   browserContextOptions, browserLaunchOptions, launchBrowser,
   launchPersistentBrowserContext, loadChromium,
 } from './runtime.js'
-import { clearPageRefs, inspectPage } from './snapshot.js'
+import { BrowserProfileStore } from './profile-store.js'
+import { clearPageRefs, extractReadablePage, inspectPage } from './snapshot.js'
 
 const ALLOWED_ACTIONS = new Set([
   'click', 'fill', 'press', 'select', 'check', 'uncheck', 'hover',
@@ -43,6 +44,10 @@ function sessionId() {
 
 function pageId() {
   return `bp_${crypto.randomBytes(8).toString('hex')}`
+}
+
+function operationId() {
+  return `bo_${crypto.randomBytes(10).toString('hex')}`
 }
 
 export function sanitizeBrowserRuntimeUrl(value, maxLength = 240) {
@@ -174,14 +179,25 @@ function mergeAbortSignals(...signals) {
 // Resource creation cannot be cancelled by Playwright. If AbortSignal wins the
 // race, keep observing the creation promise and close a resource that appears
 // later so it cannot become an orphan browser/context/page.
-async function raceResource(resourcePromise, signal, cleanup, tracker) {
+async function raceResource(resourcePromise, signal, cleanup, tracker, lifecycle = null) {
   let aborted = Boolean(signal?.aborted)
   let abortReason = signal?.reason || 'Aborted'
   let onAbort
   const tracked = Promise.resolve(resourcePromise).then(async resource => {
-    if (!aborted) return resource
-    try { await cleanup(resource) } catch {}
+    if (!aborted) {
+      lifecycle?.resolve?.({ resource, cleaned: false })
+      return resource
+    }
+    try {
+      await cleanup(resource)
+      lifecycle?.resolve?.({ resource, cleaned: true })
+    } catch (error) {
+      lifecycle?.resolve?.({ resource, cleaned: false, error })
+    }
     throw createAbortError(abortReason)
+  }, error => {
+    lifecycle?.resolve?.({ resource: null, cleaned: true, error })
+    throw error
   })
   if (tracker) {
     tracker.add(tracked)
@@ -208,20 +224,79 @@ async function raceResource(resourcePromise, signal, cleanup, tracker) {
   }
 }
 
+async function closePersistentContext(context) {
+  // launchPersistentContext owns a whole browser process. Closing Browser is
+  // the reliable flush boundary across Chromium channels on Windows; Edge can
+  // leave BrowserContext.close() pending indefinitely for a persistent default
+  // context even though the window has already begun shutting down.
+  const browser = context?.browser?.()
+  if (browser) return browser.close()
+  return context?.close()
+}
+
+async function withCleanupTimeout(promise, timeoutMs, message) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new BrowserSessionError('PROFILE_CLOSE_FAILED', message)), timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function withSessionTimeout(promise, timeoutMs, code, message) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new BrowserSessionError(code, message)), timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export class BrowserSessionManager {
   constructor(options = {}) {
     this.maxSessions = boundedInteger(options.maxSessions, 4, 1, 32)
     this.maxPagesPerSession = boundedInteger(options.maxPagesPerSession, 8, 1, 32)
-    this.sessionTtlMs = boundedInteger(options.sessionTtlMs, 15 * 60_000, 1_000, 24 * 60 * 60_000)
+    // Browser windows are user-visible, durable working state. Keep them open
+    // until the user closes them or the application shuts down. Tests and
+    // specialized consumers can still opt into expiry with sessionTtlMs.
+    this.sessionTtlMs = options.sessionTtlMs == null || options.sessionTtlMs === false || options.sessionTtlMs === 0
+      ? null
+      : boundedInteger(options.sessionTtlMs, 15 * 60_000, 1_000, 24 * 60 * 60_000)
     this.operationTimeoutMs = boundedInteger(options.operationTimeoutMs, 30_000, 500, 120_000)
+    this.operationQueueTimeoutMs = boundedInteger(
+      options.operationQueueTimeoutMs,
+      this.operationTimeoutMs,
+      50,
+      120_000,
+    )
+    this.persistentCloseTimeoutMs = boundedInteger(options.persistentCloseTimeoutMs, 5_000, 500, 30_000)
+    this.operationDrainTimeoutMs = boundedInteger(options.operationDrainTimeoutMs, 5_000, 50, 30_000)
+    this.sessionCloseTimeoutMs = boundedInteger(options.sessionCloseTimeoutMs, 5_000, 50, 30_000)
+    this.maxClosedSessions = boundedInteger(options.maxClosedSessions, 100, 1, 1_000)
     this.sandboxRoot = path.resolve(options.sandboxRoot || paths.sandboxDir)
     this.userDataRoot = path.resolve(options.userDataRoot || paths.userDir)
+    this.profileStore = new BrowserProfileStore({
+      root: path.join(this.userDataRoot, 'browser-profiles'),
+      now: options.now || Date.now,
+      pid: options.profileLockPid,
+      processAlive: options.profileProcessAlive,
+      lockRecoveryMs: options.profileLockRecoveryMs,
+      removeTreeAsync: options.profileRemoveTreeAsync,
+      renameAsync: options.profileRenameAsync,
+    })
     this.chromiumLoader = options.chromiumLoader || loadChromium
     // Private/LAN browsing is disabled by default. The agent adapter binds this
     // to config.network.allowLanAccess; tests/local development must opt in.
     this.allowPrivateNetwork = options.allowPrivateNetwork || false
     this.hostnameResolver = options.hostnameResolver
     this.sessions = new Map()
+    this.closedSessions = new Map()
     this.sharedBrowsers = new Map()
     this.sharedBrowserLaunches = new Map()
     this.resourceCreations = new Set()
@@ -232,9 +307,10 @@ export class BrowserSessionManager {
     this.closed = false
     this.now = options.now || Date.now
     fs.mkdirSync(path.join(this.sandboxRoot, 'screenshots'), { recursive: true })
-    fs.mkdirSync(path.join(this.userDataRoot, 'browser-profiles'), { recursive: true })
-    this.sweepTimer = setInterval(() => this.sweepExpired().catch(() => {}), Math.min(this.sessionTtlMs, 30_000))
-    this.sweepTimer.unref?.()
+    this.sweepTimer = this.sessionTtlMs == null
+      ? null
+      : setInterval(() => this.sweepExpired().catch(() => {}), Math.min(this.sessionTtlMs, 30_000))
+    this.sweepTimer?.unref?.()
   }
 
   get size() { return this.sessions.size }
@@ -255,26 +331,57 @@ export class BrowserSessionManager {
     let browserContext = null
     const id = sessionId()
     let persistent = false
+    let persistentProfile = null
+    let profileLock = null
+    let persistentLifecycle = null
+    let registeredSession = null
     try {
       const visible = optionalBoolean(args, 'visible', true)
-      persistent = optionalBoolean(args, 'persistent')
       const url = await this.#assertUrl(args.url)
+      // Real site sessions persist by default so login state survives a normal
+      // close/restart. about:blank has no origin to isolate, so it remains an
+      // ephemeral compatibility path unless persistence is explicitly asked
+      // for (which is rejected below).
+      persistent = optionalBoolean(args, 'persistent', url !== 'about:blank')
       const timeout = this.#timeout(args.timeout_ms)
-      let persistentProfilePath = null
       if (persistent) {
-        const root = path.join(this.userDataRoot, 'browser-profiles')
-        persistentProfilePath = path.resolve(root, profileName(args.profile))
-        if (path.dirname(persistentProfilePath) !== root) throw new BrowserSessionError('INVALID_ARGUMENT', 'Unsafe profile path')
+        if (url === 'about:blank') {
+          throw new BrowserSessionError('INVALID_ARGUMENT', 'persistent browser sessions require an initial http(s) URL to isolate login state by site')
+        }
+        persistentProfile = this.profileStore.identity(profileName(args.profile), url, context)
+        profileLock = this.profileStore.acquire(persistentProfile)
       }
       merged = mergeAbortSignals(context.signal, this.shutdownController.signal)
       const signal = merged.signal
       chromium = await raceAbort(this.chromiumLoader(), signal)
       if (persistent) {
-        fs.mkdirSync(persistentProfilePath, { recursive: true })
+        const persistentProfilePath = this.profileStore.prepare(persistentProfile)
+        let resolveLifecycle
+        persistentLifecycle = {
+          promise: new Promise(resolve => { resolveLifecycle = resolve }),
+          resolve: resolveLifecycle,
+        }
         browserContext = await raceResource(launchPersistentBrowserContext(chromium, persistentProfilePath, {
           ...browserLaunchOptions({ visible }),
           ...browserContextOptions(args),
-        }), signal, resource => resource.close(), this.resourceCreations)
+        }), signal, resource => {
+          const closeAttempt = Promise.resolve(closePersistentContext(resource))
+          // A bounded cleanup timeout lets shutdown finish, but the underlying
+          // graceful close may still complete later. Release at that later
+          // point only after disconnection is proven, avoiding a needless
+          // until-restart lock without ever overlapping live profile owners.
+          closeAttempt.then(() => {
+            const lateBrowser = resource?.browser?.()
+            if (typeof lateBrowser?.isConnected !== 'function' || !lateBrowser.isConnected()) {
+              this.profileStore.release(profileLock)
+            }
+          }, () => {})
+          return withCleanupTimeout(
+            closeAttempt,
+            this.persistentCloseTimeoutMs,
+            'Aborted persistent browser did not exit; its profile remains locked for safety',
+          )
+        }, this.resourceCreations, persistentLifecycle)
         browser = browserContext.browser()
       } else {
         browser = await this.#sharedBrowser(chromium, visible, signal)
@@ -286,14 +393,20 @@ export class BrowserSessionManager {
         )
       }
       await this.#installRequestGuard(browserContext)
-      const session = {
+      const session = registeredSession = {
         id, browser, context: browserContext, persistent, visible,
+        persistentProfile, profileLock, clearProfile: false, closePromise: null,
         pages: new Map(), activePageId: null, lastUsed: this.now(), activeOperations: 0,
-        failure: null, closing: false, preserveEmptyPages: 0,
+        operationPromises: new Set(), operationTasks: new Map(),
+        controlQueue: this.#createOperationQueue('session', id),
+        failure: null, closing: false, state: 'active',
+        closeReason: null, closeStartedAt: null, contextClosed: false,
+        operationDrainTimedOut: false, preserveEmptyPages: 0,
       }
       this.sessions.set(id, session)
       browserContext.on?.('close', () => {
-        if (!session.closing) this.#closeSession(session).catch(() => {})
+        session.contextClosed = true
+        if (!session.closing) this.#closeSession(session, { reason: 'CONTEXT_CLOSED' }).catch(() => {})
       })
       browserContext.on('page', page => this.#registerPage(session, page))
       for (const existing of browserContext.pages()) this.#registerPage(session, existing)
@@ -306,13 +419,55 @@ export class BrowserSessionManager {
       }
       this.#configurePage(active.page, timeout)
       if (url !== 'about:blank') {
-        await this.#operate(session, signal, () => active.page.goto(url, { waitUntil: 'domcontentloaded', timeout }))
+        await this.#schedulePageOperation(session, active, {
+          type: 'open:navigate', signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+          exposeMetadata: false,
+        }, async () => {
+          const epoch = active.documentEpoch
+          await active.page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+          this.#ensureDocumentEpochAdvanced(active, epoch)
+        })
       }
       return this.#sessionResult(session, active)
     } catch (err) {
-      this.sessions.delete(id)
-      try { await browserContext?.close() } catch {}
-      if (persistent) try { await browser?.close() } catch {}
+      if (registeredSession) {
+        // Once event handlers can observe the session, use the single session
+        // close path. It marks closing before touching Playwright, preventing a
+        // persistent context close event from racing a second close/release.
+        try { await this.#closeSession(registeredSession, { reason: 'OPEN_FAILED_CLEANUP' }) } catch {}
+        throw this.#normalizeError(err, 'OPEN_FAILED')
+      }
+      let releaseProfileLock = true
+      let failedCloseAttempt = null
+      try {
+        if (persistent && browserContext) {
+          const closeAttempt = Promise.resolve(closePersistentContext(browserContext))
+          failedCloseAttempt = closeAttempt
+          await withCleanupTimeout(
+            closeAttempt,
+            this.persistentCloseTimeoutMs,
+            'Persistent browser did not exit; its profile remains locked for safety',
+          )
+        } else await browserContext?.close()
+      } catch {}
+      const stillConnected = persistent && typeof browser?.isConnected === 'function' && browser.isConnected()
+      if (stillConnected) {
+        releaseProfileLock = false
+        failedCloseAttempt?.then(() => {
+          if (typeof browser?.isConnected !== 'function' || !browser.isConnected()) {
+            this.profileStore.release(profileLock)
+          }
+        }, () => {})
+      }
+      if (persistent && !browserContext && persistentLifecycle) {
+        releaseProfileLock = false
+        persistentLifecycle.promise.then(({ resource, cleaned }) => {
+          const lateBrowser = resource?.browser?.()
+          const disconnected = typeof lateBrowser?.isConnected !== 'function' || !lateBrowser.isConnected()
+          if (cleaned && disconnected) this.profileStore.release(profileLock)
+        }).catch(() => {})
+      }
+      if (releaseProfileLock) this.profileStore.release(profileLock)
       throw this.#normalizeError(err, 'OPEN_FAILED')
     } finally {
       this.pendingOpens -= 1
@@ -322,13 +477,88 @@ export class BrowserSessionManager {
     }
   }
 
+  async navigate(args = {}, context = {}) {
+    const session = this.#getSession(args)
+    const pageState = this.#getPage(session, args.page_id)
+    const url = await this.#assertUrl(args.url)
+    if (url === 'about:blank') {
+      throw new BrowserSessionError('INVALID_ARGUMENT', 'browser_navigate requires an http(s) URL')
+    }
+    const timeout = this.#timeout(args.timeout_ms)
+    return this.#schedulePageOperation(session, pageState, {
+      type: 'navigate', signal: context.signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+    }, async () => {
+      this.#assertPageHealthy(pageState)
+      this.#configurePage(pageState.page, timeout)
+      const epoch = pageState.documentEpoch
+      await pageState.page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+      this.#ensureDocumentEpochAdvanced(pageState, epoch)
+      return {
+        ok: true,
+        session_id: session.id,
+        page_id: pageState.id,
+        url: pageState.page.url(),
+        title: await pageState.page.title(),
+      }
+    })
+  }
+
+  async readOnce(args = {}, context = {}) {
+    let opened = null
+    try {
+      opened = await this.open({
+        url: args.url,
+        visible: false,
+        persistent: false,
+        timeout_ms: args.timeout_ms,
+      }, context)
+      const session = this.#getSession({ session_id: opened.session_id })
+      const pageState = this.#getPage(session, opened.page_id)
+      const timeout = this.#timeout(args.timeout_ms)
+      const extractMaxChars = boundedInteger(args.extract_max_chars, 250_000, 1_000, 1_000_000)
+      return await this.#schedulePageOperation(session, pageState, {
+        type: 'read_once', signal: context.signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+      }, async () => {
+        const page = pageState.page
+        this.#assertPageHealthy(pageState)
+        this.#configurePage(page, timeout)
+        await page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 8_000) }).catch(() => {})
+        for (let i = 0; i < 4; i++) {
+          throwIfAborted(context.signal)
+          await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight, 800)))
+          await page.waitForTimeout(350)
+        }
+        await page.evaluate(() => window.scrollTo(0, 0))
+        const snapshot = await extractReadablePage(page, { maxChars: extractMaxChars })
+        return {
+          ok: true,
+          url: args.url,
+          final_url: page.url(),
+          title: snapshot.title,
+          text: snapshot.text,
+          text_length: snapshot.textLength,
+          truncated: snapshot.textLength > extractMaxChars,
+        }
+      })
+    } finally {
+      if (opened?.session_id) {
+        const session = this.sessions.get(opened.session_id)
+        if (session) await this.#closeSession(session, { reason: 'ONE_SHOT_COMPLETE' }).catch(() => {})
+      }
+    }
+  }
+
   async inspect(args = {}, context = {}) {
     const session = this.#getSession(args)
     const pageState = this.#getPage(session, args.page_id)
     const maxChars = boundedInteger(args.max_chars, 8_000, 500, 20_000)
     const maxElements = boundedInteger(args.max_elements, 80, 1, 200)
-    const result = await this.#operate(session, context.signal, async () => {
+    const timeout = this.#timeout(args.timeout_ms)
+    const result = await this.#schedulePageOperation(session, pageState, {
+      type: 'inspect', signal: context.signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+    }, async () => {
       this.#assertPageHealthy(pageState)
+      this.#configurePage(pageState.page, timeout)
       const snapshot = await inspectPage(pageState, { maxChars, maxElements })
       let screenshotPath = null
       if (args.screenshot) screenshotPath = await this.#screenshot(session, pageState, args.full_page)
@@ -356,10 +586,13 @@ export class BrowserSessionManager {
     const session = this.#getSession(args)
     const pageState = this.#getPage(session, args.page_id)
     const timeout = this.#timeout(args.timeout_ms)
-    return this.#operate(session, context.signal, async () => {
+    return this.#schedulePageOperation(session, pageState, {
+      type: `act:${action}`, signal: context.signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+    }, async () => {
       this.#assertPageHealthy(pageState)
       const page = pageState.page
       this.#configurePage(page, timeout)
+      const epoch = pageState.documentEpoch
       let refEntry = null
       if (['click', 'fill', 'press', 'select', 'check', 'uncheck', 'hover'].includes(action)) {
         const ref = String(args.ref || '')
@@ -391,9 +624,16 @@ export class BrowserSessionManager {
         )
       } else if (action === 'wait') {
         await page.waitForTimeout(boundedInteger(args.ms ?? args.value, 500, 0, 30_000))
-      } else if (action === 'back') await page.goBack({ waitUntil: 'domcontentloaded', timeout })
-      else if (action === 'forward') await page.goForward({ waitUntil: 'domcontentloaded', timeout })
-      else if (action === 'reload') await page.reload({ waitUntil: 'domcontentloaded', timeout })
+      } else if (action === 'back') {
+        await page.goBack({ waitUntil: 'domcontentloaded', timeout })
+        this.#ensureDocumentEpochAdvanced(pageState, epoch)
+      } else if (action === 'forward') {
+        await page.goForward({ waitUntil: 'domcontentloaded', timeout })
+        this.#ensureDocumentEpochAdvanced(pageState, epoch)
+      } else if (action === 'reload') {
+        await page.reload({ waitUntil: 'domcontentloaded', timeout })
+        this.#ensureDocumentEpochAdvanced(pageState, epoch)
+      }
       return {
         ok: true, session_id: session.id, page_id: pageState.id,
         action, url: page.url(), title: await page.title(),
@@ -404,56 +644,130 @@ export class BrowserSessionManager {
   async tabs(args = {}, context = {}) {
     const session = this.#getSession(args)
     const action = String(args.action || 'list').toLowerCase()
-    return this.#operate(session, context.signal, async () => {
+    if (!['new', 'switch', 'close', 'list'].includes(action)) {
+      throw new BrowserSessionError('INVALID_ARGUMENT', `Unsupported tabs action: ${action}`)
+    }
+    const rawUrl = action === 'new' ? normalizeBrowserUrl(args.url, { optional: true }) : null
+    const url = rawUrl ? await this.#assertUrl(rawUrl) : null
+    return this.#scheduleControlOperation(session, {
+      type: `tabs:${action}`, signal: context.signal, queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+    }, async () => {
       if (action === 'new') {
         if (session.pages.size >= this.maxPagesPerSession) {
           throw new BrowserSessionError('PAGE_LIMIT', `Maximum pages reached (${this.maxPagesPerSession})`)
         }
-        const rawUrl = normalizeBrowserUrl(args.url, { optional: true })
-        const url = rawUrl ? await this.#assertUrl(rawUrl) : null
         const page = await session.context.newPage()
         const state = this.#pageByObject(session, page) || this.#registerPage(session, page)
+        if (!state) throw new BrowserSessionError('PAGE_LIMIT', `Maximum pages reached (${this.maxPagesPerSession})`)
         session.activePageId = state.id
-        if (url) await page.goto(url, { waitUntil: 'domcontentloaded', timeout: this.#timeout(args.timeout_ms) })
+        if (url) {
+          const timeout = this.#timeout(args.timeout_ms)
+          await this.#schedulePageOperation(session, state, {
+            type: 'tabs:new:navigate', queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+            allowClosing: true, exposeMetadata: false,
+          }, async () => {
+            this.#configurePage(page, timeout)
+            const epoch = state.documentEpoch
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout })
+            this.#ensureDocumentEpochAdvanced(state, epoch)
+          })
+        }
       } else if (action === 'switch') {
         const state = this.#getPage(session, args.page_id)
         session.activePageId = state.id
-        await state.page.bringToFront()
+        await this.#schedulePageOperation(session, state, {
+          type: 'tabs:switch:bring_to_front', queueTimeoutMs: this.#queueTimeout(args.timeout_ms),
+          allowClosing: true, exposeMetadata: false,
+        }, () => state.page.bringToFront())
       } else if (action === 'close') {
         const state = this.#getPage(session, args.page_id)
+        state.acceptingOperations = false
+        await this.#waitForQueueIdle(state.operationQueue)
         session.preserveEmptyPages += 1
         try {
           await state.page.close()
           if (!session.pages.size) this.#registerPage(session, await session.context.newPage())
+        } catch (error) {
+          if (!state.page.isClosed() && session.pages.get(state.id) === state) state.acceptingOperations = true
+          throw error
         } finally {
           session.preserveEmptyPages -= 1
-          if (!session.pages.size) this.#closeSession(session).catch(() => {})
+          if (!session.pages.size) this.#closeSession(session, { reason: 'LAST_PAGE_CLOSED' }).catch(() => {})
         }
-      } else if (action !== 'list') {
-        throw new BrowserSessionError('INVALID_ARGUMENT', `Unsupported tabs action: ${action}`)
       }
       return { ok: true, session_id: session.id, active_page_id: session.activePageId, pages: await this.#pageList(session) }
     })
   }
 
-  async close(args = {}) {
+  async close(args = {}, context = {}) {
     const id = String(args.session_id || args.sessionId || '')
-    const session = this.sessions.get(id)
-    if (!session) return { ok: true, session_id: id, closed: false }
-    await this.#closeSession(session)
-    return { ok: true, session_id: id, closed: true }
+    const clearProfile = optionalBoolean(args, 'clear_profile')
+    if (id) {
+      const session = this.sessions.get(id)
+      if (!session) {
+        const closed = this.closedSessions.get(id)
+        return {
+          ok: true, session_id: id, closed: false, profile_cleared: false,
+          ...(closed ? { close_reason: closed.reason, closed_at: closed.closedAt } : {}),
+        }
+      }
+      if (clearProfile && !session.persistent) {
+        throw new BrowserSessionError('INVALID_ARGUMENT', 'Only a persistent browser session has a profile to clear')
+      }
+      throwIfAborted(context.signal)
+      await raceAbort(this.#closeSession(session, { clearProfile, reason: 'USER_CLOSE' }), context.signal)
+      const closed = this.closedSessions.get(id)
+      return {
+        ok: true, session_id: id, closed: true, profile_cleared: clearProfile,
+        close_reason: closed?.reason || 'USER_CLOSE',
+      }
+    }
+    if (!clearProfile) {
+      throw new BrowserSessionError('INVALID_ARGUMENT', 'browser_close requires session_id, or clear_profile=true with profile and url')
+    }
+    const url = await this.#assertUrl(args.url)
+    if (url === 'about:blank') {
+      throw new BrowserSessionError('INVALID_ARGUMENT', 'Clearing a persistent profile requires its http(s) site URL')
+    }
+    const identity = this.profileStore.identity(profileName(args.profile), url, context)
+    let lock
+    try {
+      lock = this.profileStore.acquire(identity)
+      const cleared = await this.profileStore.clear(identity)
+      return { ok: true, session_id: '', closed: false, profile_id: identity.id, profile_cleared: cleared }
+    } catch (err) {
+      throw this.#normalizeError(err, 'PROFILE_CLEAR_FAILED')
+    } finally {
+      this.profileStore.release(lock)
+    }
   }
 
-  listSessions() {
+  listSessions(args = {}, context = {}) {
     this.#assertOpen()
+    const includeProfiles = optionalBoolean(args, 'include_profiles')
     const sessions = []
+    const degradedSessions = []
     for (const session of [...this.sessions.values()]) {
       for (const state of [...session.pages.values()]) {
         if (state.page.isClosed()) session.pages.delete(state.id)
       }
+      if (session.state === 'degraded') {
+        degradedSessions.push({
+          session_id: session.id,
+          state: 'degraded',
+          close_reason: session.closeReason || 'UNKNOWN',
+          failure_code: session.failure?.code || 'SESSION_CLOSE_FAILED',
+          visible: session.visible === true,
+          persistent: session.persistent === true,
+        })
+        continue
+      }
       const browserDisconnected = typeof session.browser?.isConnected === 'function' && !session.browser.isConnected()
       if (session.closing || session.failure || browserDisconnected || (!session.pages.size && !session.preserveEmptyPages)) {
-        this.#closeSession(session).catch(() => {})
+        const reason = session.closeReason || (browserDisconnected
+          ? 'BROWSER_DISCONNECTED'
+          : (!session.pages.size ? 'LAST_PAGE_CLOSED' : 'SESSION_FAILURE'))
+        this.#closeSession(session, { reason }).catch(() => {})
         continue
       }
       if (!session.pages.has(session.activePageId)) {
@@ -463,6 +777,11 @@ export class BrowserSessionManager {
         session_id: session.id,
         visible: session.visible,
         persistent: session.persistent,
+        ...(session.persistentProfile ? {
+          profile_id: session.persistentProfile.id,
+          profile: session.persistentProfile.name,
+          site: session.persistentProfile.origin,
+        } : {}),
         active_page_id: session.activePageId,
         pages: [...session.pages.values()].map(state => ({
           page_id: state.id,
@@ -471,13 +790,20 @@ export class BrowserSessionManager {
         })),
       })
     }
-    return { ok: true, count: sessions.length, sessions }
+    return {
+      ok: true,
+      count: sessions.length,
+      sessions,
+      degraded_sessions: degradedSessions.slice(0, this.maxSessions),
+      ...(includeProfiles ? { profiles: this.profileStore.list(context) } : {}),
+    }
   }
 
   async sweepExpired() {
+    if (this.sessionTtlMs == null) return 0
     const now = this.now()
     const expired = [...this.sessions.values()].filter(session => !session.activeOperations && now - session.lastUsed >= this.sessionTtlMs)
-    await Promise.allSettled(expired.map(session => this.#closeSession(session)))
+    await Promise.allSettled(expired.map(session => this.#closeSession(session, { reason: 'TTL_EXPIRED' })))
     return expired.length
   }
 
@@ -493,9 +819,11 @@ export class BrowserSessionManager {
       while (this.resourceCreations.size) {
         await Promise.allSettled([...this.resourceCreations])
       }
-      await Promise.allSettled([...this.sessions.values()].map(session => this.#closeSession(session)))
+      await Promise.allSettled([...this.sessions.values()].map(session => this.#closeSession(session, { reason: 'SHUTDOWN' })))
       await Promise.allSettled([...this.sharedBrowsers.values()].map(browser => browser.close()))
-      this.sessions.clear()
+      // Closing a shared browser is itself a definitive cleanup boundary for
+      // non-persistent contexts whose earlier context.close() attempt failed.
+      await Promise.allSettled([...this.sessions.values()].map(session => this.#closeSession(session, { reason: 'SHUTDOWN' })))
       this.sharedBrowsers.clear()
       this.sharedBrowserLaunches.clear()
     })()
@@ -507,6 +835,12 @@ export class BrowserSessionManager {
   }
 
   #timeout(value) { return boundedInteger(value, this.operationTimeoutMs, 500, 120_000) }
+
+  #queueTimeout(value) {
+    return value === undefined
+      ? this.operationQueueTimeoutMs
+      : boundedInteger(value, this.operationQueueTimeoutMs, 50, 120_000)
+  }
 
   async #sharedBrowser(chromium, visible, signal) {
     const key = visible ? 'visible' : 'headless'
@@ -551,7 +885,7 @@ export class BrowserSessionManager {
           for (const session of this.sessions.values()) {
             if (session.browser === browser) {
               session.failure = new BrowserSessionError('BROWSER_DISCONNECTED', 'Browser process disconnected')
-              this.#closeSession(session).catch(() => {})
+              this.#closeSession(session, { reason: 'BROWSER_DISCONNECTED' }).catch(() => {})
             }
           }
         })
@@ -576,8 +910,9 @@ export class BrowserSessionManager {
     }
     const state = {
       id: pageId(), page, refs: new Map(), refToken: crypto.randomBytes(6).toString('hex'),
-      documentEpoch: 0, failure: null,
+      documentEpoch: 0, retiredRefs: new Set(), failure: null, acceptingOperations: true,
     }
+    state.operationQueue = this.#createOperationQueue('page', state.id)
     session.pages.set(state.id, state)
     session.activePageId = state.id
     page.on('framenavigated', frame => {
@@ -588,17 +923,27 @@ export class BrowserSessionManager {
         // its scheduled navigation, and disposing that click's handle turns a
         // successful navigation into a misleading TARGET_CLOSED error. Chromium
         // releases the old execution-context handles with the document.
-        state.refs = new Map()
+        this.#retirePageRefs(state)
+        if (!state.operationQueue.active) {
+          queueMicrotask(() => {
+            if (!state.operationQueue.active) this.#disposeRetiredPageRefs(state).catch(() => {})
+          })
+        }
       }
     })
     page.on('crash', () => { state.failure = new BrowserSessionError('PAGE_CRASHED', 'Browser page crashed') })
     page.on('download', download => { download.cancel().catch(() => {}) })
     page.on('close', () => {
+      state.acceptingOperations = false
+      this.#cancelPendingQueueOperations(
+        state.operationQueue,
+        new BrowserSessionError('PAGE_CLOSED', `Browser page is closed: ${state.id}`),
+      )
       clearPageRefs(state).catch(() => {})
       session.pages.delete(state.id)
       if (session.activePageId === state.id) session.activePageId = session.pages.keys().next().value || null
       if (!session.pages.size && !session.preserveEmptyPages && !session.closing) {
-        this.#closeSession(session).catch(() => {})
+        this.#closeSession(session, { reason: 'LAST_PAGE_CLOSED' }).catch(() => {})
       }
     })
     return state
@@ -611,9 +956,29 @@ export class BrowserSessionManager {
     this.#assertOpen()
     const id = String(args.session_id || args.sessionId || '')
     const session = this.sessions.get(id)
-    if (!session) throw new BrowserSessionError('SESSION_NOT_FOUND', `Browser session not found: ${id || '(missing)'}`)
+    if (!session) {
+      const closed = this.closedSessions.get(id)
+      if (closed) {
+        const error = new BrowserSessionError(
+          'SESSION_CLOSED',
+          `Browser session closed (${closed.reason}): ${id}`,
+        )
+        error.closeReason = closed.reason
+        error.closedAt = closed.closedAt
+        throw error
+      }
+      throw new BrowserSessionError('SESSION_NOT_FOUND', `Browser session not found: ${id || '(missing)'}`)
+    }
+    if (session.state === 'degraded' && session.failure) throw session.failure
+    if (session.closing) {
+      const error = new BrowserSessionError(
+        'SESSION_CLOSING',
+        `Browser session is closing (${session.closeReason || 'UNKNOWN'}): ${id}`,
+      )
+      error.closeReason = session.closeReason
+      throw error
+    }
     if (session.failure) throw session.failure
-    if (session.closing) throw new BrowserSessionError('SESSION_CLOSED', `Browser session is closing: ${id}`)
     session.lastUsed = this.now()
     return session
   }
@@ -669,19 +1034,251 @@ export class BrowserSessionManager {
     })
   }
 
-  async #operate(session, signal, operation) {
-    throwIfAborted(signal)
-    session.activeOperations += 1
-    session.lastUsed = this.now()
-    try {
-      return await raceAbort(Promise.resolve().then(operation), signal)
-    } catch (err) {
-      if (err?.name === 'AbortError') throw err
-      throw this.#normalizeError(err, 'OPERATION_FAILED')
-    } finally {
-      session.activeOperations -= 1
-      session.lastUsed = this.now()
+  #createOperationQueue(kind, ownerId) {
+    return { kind, ownerId, pending: [], active: null, idleWaiters: new Set() }
+  }
+
+  #scheduleControlOperation(session, options, operation) {
+    return this.#enqueueOperation(session, session.controlQueue, options, operation)
+  }
+
+  #schedulePageOperation(session, pageState, options, operation) {
+    if (!options?.allowClosing && session.closing) {
+      throw new BrowserSessionError('SESSION_CLOSING', `Browser session is closing: ${session.id}`)
     }
+    if (!pageState.acceptingOperations || pageState.page.isClosed()) {
+      throw new BrowserSessionError('PAGE_CLOSED', `Browser page is closed: ${pageState.id}`)
+    }
+    return this.#enqueueOperation(session, pageState.operationQueue, options, async () => {
+      try {
+        this.#assertPageHealthy(pageState)
+        return await operation()
+      } finally {
+        await this.#disposeRetiredPageRefs(pageState)
+      }
+    })
+  }
+
+  #enqueueOperation(session, queue, options = {}, operation) {
+    const signal = options.signal
+    throwIfAborted(signal)
+    if (!options.allowClosing && session.closing) {
+      throw new BrowserSessionError('SESSION_CLOSING', `Browser session is closing: ${session.id}`)
+    }
+
+    let resolveCaller
+    let rejectCaller
+    let resolveCompletion
+    let rejectCompletion
+    const task = {
+      id: operationId(),
+      type: String(options.type || 'operation'),
+      enqueuedAt: this.now(),
+      startedAt: null,
+      status: 'queued',
+      session,
+      queue,
+      signal,
+      operation,
+      exposeMetadata: options.exposeMetadata !== false,
+      callerSettled: false,
+      callerPromise: new Promise((resolve, reject) => { resolveCaller = resolve; rejectCaller = reject }),
+      completion: new Promise((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject }),
+      resolveCaller,
+      rejectCaller,
+      resolveCompletion,
+      rejectCompletion,
+      abortListener: null,
+      queueTimer: null,
+    }
+    // completion is an internal lifecycle promise. Observe rejection eagerly;
+    // callers receive the separate callerPromise while close/shutdown use allSettled.
+    task.completion.catch(() => {})
+    session.operationPromises ||= new Set()
+    session.operationTasks ||= new Map()
+    session.operationPromises.add(task.completion)
+    session.operationTasks.set(task.id, task)
+    session.activeOperations = Math.max(0, session.activeOperations || 0) + 1
+    session.lastUsed = this.now()
+
+    if (signal) {
+      task.abortListener = () => {
+        const error = this.#decorateOperationError(createAbortError(signal.reason || 'Aborted'), task)
+        if (task.status === 'queued') this.#cancelQueuedOperation(task, error)
+        else if (task.status === 'running') this.#rejectOperationCaller(task, error)
+      }
+      signal.addEventListener('abort', task.abortListener, { once: true })
+    }
+    const queueTimeoutMs = boundedInteger(
+      options.queueTimeoutMs,
+      this.operationQueueTimeoutMs,
+      50,
+      120_000,
+    )
+    task.queueTimer = setTimeout(() => {
+      if (task.status !== 'queued') return
+      this.#cancelQueuedOperation(task, new BrowserSessionError(
+        'OPERATION_QUEUE_TIMEOUT',
+        `Browser operation ${task.id} (${task.type}) timed out after ${queueTimeoutMs}ms waiting to start`,
+      ))
+    }, queueTimeoutMs)
+
+    queue.pending.push(task)
+    this.#pumpOperationQueue(queue)
+    return task.callerPromise
+  }
+
+  #pumpOperationQueue(queue) {
+    if (queue.active) return
+    let task = queue.pending.shift()
+    while (task && task.status !== 'queued') task = queue.pending.shift()
+    if (!task) {
+      this.#notifyQueueIdle(queue)
+      return
+    }
+    queue.active = task
+    task.status = 'running'
+    task.startedAt = this.now()
+    clearTimeout(task.queueTimer)
+    task.queueTimer = null
+    Promise.resolve().then(task.operation).then(
+      value => this.#finishRunningOperation(task, null, value),
+      error => this.#finishRunningOperation(task, this.#normalizeError(error, 'OPERATION_FAILED')),
+    )
+  }
+
+  #finishRunningOperation(task, error, value) {
+    if (task.status !== 'running') return
+    task.status = 'settled'
+    const result = !error && task.exposeMetadata && value && typeof value === 'object' && !Array.isArray(value)
+      ? {
+          ...value,
+          operation_id: task.id,
+          operation_type: task.type,
+          operation_enqueued_at: task.enqueuedAt,
+          operation_started_at: task.startedAt,
+        }
+      : value
+    if (error) {
+      const decorated = this.#decorateOperationError(error, task)
+      this.#rejectOperationCaller(task, decorated)
+      task.rejectCompletion(decorated)
+    } else {
+      this.#resolveOperationCaller(task, result)
+      task.resolveCompletion(result)
+    }
+    this.#untrackOperation(task)
+    if (task.queue.active === task) task.queue.active = null
+    this.#pumpOperationQueue(task.queue)
+  }
+
+  #cancelQueuedOperation(task, error) {
+    if (task.status !== 'queued') return
+    task.status = 'cancelled'
+    const pendingIndex = task.queue.pending.indexOf(task)
+    if (pendingIndex >= 0) task.queue.pending.splice(pendingIndex, 1)
+    const decorated = this.#decorateOperationError(error, task)
+    this.#rejectOperationCaller(task, decorated)
+    task.rejectCompletion(decorated)
+    this.#untrackOperation(task)
+    this.#pumpOperationQueue(task.queue)
+  }
+
+  #resolveOperationCaller(task, value) {
+    if (task.callerSettled) return
+    task.callerSettled = true
+    task.resolveCaller(value)
+  }
+
+  #rejectOperationCaller(task, error) {
+    if (task.callerSettled) return
+    task.callerSettled = true
+    task.rejectCaller(error)
+  }
+
+  #untrackOperation(task) {
+    clearTimeout(task.queueTimer)
+    task.queueTimer = null
+    if (task.signal && task.abortListener) task.signal.removeEventListener('abort', task.abortListener)
+    task.abortListener = null
+    task.session.operationPromises?.delete(task.completion)
+    task.session.operationTasks?.delete(task.id)
+    task.session.activeOperations = Math.max(0, (task.session.activeOperations || 0) - 1)
+    task.session.lastUsed = this.now()
+  }
+
+  #decorateOperationError(error, task) {
+    if (!error || (typeof error !== 'object' && typeof error !== 'function')) return error
+    error.operationId ||= task.id
+    error.operationType ||= task.type
+    error.enqueuedAt ??= task.enqueuedAt
+    error.startedAt ??= task.startedAt
+    return error
+  }
+
+  #waitForQueueIdle(queue) {
+    this.#pumpOperationQueue(queue)
+    if (!queue.active && !queue.pending.some(task => task.status === 'queued')) return Promise.resolve()
+    return new Promise(resolve => queue.idleWaiters.add(resolve))
+  }
+
+  #notifyQueueIdle(queue) {
+    if (queue.active || queue.pending.some(task => task.status === 'queued')) return
+    for (const resolve of queue.idleWaiters) resolve()
+    queue.idleWaiters.clear()
+  }
+
+  #cancelPendingQueueOperations(queue, error) {
+    for (const task of [...queue.pending]) {
+      if (task.status !== 'queued') continue
+      const taskError = error instanceof BrowserSessionError
+        ? new BrowserSessionError(error.code, error.message, error)
+        : error
+      this.#cancelQueuedOperation(task, taskError)
+    }
+    this.#pumpOperationQueue(queue)
+  }
+
+  async #drainSessionOperations(session) {
+    while (session.operationTasks?.size) {
+      await Promise.allSettled([...session.operationTasks.values()].map(task => task.completion))
+    }
+  }
+
+  #cancelPendingSessionOperations(session, error) {
+    if (session.controlQueue) this.#cancelPendingQueueOperations(session.controlQueue, error)
+    for (const pageState of session.pages.values()) {
+      pageState.acceptingOperations = false
+      if (pageState.operationQueue) this.#cancelPendingQueueOperations(pageState.operationQueue, error)
+    }
+    for (const task of session.operationTasks?.values() || []) {
+      if (task.status !== 'running') continue
+      const taskError = error instanceof BrowserSessionError
+        ? new BrowserSessionError(error.code, error.message, error)
+        : error
+      this.#rejectOperationCaller(task, this.#decorateOperationError(taskError, task))
+    }
+  }
+
+  #retirePageRefs(pageState) {
+    pageState.retiredRefs ||= new Set()
+    for (const entry of pageState.refs.values()) {
+      if (entry?.handle) pageState.retiredRefs.add(entry.handle)
+    }
+    pageState.refs = new Map()
+  }
+
+  #ensureDocumentEpochAdvanced(pageState, previousEpoch) {
+    if (pageState.documentEpoch !== previousEpoch) return
+    pageState.documentEpoch += 1
+    this.#retirePageRefs(pageState)
+  }
+
+  async #disposeRetiredPageRefs(pageState) {
+    const handles = [...(pageState.retiredRefs || [])]
+    if (!handles.length) return
+    for (const handle of handles) pageState.retiredRefs.delete(handle)
+    await Promise.allSettled(handles.map(handle => handle.dispose()))
   }
 
   async #screenshot(session, pageState, fullPage) {
@@ -693,34 +1290,153 @@ export class BrowserSessionManager {
   }
 
   async #pageList(session) {
-    return Promise.all([...session.pages.values()].map(async state => ({
-      page_id: state.id, active: state.id === session.activePageId,
-      url: state.page.url(), title: state.page.isClosed() ? '' : await state.page.title().catch(() => ''),
-    })))
+    return Promise.all([...session.pages.values()].map(async state => {
+      let title = ''
+      if (!state.page.isClosed() && state.acceptingOperations) {
+        title = await this.#schedulePageOperation(session, state, {
+          type: 'tabs:list:title', allowClosing: true, exposeMetadata: false,
+          queueTimeoutMs: this.operationQueueTimeoutMs,
+        }, () => state.page.title()).catch(() => '')
+      }
+      return {
+        page_id: state.id, active: state.id === session.activePageId,
+        url: state.page.url(), title,
+      }
+    }))
   }
 
   #sessionResult(session, pageState) {
     return {
       ok: true, session_id: session.id, page_id: pageState.id,
       url: pageState.page.url(), persistent: session.persistent, visible: session.visible,
+      ...(session.persistentProfile ? {
+        profile_id: session.persistentProfile.id,
+        profile: session.persistentProfile.name,
+        site: session.persistentProfile.origin,
+      } : {}),
     }
   }
 
-  async #closeSession(session) {
-    if (session.closing) return
+  async #closeSession(session, { clearProfile = false, reason = 'UNKNOWN' } = {}) {
+    if (clearProfile) session.clearProfile = true
+    if (session.closePromise) return session.closePromise
     session.closing = true
-    this.sessions.delete(session.id)
-    for (const state of session.pages.values()) await clearPageRefs(state)
-    try { await session.context.close() } catch {}
-    if (session.persistent) try { await session.browser?.close() } catch {}
+    session.state = 'closing'
+    session.closeReason ||= reason
+    session.closeStartedAt ||= this.now()
+    session.closePromise = (async () => {
+      if (session.operationTasks?.size) {
+        try {
+          await withSessionTimeout(
+            this.#drainSessionOperations(session),
+            this.operationDrainTimeoutMs,
+            'OPERATION_DRAIN_TIMEOUT',
+            `Timed out waiting for ${session.operationTasks.size} browser operation(s) before closing`,
+          )
+        } catch (err) {
+          if (err?.code !== 'OPERATION_DRAIN_TIMEOUT') throw err
+          session.operationDrainTimedOut = true
+          this.#cancelPendingSessionOperations(session, new BrowserSessionError(
+            'SESSION_CLOSING',
+            `Browser session close stopped queued operations after the drain timeout: ${session.id}`,
+          ))
+        }
+      }
+      for (const state of session.pages.values()) state.acceptingOperations = false
+      await Promise.allSettled([...session.pages.values()].map(state => clearPageRefs(state)))
+      if (session.persistent) {
+        const closeAttempt = Promise.resolve(closePersistentContext(session.context))
+        try {
+          await withCleanupTimeout(
+            closeAttempt,
+            this.persistentCloseTimeoutMs,
+            'Persistent browser did not exit; its profile remains locked for safety',
+          )
+          if (typeof session.browser?.isConnected === 'function' && session.browser.isConnected()) {
+            throw new BrowserSessionError(
+              'PROFILE_CLOSE_FAILED',
+              'Persistent browser still reports connected; its profile remains locked for safety',
+            )
+          }
+        } catch (err) {
+          const failure = err instanceof BrowserSessionError
+            ? err
+            : new BrowserSessionError('PROFILE_CLOSE_FAILED', 'Persistent browser close failed; its profile remains locked for safety', err)
+          session.failure = failure
+          const disconnected = typeof session.browser?.isConnected !== 'function' || !session.browser.isConnected()
+          if (disconnected) this.profileStore.release(session.profileLock)
+          // If a timed-out graceful close eventually succeeds, release only
+          // after the owning browser is proven disconnected. A rejected/still
+          // connected owner deliberately leaves crash-recoverable lock debris.
+          if (!disconnected) {
+            closeAttempt.then(() => {
+              if (typeof session.browser?.isConnected !== 'function' || !session.browser.isConnected()) {
+                this.profileStore.release(session.profileLock)
+              }
+            }, () => {})
+          }
+          throw failure
+        }
+      } else {
+        if (!session.contextClosed) {
+          try {
+            await withSessionTimeout(
+              Promise.resolve().then(() => session.context.close()),
+              this.sessionCloseTimeoutMs,
+              'SESSION_CLOSE_FAILED',
+              'Browser context close timed out',
+            )
+            session.contextClosed = true
+          } catch (err) {
+            const browserDisconnected = typeof session.browser?.isConnected === 'function' && !session.browser.isConnected()
+            if (!session.contextClosed && !browserDisconnected) {
+              throw err instanceof BrowserSessionError
+                ? err
+                : new BrowserSessionError('SESSION_CLOSE_FAILED', 'Browser context close failed', err)
+            }
+          }
+        }
+      }
+      try {
+        if (session.clearProfile && session.persistentProfile) await this.profileStore.clear(session.persistentProfile)
+      } finally {
+        this.profileStore.release(session.profileLock)
+      }
+      session.state = 'closed'
+      session.closedAt = this.now()
+      if (this.sessions.get(session.id) === session) this.sessions.delete(session.id)
+      this.closedSessions.delete(session.id)
+      this.closedSessions.set(session.id, {
+        reason: session.closeReason,
+        closedAt: session.closedAt,
+        operationDrainTimedOut: session.operationDrainTimedOut,
+        failureCode: session.failure?.code || null,
+      })
+      while (this.closedSessions.size > this.maxClosedSessions) {
+        this.closedSessions.delete(this.closedSessions.keys().next().value)
+      }
+    })().catch(err => {
+      const failure = err instanceof BrowserSessionError
+        ? err
+        : new BrowserSessionError('SESSION_CLOSE_FAILED', 'Browser session close failed', err)
+      session.failure = failure
+      session.state = 'degraded'
+      session.closePromise = null
+      throw failure
+    })
+    return session.closePromise
   }
 
   #normalizeError(err, fallbackCode) {
     if (err instanceof BrowserSessionError || err?.name === 'AbortError') return err
     const message = err?.message || String(err)
+    if (['PROFILE_IN_USE', 'PROFILE_LOCK_FAILED'].includes(err?.code)) {
+      return new BrowserSessionError(err.code, message, err)
+    }
     if (/Target page, context or browser has been closed/i.test(message)) {
       return new BrowserSessionError('TARGET_CLOSED', message, err)
     }
+    if (err?.code === 'DOCUMENT_CHANGED') return new BrowserSessionError('DOCUMENT_CHANGED', message, err)
     if (/Timeout/i.test(message)) return new BrowserSessionError('TIMEOUT', message, err)
     return new BrowserSessionError(fallbackCode, message, err)
   }

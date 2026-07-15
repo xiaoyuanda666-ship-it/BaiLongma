@@ -782,8 +782,7 @@ const createSettingsModal = () => `
             <div class="settings-section-label">工具黑名单</div>
             <p class="settings-hint">勾选后该工具将被拒绝执行，对话中 Agent 调用时会收到"已被安全策略禁用"错误。</p>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="exec_command"> exec_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="browser_read"> browser_read &nbsp;<span style="color:var(--ink2);font-size:12px;">（浏览器渲染访问）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="fetch_url"> fetch_url &nbsp;<span style="color:var(--ink2);font-size:12px;">（HTTP 请求）</span></label></div>
+            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="web_read"> web_read &nbsp;<span style="color:var(--ink2);font-size:12px;">（HTTP / Playwright 网页读取）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="web_search"> web_search &nbsp;<span style="color:var(--ink2);font-size:12px;">（网页搜索）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="ui_set"> ui_set &nbsp;<span style="color:var(--ink2);font-size:12px;">（投影声明式界面 surface）</span></label></div>
           </div>

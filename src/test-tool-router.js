@@ -6,6 +6,8 @@
 
 import { selectTools } from './memory/tool-router.js'
 
+const WEB_TOOL_NAMES = ['web_search', 'web_read']
+
 let failed = 0
 function assert(cond, label) {
   if (!cond) {
@@ -47,8 +49,8 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(hasAll(tools, ['web_search', 'fetch_url', 'browser_read']),
-    `2) web keywords → web group injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, ['web_search', 'web_read']) && hasNone(tools, ['fetch_url', 'browser_read']),
+    `2) stateless search → search + read injected (got: ${tools.join(',')})`)
   assert(hasNone(tools, ['exec_command', 'kill_process']),
     '2) exec group not over-triggered')
 }
@@ -208,12 +210,20 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
     recentActionLog: [
-      { tool: 'fetch_url', timestamp: '2026-05-19T10:00:00Z' },
-      { tool: 'browser_read', timestamp: '2026-05-19T10:01:00Z' },
+      { tool: 'web_search', timestamp: '2026-05-19T10:00:00Z' },
+      { tool: 'web_read', timestamp: '2026-05-19T10:01:00Z' },
     ],
   })
-  assert(hasAll(tools, ['fetch_url', 'browser_read']),
-    `9) actionLog保活：上轮用过的工具被强制注入 (got: ${tools.join(',')})`)
+  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
+    `9) actionLog保活：最近一次读取保持 web_read (got: ${tools.join(',')})`)
+}
+{
+  const tools = selectTools({
+    messageBody: '继续', isTick: false,
+    recentActionLog: [{ tool: 'web_search' }, { tool: 'web_read' }],
+  })
+  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
+    `9b) ActionLog 无时间戳时最后一项优先 (got: ${tools.join(',')})`)
 }
 
 // ====== 10) 多模态生成 gate：mmCaps 没配 → 不注入 ======
@@ -259,6 +269,26 @@ function hasNone(tools, names) {
     'speak', 'complete_startup_self_check', 'read_file', 'write_file',
     'web_search', 'media_mode', 'hotspot_mode',
   ]), '11) startupSelfCheckActive → fixed self-check tool set injected')
+  assert(hasNone(tools, ['web_read', 'fetch_url', 'browser_read']),
+    '11) startup self-check only injects the search fallback it actually uses')
+}
+
+// ====== 11a) deterministic web routes expose the tools needed by the workflow ======
+for (const [messageBody, expected] of [
+  ['search current news online', ['web_search', 'web_read']],
+  ['总结这个网页正文 https://example.com/article', ['web_read']],
+  ['读取这个 JavaScript 动态网页正文', ['web_read']],
+  ['搜索一下深圳最新天气', ['web_read']],
+]) {
+  const tools = selectTools({ messageBody, isTick: false })
+  assert(hasAll(tools, expected) && WEB_TOOL_NAMES.filter(name => !expected.includes(name)).every(name => !has(tools, name)),
+    `11a) ${messageBody} → ${expected.join(' + ')} (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({ messageBody: 'search online then open website and click the first link', isTick: false })
+  assert(hasAll(tools, ['web_search', 'web_read', 'browser_open', 'browser_navigate', 'browser_act']),
+    `11a2) combined search + interaction keeps both capability sets (got: ${tools.join(',')})`)
 }
 
 // ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======

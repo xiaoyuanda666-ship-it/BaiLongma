@@ -18,8 +18,8 @@ const registry = new Map()
 const BUILTIN_NAMES = new Set([
   'express', 'send_message', 'read_file', 'list_dir', 'write_file', 'delete_file',
   'make_dir', 'exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command',
-  'download_file', 'kill_process', 'list_processes', 'web_search',
-  'fetch_url', 'browser_read', 'browser_sessions', 'browser_open', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close',
+  'download_file', 'kill_process', 'list_processes', 'web_search', 'web_read',
+  'fetch_url', 'browser_read', 'browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close',
   'search_memory', 'probe_memory', 'upsert_memory', 'skip_recognition',
   'speak', 'generate_lyrics', 'generate_music', 'generate_image', 'set_tick_interval',
   'media_mode', 'hotspot_mode', 'worldcup_mode', 'typhoon_mode', 'open_doc_panel', 'person_card_mode', 'music',

@@ -85,7 +85,7 @@ export const memorySchemas = {
                   maximum: 5,
                   description: 'Importance score 1-5. 1=trivial detail, 2=ordinary fact, 3=default stable info, 4=meaningful pattern or recurring preference, 5=identity-level / load-bearing belief. Defaults to 3 if omitted.'
                 },
-                body_path:     { type: 'string', description: 'For article type: full-text file path from fetch_url/browser_read body_path.' }
+                body_path:     { type: 'string', description: 'For article type: full-text file path from web_read body_path.' }
               },
               required: ['mem_id']
             },

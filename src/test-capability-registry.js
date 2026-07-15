@@ -35,9 +35,32 @@ function ctx(rawText, isTick = false) {
 
 // ===== 2) tool 注入门解耦 =====
 {
-  // web：关键词命中 → web 工具
+  // 无状态搜索只暴露搜索工具，避免和正文抓取/浏览器渲染竞争。
   const t = capabilityToolsFor(ctx('搜一下 vLLM'))
-  assert(has(t, 'web_search') && has(t, 'fetch_url'), `2a) web 关键词 → web 工具 (got: ${t.join(',')})`)
+  assert(has(t, 'web_search') && has(t, 'web_read') && none(t, ['fetch_url', 'browser_read']), `2a) 搜索 → web_search + web_read (got: ${t.join(',')})`)
+}
+{
+  const staticRead = capabilityToolsFor(ctx('总结这篇文章正文 https://example.com/a'))
+  assert(has(staticRead, 'web_read') && none(staticRead, ['web_search', 'fetch_url', 'browser_read']),
+    `2a2) 静态正文 → 仅 web_read (got: ${staticRead.join(',')})`)
+  const dynamicRead = capabilityToolsFor(ctx('用无头浏览器读取这个 JS 动态网页正文'))
+  assert(has(dynamicRead, 'web_read') && none(dynamicRead, ['web_search', 'fetch_url', 'browser_read']),
+    `2a3) 动态无状态正文 → 同一 web_read (got: ${dynamicRead.join(',')})`)
+  const stateful = capabilityToolsFor(ctx('打开 https://example.com 并点击登录'))
+  assert(['browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close'].every(name => has(stateful, name))
+    && none(stateful, ['web_search', 'fetch_url', 'browser_read']),
+  `2a4) 状态化网页 → 仅 Playwright 组 (got: ${stateful.join(',')})`)
+  for (const phrase of [
+    '访问 https://example.com', 'visit example.com',
+    'go to https://example.com', '查看网站 https://example.com',
+  ]) {
+    const routed = capabilityToolsFor(ctx(phrase))
+    assert(['browser_sessions', 'browser_open', 'browser_navigate', 'browser_inspect', 'browser_act', 'browser_tabs', 'browser_close'].every(name => has(routed, name))
+      && none(routed, ['web_search', 'fetch_url', 'browser_read']),
+    `2a5) 明确导航同义词 → 仅 Playwright: ${phrase} (got: ${routed.join(',')})`)
+  }
+  assert(none(capabilityToolsFor(ctx('go to definition in the editor')), ['browser_open', 'browser_act']),
+    '2a6) 无 URL 的普通技术表达不误触发 Playwright')
 }
 {
   // Tick 不因心跳身份自动预装业务能力；需要时由 find_tool 发现。
@@ -67,7 +90,7 @@ function ctx(rawText, isTick = false) {
 {
   // 天气 → 带上 web 工具（修复旧路径偶尔无 fetch 的缺口）
   const t = capabilityToolsFor(ctx('深圳天气怎么样'))
-  assert(has(t, 'fetch_url'), `2f) 天气 → 带上 web 工具(fetch_url) (got: ${t.join(',')})`)
+  assert(has(t, 'web_read') && !has(t, 'web_search'), `2f) 天气 → 仅 web_read (got: ${t.join(',')})`)
 }
 
 // ===== 3) 工作流块注入（context）=====
@@ -100,6 +123,12 @@ function ctx(rawText, isTick = false) {
   assert(findCapabilitiesByQuery('天气').some(c => c.id === 'weather'), '4c) "天气" → 发现 weather')
   assert(findCapabilitiesByQuery('台风路径').some(c => c.id === 'typhoon'), '4c2) "台风路径" → 发现 typhoon')
   assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'web'), '4d) "上网搜索" → 发现 web')
+  assert(findCapabilitiesByQuery('上网搜索').find(c => c.id === 'web')?.tools.join(',') === 'web_search,web_read',
+    '4d2) 搜索发现加载 web_search + web_read')
+  assert(findCapabilitiesByQuery('读取网页正文').find(c => c.id === 'web')?.tools.join(',') === 'web_read',
+    '4d3) 静态正文发现只加载 web_read')
+  assert(findCapabilitiesByQuery('读取 JS 动态网页正文').find(c => c.id === 'web')?.tools.join(',') === 'web_read',
+    '4d4) 动态正文发现也只加载 web_read')
   assert(findCapabilitiesByQuery('').length === 0, '4e) 空 query → 无发现')
 }
 

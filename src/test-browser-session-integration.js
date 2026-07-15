@@ -6,8 +6,51 @@ import path from 'node:path'
 import { once } from 'node:events'
 import { BrowserSessionManager } from './capabilities/tools/browser/index.js'
 
+const localBundledChromium = path.join(
+  process.cwd(), 'build', 'playwright-browsers',
+  `${process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux'}-${process.arch}`,
+)
+if (fs.existsSync(localBundledChromium)) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = localBundledChromium
+  process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = '1'
+}
+
+async function removeTreeEventually(target) {
+  let lastError
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      fs.rmSync(target, { recursive: true, force: true })
+      return
+    } catch (err) {
+      lastError = err
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  // Playwright's Windows driver can keep a directory handle until this Node
+  // process itself exits even after every browser child is gone. The test has
+  // already asserted each cleared profile directory is absent; do not turn a
+  // process-lifetime temp-root handle into a product failure.
+  if (lastError?.code === 'EPERM' && process.platform === 'win32') return false
+  throw lastError
+}
+
 const fixture = http.createServer((request, response) => {
   response.setHeader('content-type', 'text/html; charset=utf-8')
+  if (request.url === '/login') {
+    response.setHeader('set-cookie', [
+      'bailongma_session=authenticated; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax',
+      'bailongma_session_only=present; Path=/; HttpOnly; SameSite=Lax',
+    ])
+    response.end('<!doctype html><title>Login complete</title><main>Authenticated login state saved</main>')
+    return
+  }
+  if (request.url === '/account') {
+    const cookies = String(request.headers.cookie || '')
+    const authenticated = cookies.includes('bailongma_session=authenticated')
+    const sessionOnly = cookies.includes('bailongma_session_only=present')
+    response.end(`<!doctype html><title>Account</title><main>${authenticated ? 'SIGNED IN' : 'SIGNED OUT'}; ${sessionOnly ? 'SESSION COOKIE PRESENT' : 'SESSION COOKIE ABSENT'}</main>`)
+    return
+  }
   if (request.url === '/next') {
     response.end('<!doctype html><title>Next page</title><main>Navigation complete</main><button id="done">Done</button>')
     return
@@ -72,6 +115,10 @@ const fixture = http.createServer((request, response) => {
 fixture.listen(0, '127.0.0.1')
 await once(fixture, 'listening')
 const { port } = fixture.address()
+const alternateFixture = http.createServer(fixture.listeners('request')[0])
+alternateFixture.listen(0, '127.0.0.1')
+await once(alternateFixture, 'listening')
+const alternatePort = alternateFixture.address().port
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-browser-integration-'))
 const sandboxRoot = path.join(tempRoot, 'sandbox')
 const manager = new BrowserSessionManager({
@@ -82,7 +129,7 @@ const manager = new BrowserSessionManager({
 })
 
 try {
-  const opened = await manager.open({ url: `http://127.0.0.1:${port}/`, visible: false })
+  const opened = await manager.open({ url: `http://127.0.0.1:${port}/`, visible: false, persistent: false })
   assert.equal(opened.ok, true)
   assert.match(opened.session_id, /^bs_/)
 
@@ -188,12 +235,120 @@ try {
   const tabs = await manager.tabs({ session_id: opened.session_id })
   assert.equal(tabs.pages.length, 1)
   assert.equal(tabs.active_page_id, opened.page_id)
+  const directNavigation = await manager.navigate({
+    session_id: opened.session_id,
+    page_id: opened.page_id,
+    url: `http://127.0.0.1:${port}/next`,
+  })
+  assert.equal(directNavigation.title, 'Next page')
+  assert.equal(directNavigation.page_id, opened.page_id, 'browser_navigate preserves the current tab')
   assert.equal((await manager.close({ session_id: opened.session_id })).closed, true)
   assert.equal(manager.size, 0)
+
+  const oneShotRead = await manager.readOnce({ url: `http://127.0.0.1:${port}/next` })
+  assert.equal(oneShotRead.title, 'Next page')
+  assert.match(oneShotRead.text, /Navigation complete/)
+  assert.equal(manager.size, 0, 'one-shot Playwright read closes its temporary session')
+
+  const ephemeralLogin = await manager.open({ url: `http://127.0.0.1:${port}/login`, visible: false, persistent: false })
+  const ephemeralAccount = await manager.tabs({
+    session_id: ephemeralLogin.session_id, action: 'new', url: `http://127.0.0.1:${port}/account`,
+  })
+  const ephemeralWithinSession = await manager.inspect({
+    session_id: ephemeralLogin.session_id, page_id: ephemeralAccount.active_page_id,
+  })
+  assert.match(ephemeralWithinSession.text, /SIGNED IN/)
+  assert.match(ephemeralWithinSession.text, /SESSION COOKIE PRESENT/)
+  await manager.close({ session_id: ephemeralLogin.session_id })
+  const newEphemeralSession = await manager.open({ url: `http://127.0.0.1:${port}/account`, visible: false, persistent: false })
+  const ephemeralAfterClose = await manager.inspect({ session_id: newEphemeralSession.session_id })
+  assert.match(ephemeralAfterClose.text, /SIGNED OUT/)
+  assert.match(ephemeralAfterClose.text, /SESSION COOKIE ABSENT/)
+  await manager.close({ session_id: newEphemeralSession.session_id })
+
+  // A real Chromium persistent context flushes its cookie database during
+  // application shutdown, and the same scoped site/profile restores it after
+  // a fresh manager is constructed.
+  const persistentUserData = path.join(tempRoot, 'persistent-user-data')
+  const profileScope = { currentTargetId: 'ID:integration-user' }
+  const otherProfileScope = { currentTargetId: 'ID:other-integration-user' }
+  const persistentManagerOptions = {
+    sandboxRoot: path.join(tempRoot, 'persistent-sandbox'),
+    userDataRoot: persistentUserData,
+    operationTimeoutMs: 10_000,
+    allowPrivateNetwork: true,
+  }
+  const beforeRestart = new BrowserSessionManager(persistentManagerOptions)
+  const loggedIn = await beforeRestart.open({
+    url: `http://127.0.0.1:${port}/login`,
+    visible: false,
+    persistent: true,
+    profile: 'account_login',
+  }, profileScope)
+  assert.match((await beforeRestart.inspect({ session_id: loggedIn.session_id })).text, /Authenticated login state saved/)
+  const sameProcessAccount = await beforeRestart.tabs({
+    session_id: loggedIn.session_id, action: 'new', url: `http://127.0.0.1:${port}/account`,
+  })
+  const sameProcessState = await beforeRestart.inspect({
+    session_id: loggedIn.session_id, page_id: sameProcessAccount.active_page_id,
+  })
+  assert.match(sameProcessState.text, /SIGNED IN/)
+  assert.match(sameProcessState.text, /SESSION COOKIE PRESENT/)
+  await beforeRestart.shutdown()
+
+  const afterRestart = new BrowserSessionManager(persistentManagerOptions)
+  const restored = await afterRestart.open({
+    url: `http://127.0.0.1:${port}/account`,
+    visible: false,
+    persistent: true,
+    profile: 'account_login',
+  }, profileScope)
+  const restoredState = await afterRestart.inspect({ session_id: restored.session_id })
+  assert.match(restoredState.text, /SIGNED IN/)
+  assert.match(restoredState.text, /SESSION COOKIE ABSENT/)
+
+  const isolatedByProfile = await afterRestart.open({
+    url: `http://127.0.0.1:${port}/account`, visible: false, persistent: true, profile: 'different_task',
+  }, profileScope)
+  assert.match((await afterRestart.inspect({ session_id: isolatedByProfile.session_id })).text, /SIGNED OUT/)
+  const isolatedByScope = await afterRestart.open({
+    url: `http://127.0.0.1:${port}/account`, visible: false, persistent: true, profile: 'account_login',
+  }, otherProfileScope)
+  assert.match((await afterRestart.inspect({ session_id: isolatedByScope.session_id })).text, /SIGNED OUT/)
+  const isolatedByOrigin = await afterRestart.open({
+    url: `http://127.0.0.1:${alternatePort}/account`, visible: false, persistent: true, profile: 'account_login',
+  }, profileScope)
+  assert.match((await afterRestart.inspect({ session_id: isolatedByOrigin.session_id })).text, /SIGNED OUT/)
+  for (const session of [isolatedByProfile, isolatedByScope, isolatedByOrigin, restored]) {
+    const cleared = await afterRestart.close({ session_id: session.session_id, clear_profile: true })
+    assert.equal(cleared.closed, true)
+    assert.equal(cleared.profile_cleared, true)
+    assert.equal(fs.existsSync(path.join(
+      persistentUserData, 'browser-profiles', 'v2', 'profiles', session.profile_id,
+    )), false, `cleared profile directory removed: ${session.profile_id}`)
+  }
+  await afterRestart.shutdown()
+
+  const afterClear = new BrowserSessionManager(persistentManagerOptions)
+  const clearedLogin = await afterClear.open({
+    url: `http://127.0.0.1:${port}/account`, visible: false, persistent: true, profile: 'account_login',
+  }, profileScope)
+  assert.match((await afterClear.inspect({ session_id: clearedLogin.session_id })).text, /SIGNED OUT/)
+  const clearedAgain = await afterClear.close({ session_id: clearedLogin.session_id, clear_profile: true })
+  assert.equal(clearedAgain.closed, true)
+  assert.equal(clearedAgain.profile_cleared, true)
+  assert.equal(fs.existsSync(path.join(
+    persistentUserData, 'browser-profiles', 'v2', 'profiles', clearedLogin.profile_id,
+  )), false, 'cleared login profile directory removed after restart')
+  await afterClear.shutdown()
   console.log('test-browser-session-integration passed')
 } finally {
   await manager.shutdown()
+  const fixtureClosed = once(fixture, 'close')
+  const alternateFixtureClosed = once(alternateFixture, 'close')
   fixture.close()
-  await once(fixture, 'close').catch(() => {})
-  fs.rmSync(tempRoot, { recursive: true, force: true })
+  alternateFixture.close()
+  await fixtureClosed.catch(() => {})
+  await alternateFixtureClosed.catch(() => {})
+  await removeTreeEventually(tempRoot)
 }
