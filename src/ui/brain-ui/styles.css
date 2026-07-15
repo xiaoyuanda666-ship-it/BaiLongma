@@ -681,13 +681,17 @@ body {
   pointer-events: none;
 }
 
-.heartbeat-monitor[data-beat="active"] .heartbeat-sweep {
+.heartbeat-monitor[data-beat] .heartbeat-sweep {
   animation: heartbeat-sweep 0.72s ease-out;
+}
+
+.heartbeat-monitor[data-beat="minor"] .heartbeat-sweep {
+  --heartbeat-sweep-opacity: 0.42;
 }
 
 @keyframes heartbeat-sweep {
   0% { opacity: 0; transform: translateX(-100%); }
-  18% { opacity: 1; }
+  18% { opacity: var(--heartbeat-sweep-opacity, 1); }
   100% { opacity: 0; transform: translateX(330px); }
 }
 

@@ -353,8 +353,21 @@ try {
   const idleHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
   await page.waitForTimeout(4000)
   const settledHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
-  if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without a real L2 Tick')
+  if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without real activity')
+  server.emitSse({ type: 'tool_executing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]')
+  await page.waitForFunction(() => {
+    const values = document.querySelector('#heartbeat-wave')?.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
+    const yValues = values.filter((_, index) => index % 2 === 1)
+    return yValues.some(y => Math.abs(y - 36) > 19)
+  })
   server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="major"]')
+  await page.waitForFunction(() => {
+    const values = document.querySelector('#heartbeat-wave')?.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
+    const yValues = values.filter((_, index) => index % 2 === 1)
+    return yValues.some(y => Math.abs(y - 36) > 24)
+  })
   await page.waitForFunction(() => document.body.classList.contains('model-thinking'))
   const thinkingCanvasStyle = await page.locator('.voice-canvas-card').evaluate(element => {
     const style = getComputedStyle(element)
@@ -379,6 +392,8 @@ try {
   ), idleHeartbeatPath)
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_preparing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]')
   await page.waitForFunction(() => !document.body.classList.contains('model-thinking'))
   server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: { path: 'src/example.js' }, result: 'smoke file', ok: true }, ts: new Date().toISOString() })
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
@@ -392,12 +407,13 @@ try {
     && Boolean(document.querySelector('#heartbeat-wave')?.getAttribute('d')))
   await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
   server.emitSse({ type: 'message_received', data: { input: '请更新配置文件' }, ts: new Date().toISOString() })
-  await page.waitForSelector('.heartbeat-monitor[data-beat="active"]')
+  await page.waitForSelector('.heartbeat-monitor[data-beat="major"]')
   if (await page.locator('#heartbeat-count').textContent() !== '1') {
     throw new Error('L1 message pulse must not increment the L2 heartbeat count')
   }
   server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_preparing', data: { name: 'write_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'write_file' }, ts: new Date().toISOString() })
   server.emitSse({ type: 'tool_call', data: { name: 'write_file', args: { path: 'src/config-demo.js' }, result: '{"ok":true}', ok: true }, ts: new Date().toISOString() })
   server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
   await page.waitForFunction(() =>

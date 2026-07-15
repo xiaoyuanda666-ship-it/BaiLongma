@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { resolveTargets } from './prepare-playwright-browsers.mjs'
 import { getPrimaryChromiumLaunchOptions } from '../src/capabilities/tools/web/browser.js'
+import { launchBrowser } from '../src/capabilities/tools/browser/runtime.js'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -47,8 +48,32 @@ assert.equal(runtime.configurePackagedPlaywright({
 }), path.join(root, 'fake-resources', 'playwright-browsers'))
 assert.equal(env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE, 'win64')
 assert.equal(env.BAILONGMA_BUNDLED_PLAYWRIGHT, '1')
-assert.deepEqual(getPrimaryChromiumLaunchOptions(env), { headless: true, channel: 'chromium' })
-assert.deepEqual(getPrimaryChromiumLaunchOptions({ PLAYWRIGHT_BROWSERS_PATH: 'shared-cache' }), { headless: true })
-assert.deepEqual(getPrimaryChromiumLaunchOptions({}), { headless: true })
+assert.deepEqual(getPrimaryChromiumLaunchOptions(env), { headless: true, channel: 'chrome' })
+assert.deepEqual(getPrimaryChromiumLaunchOptions({ PLAYWRIGHT_BROWSERS_PATH: 'shared-cache' }), { headless: true, channel: 'chrome' })
+assert.deepEqual(getPrimaryChromiumLaunchOptions({}), { headless: true, channel: 'chrome' })
+assert.deepEqual(getPrimaryChromiumLaunchOptions({ BAILONGMA_BROWSER_CHANNEL: 'chromium' }), { headless: true, channel: 'chromium' })
+assert.throws(
+  () => getPrimaryChromiumLaunchOptions({ BAILONGMA_BROWSER_CHANNEL: 'firefox' }),
+  /Unsupported BAILONGMA_BROWSER_CHANNEL/,
+)
+
+const originalBundledFlag = process.env.BAILONGMA_BUNDLED_PLAYWRIGHT
+process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = '1'
+try {
+  const calls = []
+  const bundledBrowser = { kind: 'bundled-chromium' }
+  const result = await launchBrowser({
+    async launch(options) {
+      calls.push(options.channel)
+      if (options.channel === 'chromium') return bundledBrowser
+      throw new Error(`${options.channel} is unavailable`)
+    },
+  }, { headless: true, channel: 'chrome' })
+  assert.equal(result, bundledBrowser)
+  assert.deepEqual(calls, ['chrome', 'msedge', 'chromium'])
+} finally {
+  if (originalBundledFlag === undefined) delete process.env.BAILONGMA_BUNDLED_PLAYWRIGHT
+  else process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = originalBundledFlag
+}
 
 console.log('Playwright packaging configuration: OK')

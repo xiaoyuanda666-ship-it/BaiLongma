@@ -85,6 +85,9 @@ assert.ok(playwrightEntry.includes('app.asar'), 'playwright resolved outside app
 assert.ok(playwrightCoreEntry.includes('app.asar'), 'playwright-core resolved outside app.asar: ' + playwrightCoreEntry)
 
 const packagedRuntime = requireFromAsar('./electron/playwright-runtime.cjs')
+// This smoke test verifies the packaged offline browser resource specifically;
+// normal product use prefers the machine's stable Google Chrome.
+process.env.BAILONGMA_BROWSER_CHANNEL = 'chromium'
 packagedRuntime.configurePackagedPlaywright({
   isPackaged: true,
   resourcesPath: resources,

@@ -1019,7 +1019,7 @@ const L2 = new ThoughtStream("si-l2", "warm", {
 });
 
 // ── L2 意识观测：心跳图、行动日志、实时认知状态 ────────────────
-// 波形表达真实的意识唤醒：L2 Tick 或用户消息都会触发；
+// 波形表达真实的意识活动：L2 Tick / 用户消息触发大跳，工具调用触发小跳；
 // 底部计数仍只统计 L2 Tick，SSE 是否在线则由右上角状态灯单独表达。
 // 行动日志只存工具动作的人类可读摘要；完整参数/结果不写入浏览器存储。
 const ACTION_LOG_KEY = "bailongma-action-log-v1";
@@ -1395,8 +1395,12 @@ async function loadBrainUiHistory() {
 
 const HEARTBEAT_SAMPLE_COUNT = 64;
 const HEARTBEAT_FRAME_INTERVAL_MS = 120;
+const HEARTBEAT_PULSE_SHAPE = [0.02, 0.08, -0.08, 0.2, 0.92, -0.4, 0.34, 0.1, 0.02];
+const HEARTBEAT_MAJOR_STRENGTH = 1;
+const HEARTBEAT_TOOL_STRENGTH = 0.8;
 const heartbeatSamples = Array.from({ length: HEARTBEAT_SAMPLE_COUNT }, () => 0);
 let heartbeatPulseQueue = [];
+let heartbeatBeatTimer = null;
 
 function renderHeartbeatWave() {
   if (!heartbeatWaveEl || !heartbeatAreaEl) return;
@@ -1413,18 +1417,23 @@ function renderHeartbeatWave() {
   heartbeatAreaEl.setAttribute("d", `${line} L320 ${baseline} L0 ${baseline} Z`);
 }
 
-function triggerHeartbeatPulse(strength = 1) {
-  const s = Math.max(0.25, Number(strength) || 1);
-  heartbeatPulseQueue.push(0.02, 0.08, -0.08 * s, 0.2 * s, 0.92 * s, -0.4 * s, 0.34 * s, 0.1 * s, 0.02);
+function triggerHeartbeatPulse(strength = HEARTBEAT_MAJOR_STRENGTH, kind = "major") {
+  const numericStrength = Number(strength);
+  const s = Number.isFinite(numericStrength) ? Math.max(0.2, Math.min(1.4, numericStrength)) : 1;
+  heartbeatPulseQueue.push(...HEARTBEAT_PULSE_SHAPE.map(sample => sample * s));
   if (!heartbeatMonitorEl) return;
+  if (heartbeatBeatTimer) clearTimeout(heartbeatBeatTimer);
   heartbeatMonitorEl.removeAttribute("data-beat");
   void heartbeatMonitorEl.offsetWidth;
-  heartbeatMonitorEl.dataset.beat = "active";
-  setTimeout(() => heartbeatMonitorEl?.removeAttribute("data-beat"), 760);
+  heartbeatMonitorEl.dataset.beat = kind;
+  heartbeatBeatTimer = setTimeout(() => {
+    heartbeatMonitorEl?.removeAttribute("data-beat");
+    heartbeatBeatTimer = null;
+  }, 760);
 }
 
 function advanceHeartbeatWave() {
-  // 没有真实 Tick 时回到平直基线；不用连接状态或随机噪声伪造心跳。
+  // 没有真实消息、Tick 或工具活动时回到平直基线；不用随机噪声伪造心跳。
   const next = heartbeatPulseQueue.length
     ? heartbeatPulseQueue.shift()
     : 0;
@@ -1709,7 +1718,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "message_received": {
       // L1 也是一次真实意识唤醒：只驱动波形，不累加 L2 心跳计数。
-      triggerHeartbeatPulse(1);
+      triggerHeartbeatPulse(HEARTBEAT_MAJOR_STRENGTH, "major");
       if (activeHeartbeatRound) {
         finishHeartbeatRound("interrupted", "收到用户消息，心跳让路");
         setCognitionState("已让路", "idle");
@@ -1795,6 +1804,8 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "tool_executing": {
       setVoiceThinking(false);
+      // 工具开始执行时给一次小跳；tool_call 是完成事件，不再重复入队。
+      triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "工具";
       if (currentPath === "l2") setCognitionState(`执行 · ${label}`, "tool");

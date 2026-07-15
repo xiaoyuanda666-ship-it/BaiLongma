@@ -13,6 +13,7 @@ const localBundledChromium = path.join(
 if (fs.existsSync(localBundledChromium)) {
   process.env.PLAYWRIGHT_BROWSERS_PATH = localBundledChromium
   process.env.BAILONGMA_BUNDLED_PLAYWRIGHT = '1'
+  process.env.BAILONGMA_BROWSER_CHANNEL = 'chromium'
 }
 
 async function removeTreeEventually(target) {

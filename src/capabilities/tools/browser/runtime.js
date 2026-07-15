@@ -33,13 +33,13 @@ export function browserContextOptions(options = {}) {
 }
 
 function launchCandidates(options) {
-  // The Bailongma-specific flag is an explicit packaged-runtime contract.
-  // Falling back to a machine-wide Edge/Chrome installation would hide a
-  // missing or corrupt extraResource and make an "offline bundled" build
-  // depend on the user's machine.
-  if (process.env.BAILONGMA_BUNDLED_PLAYWRIGHT === '1') return [options]
   const candidates = [options]
-  for (const channel of ['chromium', 'msedge', 'chrome']) {
+  // Normal use prefers stable Google Chrome. A packaged build retains its
+  // staged Chromium as the deterministic offline fallback. Prefer the
+  // machine's current stable Edge before that fallback because Edge ships on
+  // most Windows systems and stays current through the OS/browser updater.
+  const fallbackChannels = ['chrome', 'msedge', 'chromium']
+  for (const channel of fallbackChannels) {
     if (channel !== options.channel) candidates.push({ ...options, channel })
   }
   return candidates
