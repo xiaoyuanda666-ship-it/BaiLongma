@@ -8,11 +8,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 function resolveMacSpeechBinary() {
   const candidates = []
+  // macOS 26 TCC 只认 .app bundle 的 Info.plist，不认裸 Mach-O 的 __TEXT,__info_plist。
+  // 裸二进制调用 Speech/麦克风 API 会被 SIGABRT（TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION），
+  // 因此优先查找 .app bundle 内的可执行文件；裸二进制仅作旧版/打包兼容的 fallback。
   if (paths.resourcesDir.endsWith('.asar')) {
     const unpacked = paths.resourcesDir.replace(/\.asar$/, '.asar.unpacked')
+    candidates.push(path.join(unpacked, 'build', 'native-speech-recognizer.app', 'Contents', 'MacOS', 'native-speech-recognizer'))
     candidates.push(path.join(unpacked, 'build', 'native-speech-recognizer'))
     candidates.push(path.join(unpacked, 'src', 'voice', 'native-speech-recognizer'))
   }
+  candidates.push(path.join(paths.resourcesDir, 'build', 'native-speech-recognizer.app', 'Contents', 'MacOS', 'native-speech-recognizer'))
   candidates.push(path.join(paths.resourcesDir, 'build', 'native-speech-recognizer'))
   candidates.push(path.join(paths.resourcesDir, 'src', 'voice', 'native-speech-recognizer'))
   candidates.push(path.join(__dirname, 'native-speech-recognizer'))

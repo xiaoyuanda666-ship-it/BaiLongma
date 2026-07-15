@@ -92,12 +92,16 @@ request.contextualStrings = [
 ]
 
 if #available(macOS 10.15, *) {
-  if recognitionMode == "online" {
-    request.requiresOnDeviceRecognition = false
-  } else if recognizer.supportsOnDeviceRecognition {
-    request.requiresOnDeviceRecognition = true
-  } else if recognitionMode == "local" || recognitionMode == "on-device" {
-    fail("on-device speech recognition is not available for locale \(localeId)")
+  // 仅当用户显式要求离线(local/on-device)时才尝试 on-device 识别。
+  // supportsOnDeviceRecognition 仅表示 API 支持，不代表离线 asset 已下载——
+  // 盲信它会在 "支持但未下载中文离线包" 的系统上静默无结果（No Assistant asset for language zh-CN）。
+  // auto（默认）与 online 一律走在线识别，立即可用、不依赖系统离线包下载。
+  if recognitionMode == "local" || recognitionMode == "on-device" {
+    if recognizer.supportsOnDeviceRecognition {
+      request.requiresOnDeviceRecognition = true
+    } else {
+      fail("on-device speech recognition is not available for locale \(localeId)")
+    }
   } else {
     request.requiresOnDeviceRecognition = false
   }

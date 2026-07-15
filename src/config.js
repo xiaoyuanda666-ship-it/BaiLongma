@@ -1594,6 +1594,20 @@ export function getVoiceRuntimeConfig(providerHint = null) {
   }
 }
 
+// 按"客户端显式指定的 provider"读对应凭据文件（voice/<provider>.json），与 getVoiceRuntimeConfig 的区别：
+// getVoiceRuntimeConfig 把 hint 当 fallback——active.json 存在时就忽略 hint，返回 active 的 provider 凭据。
+// 本函数让 hint 成为权威：用户在 UI 临时切到"本机识别(local)"时不会被 active.json(可能=aliyun)强制覆盖。
+// 对 local（纯本地、无凭据）返回空记录，createCloudASRSession 的 local 分支不读凭据，靠 provider 字段分流。
+export function getVoiceProviderConfigRecord(providerHint) {
+  const provider = normalizeVoiceProvider(providerHint, 'aliyun')
+  const stored = readVoiceProviderConfig(provider)
+  return {
+    ...stored,
+    voiceProvider: provider,
+    provider,
+  }
+}
+
 export function setVoiceConfig(updates) {
   const existing = readExistingStoredConfig()
   const { voice: legacyVoice, ...baseConfig } = existing

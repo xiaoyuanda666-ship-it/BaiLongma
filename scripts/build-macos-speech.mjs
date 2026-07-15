@@ -62,6 +62,13 @@ function compileArch(targetArch, targetOutput) {
     '-target', target,
     '-framework', 'Speech',
     '-framework', 'AVFoundation',
+    // 嵌入 Info.plist 到 __TEXT,__info_plist section。macOS TCC 要求调用麦克风/语音识别 API
+    // 的可执行文件必须自带 usage description，否则进程被 SIGABRT（TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION）。
+    // 父 Electron app 的 Info.plist 不被子进程继承，独立二进制必须自带。
+    '-Xlinker', '-sectcreate',
+    '-Xlinker', '__TEXT',
+    '-Xlinker', '__info_plist',
+    '-Xlinker', path.join(root, 'src', 'voice', 'native-speech-recognizer.Info.plist'),
     '-o', targetOutput,
   ], {
     stdio: 'inherit',
@@ -114,3 +121,20 @@ if (arch === 'universal') {
 
 fs.chmodSync(output, 0o755)
 console.log(`[macos-speech] built ${arch} helper at ${output}`)
+
+// 包装成 .app bundle。macOS 26 TCC 只认 .app bundle 的 Info.plist，
+// 不认裸 Mach-O 的 __TEXT,__info_plist——裸二进制调用 Speech/麦克风 API 会被 SIGABRT。
+// bundle 让可执行文件获得独立的 TCC 身份（CFBundleIdentifier）和 usage description。
+const plistSource = path.join(root, 'src', 'voice', 'native-speech-recognizer.Info.plist')
+const bundleDir = path.join(path.dirname(output), 'native-speech-recognizer.app')
+const bundleMacOS = path.join(bundleDir, 'Contents', 'MacOS')
+fs.rmSync(bundleDir, { recursive: true, force: true })
+fs.mkdirSync(bundleMacOS, { recursive: true })
+fs.copyFileSync(output, path.join(bundleMacOS, path.basename(output)))
+fs.copyFileSync(plistSource, path.join(bundleDir, 'Contents', 'Info.plist'))
+fs.chmodSync(path.join(bundleMacOS, path.basename(output)), 0o755)
+const sign = spawnSync('codesign', ['--force', '--sign', '-', bundleDir], { stdio: 'pipe' })
+if (sign.status !== 0) {
+  stop(`[macos-speech] codesign of app bundle failed: ${sign.stderr?.toString().trim() || 'unknown error'}`)
+}
+console.log(`[macos-speech] bundled into ${bundleDir}`)

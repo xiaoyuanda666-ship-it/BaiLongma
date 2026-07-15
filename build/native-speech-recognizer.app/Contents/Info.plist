@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 独立子二进制的隐私 usage description。macOS TCC 要求任何调用麦克风/语音识别 API 的
+       可执行文件必须自带 Info.plist 声明用途，否则进程在首次访问隐私 API 时被 SIGABRT
+       （TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION）。父 Electron app 的 Info.plist 不被子进程继承。
+       文案与 package.json 中 electron-builder 的 mac.extendInfo 保持一致。 -->
+  <key>CFBundleIdentifier</key>
+  <string>com.jarvis.native-speech-recognizer</string>
+  <key>CFBundleName</key>
+  <string>native-speech-recognizer</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Jarvis uses the microphone for voice input when you enable voice features.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Jarvis may use speech recognition for voice input features.</string>
+</dict>
+</plist>

@@ -7,7 +7,7 @@ import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
 import { getConfig, insertUISignal } from './db.js'
 import { emitEvent, setStickyEvent } from './events.js'
-import { getNetworkConfig, getSecurity, setSecurity } from './config.js'
+import { getNetworkConfig, getSecurity, setSecurity, getVoiceRuntimeConfig, getVoiceProviderConfigRecord, normalizeVoiceProvider } from './config.js'
 import { paths } from './paths.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { jsonResponse } from './api/utils.js'
@@ -157,11 +157,15 @@ function attachCloudASR() {
         try {
           const msg = JSON.parse(raw.toString())
           if (msg.type !== 'config') return
-          let rawCfg = {}
-          try { rawCfg = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.voice || {} } catch {}
-          const provider = rawCfg.voiceProvider || msg.provider || 'aliyun'
+          // ASR 凭据自 schema v3 起按 provider 拆到 voice/<provider>.json，不再存 config.json 的 .voice 块。
+          // 客户端 msg.provider 是用户在 UI 的实时选择，优先于 active.json 的持久化默认值——
+          // 否则用户切到"本机识别(local)"也会被 active.json(可能=aliyun)强制覆盖，本机识别永远走不到。
+          const requested = normalizeVoiceProvider(msg.provider, '')
+          const runtimeCfg = requested
+            ? getVoiceProviderConfigRecord(requested)
+            : getVoiceRuntimeConfig()
           session = createCloudASRSession(
-            { provider, lang: msg.lang || 'zh', ...rawCfg },
+            { ...runtimeCfg, lang: msg.lang || 'zh' },
             (text, isFinal, seg) => {
               try { ws.send(JSON.stringify({ type: 'transcript', text, is_final: isFinal, seg })) } catch {}
             },
