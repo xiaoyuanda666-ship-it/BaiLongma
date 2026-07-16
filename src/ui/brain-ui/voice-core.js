@@ -283,8 +283,10 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
         // speaking 状态下用户开口 → 视觉反馈但不覆盖状态（等 barge-in 触发后自然切换）
         if (sk !== 'recognizing' && sk !== 'event' && sk !== 'speaking')
           setStatus(vol > 0.15 ? 'recognizing' : 'listening');
-      } else if (sk !== 'idle' && sk !== 'event' && sk !== 'processing' && sk !== 'done' && sk !== 'speaking') {
-        setStatus('idle');
+      } else if (sk === 'idle' || sk === 'listening' || sk === 'recognizing') {
+        // 静音只代表当前没有输入，不代表麦克风已经关闭。
+        // 保持 listening 的浅白色，让“正在监听”和 idle 灰色始终可区分。
+        setStatus(micActive ? 'listening' : 'idle');
       }
     } else {
       lastVol = 0;
