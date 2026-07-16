@@ -1047,6 +1047,7 @@ const heartbeatCountEl = document.getElementById("heartbeat-count");
 const heartbeatLastEl = document.getElementById("heartbeat-last");
 const actionLogEl = document.getElementById("action-log");
 const cognitionStateEl = document.getElementById("cognition-state");
+const l3StateEl = document.getElementById("l3-state");
 const cognitionEmptyEl = document.getElementById("cognition-empty");
 
 function readHeartbeatStorage(key, fallback) {
@@ -1224,6 +1225,12 @@ function setCognitionState(label, state = "idle") {
   cognitionStateEl.dataset.state = state;
 }
 
+function setL3State(label = "L3 待命", state = "idle") {
+  if (!l3StateEl) return;
+  l3StateEl.textContent = label;
+  l3StateEl.dataset.state = state;
+}
+
 function setVoiceThinking(active) {
   const thinking = Boolean(active);
   document.body.classList.toggle("model-thinking", thinking);
@@ -1310,6 +1317,7 @@ function restoreCognitionHistory(events) {
   L2.el.replaceChildren();
   let roundActive = false;
   let lastSettledState = "idle";
+  let lastL3State = { label: "L3 待命", state: "idle" };
 
   for (const event of history) {
     const type = event?.type;
@@ -1321,6 +1329,26 @@ function restoreCognitionHistory(events) {
         L2.newLine("heartbeat tick", { time: heartbeatClock(Date.parse(event.ts) || Date.now()) });
         L2.startThinkingSession();
         lastSettledState = "thinking";
+        break;
+      case "scheduled_task":
+        roundActive = true;
+        L2.beginRound();
+        L2.newLine("L3 scheduled task", {
+          content: data.task || "定时任务",
+          time: heartbeatClock(Date.parse(event.ts) || Date.now()),
+        });
+        L2.startThinkingSession();
+        lastSettledState = "thinking";
+        lastL3State = { label: `L3 执行 #${data.reminder_id || data.run_id || "?"}`, state: "running" };
+        break;
+      case "scheduled_task_completed":
+        lastL3State = { label: "L3 已完成", state: "done" };
+        break;
+      case "scheduled_task_retry":
+        lastL3State = { label: `L3 重试 ${data.next_attempt || ""}`.trim(), state: "retry" };
+        break;
+      case "scheduled_task_failed":
+        lastL3State = { label: "L3 失败", state: "failed" };
         break;
       case "stream_start":
         if (roundActive) L2.startThinkingSession();
@@ -1377,6 +1405,7 @@ function restoreCognitionHistory(events) {
   } else if (lastSettledState === "interrupted") {
     setCognitionState("最近一轮中止", "idle");
   }
+  setL3State(lastL3State.label, lastL3State.state);
 }
 
 async function loadBrainUiHistory() {
@@ -1386,7 +1415,7 @@ async function loadBrainUiHistory() {
     if (!response.ok || !payload.ok || !Array.isArray(payload.events)) throw new Error(payload.error || "历史读取失败");
 
     const l1Events = payload.events.filter(event => event?.path === "l1");
-    const l2Events = payload.events.filter(event => !event?.path || event.path === "l2");
+    const l2Events = payload.events.filter(event => !event?.path || event.path === "l2" || event.path === "l3");
     actionLog = rebuildActionLogFromHistory(payload.events);
     heartbeatCount = Math.max(0, Number(payload.heartbeatCount) || 0);
     lastHeartbeatAt = l2Events.filter(event => event?.type === "tick").at(-1)?.ts || 0;
@@ -1460,9 +1489,9 @@ renderHeartbeatWave();
 setInterval(advanceHeartbeatWave, HEARTBEAT_FRAME_INTERVAL_MS);
 setInterval(updateHeartbeatFacts, 30_000);
 
-// L1 = processing flow triggered by user messages; L2 = processing flow triggered by TICK.
+// L1 = user messages; L2 = autonomous heartbeat; L3 = deterministic scheduled tasks.
 // stream_*/tool_call events emitted by the backend carry no path tag;
-// routing to the correct panel is determined by the most recent message_received / tick event.
+// routing is determined by the most recent message_received / tick / scheduled_task event.
 let currentPath = "l2";
 function currentStream() { return currentPath === "l1" ? L1 : L2; }
 
@@ -1765,11 +1794,33 @@ function handle({ type, data = {}, ts = null }) {
       L2.newLine("heartbeat tick");
       L2.startThinkingSession();
       break;
+    case "scheduled_task":
+      currentPath = "l3";
+      setVoiceThinking(true);
+      revealCognitionStream();
+      setCognitionState("L3 正在执行", "thinking");
+      setL3State(`L3 执行 #${data.reminder_id || data.run_id || "?"}`, "running");
+      L2.beginRound();
+      L2.newLine("L3 scheduled task", {
+        content: data.task || "定时任务",
+        time: heartbeatClock(Date.parse(ts) || Date.now()),
+      });
+      L2.startThinkingSession();
+      break;
+    case "scheduled_task_completed":
+      setL3State("L3 已完成", "done");
+      break;
+    case "scheduled_task_retry":
+      setL3State(`L3 重试 ${data.next_attempt || ""}`.trim(), "retry");
+      break;
+    case "scheduled_task_failed":
+      setL3State("L3 失败", "failed");
+      break;
     case "stream_start":
       setVoiceThinking(true);
-      if (currentPath === "l2") {
+      if (currentPath !== "l1") {
         revealCognitionStream();
-        setCognitionState("正在思考", "thinking");
+        setCognitionState(currentPath === "l3" ? "L3 正在思考" : "正在思考", "thinking");
       }
       currentStream().startThinkingSession();
       // 正文流（plainReply）：把 token 实时打进聊天气泡。一轮可能有多段正文（正文→工具→正文），
@@ -1807,7 +1858,7 @@ function handle({ type, data = {}, ts = null }) {
       // 思考动画已停，但工具尚未真正执行 —— 给一个占位状态避免 UI 死寂
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "";
-      if (currentPath === "l2") {
+      if (currentPath !== "l1") {
         revealCognitionStream();
         setCognitionState(label ? `准备 · ${label}` : "准备工具", "tool");
       }
@@ -1820,7 +1871,7 @@ function handle({ type, data = {}, ts = null }) {
       triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
       const stream = currentStream();
       const label = data.name ? stream.toolLabel(data.name) : "工具";
-      if (currentPath === "l2") setCognitionState(`执行 · ${label}`, "tool");
+      if (currentPath !== "l1") setCognitionState(`执行 · ${label}`, "tool");
       stream.setTimedStatus(`正在执行 ${label}…`, "busy", {
         staleAfterMs: 45000,
         staleText: `执行 ${label} 时间偏长，仍在等结果…`,
@@ -1829,7 +1880,7 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "tool_call": {
       const stream = currentStream();
-      if (currentPath === "l2") {
+      if (currentPath !== "l1") {
         setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolLabel(data.name)}`, "tool");
       }
       addActionLogEntry(data.name, data.args, data.result, data.ok, Date.parse(ts) || Date.now());
@@ -1844,6 +1895,8 @@ function handle({ type, data = {}, ts = null }) {
       if (currentPath === "l2") {
         finishHeartbeatRound("complete");
         setCognitionState("本轮完成", "done");
+      } else if (currentPath === "l3") {
+        setCognitionState("L3 本轮完成", "done");
       }
       // 兜底：本轮结束时（response 必在 message 之后发）若流式合成会话仍开着——极少见，模型只调了工具
       // 没产出可投递正文、message 未到达——标记正文已尽让队列放完即恢复麦克风，避免麦克风一直挂起。
@@ -1858,6 +1911,9 @@ function handle({ type, data = {}, ts = null }) {
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted");
         setCognitionState("已中止", "idle");
+      } else if (currentPath === "l3") {
+        setCognitionState("L3 已让路", "idle");
+        setL3State("L3 等待重试", "retry");
       }
       break;
     case "llm_retry": {

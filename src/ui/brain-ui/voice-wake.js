@@ -107,6 +107,7 @@ export function createWakeFlow(core) {
     // 路径跟踪:始终更新,以便对话中途也能正确归类
     if (type === 'message_received') ssePath = 'l1';
     else if (type === 'tick') ssePath = 'l2';
+    else if (type === 'scheduled_task') ssePath = 'l3';
     // voice_retire 是显式退场指令,不分路;等本轮说完再真正退(见 onFrame 的 retireArmed)
     if (type === 'voice_retire') { if (active) { retirePending = true; markActive(); } return; }
     if (!active || ssePath !== 'l1') return; // 只反映用户语音对话这一路

@@ -14,7 +14,7 @@ function assert(condition, label) {
   console.error(`FAIL: ${label}`)
 }
 
-function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRevision = () => 0, heartbeatEnabled = true, running = false } = {}) {
+function makeHarness({ queuedMessage = false, queuedEntry = null, run = async () => {}, getTickerRevision = () => 0, heartbeatEnabled = true, running = false } = {}) {
   let consumed = 0
   let awakened = 0
   let loop = null
@@ -29,7 +29,7 @@ function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRev
     emitEvent: () => {},
     enqueueDueReminders: () => {},
     hasMessages: () => queuedMessage,
-    popMessage: () => ({ raw: 'hello', fromId: 'ID:000001', queueName: 'user' }),
+    popMessage: () => queuedEntry || ({ raw: 'hello', fromId: 'ID:000001', queueName: 'user' }),
     hasUserMessages: () => queuedMessage,
     getQueueSnapshot: () => ({ user: queuedMessage ? 1 : 0, background: 0 }),
     formatTick: () => 'TICK 2026-07-10T12:00:00+08:00 | Friday noon',
@@ -125,6 +125,22 @@ function makeHarness({ queuedMessage = false, run = async () => {}, getTickerRev
   await h.loop.onTick()
   assert(h.counts().consumed === 0, 'user/background message does not consume Tick cadence TTL')
   assert(h.counts().awakened === 0, 'user/background message does not consume awakening heartbeat')
+}
+
+{
+  let observedLabel = ''
+  const h = makeHarness({
+    queuedMessage: true,
+    queuedEntry: {
+      raw: 'scheduled payload',
+      fromId: 'SYSTEM',
+      queueName: 'background',
+      runtimeLane: 'l3',
+    },
+    run: async ({ args }) => { observedLabel = args[1] },
+  })
+  await h.loop.onTick()
+  assert(observedLabel.startsWith('L3 message from SYSTEM'), 'scheduled entries are labeled as the L3 runtime lane')
 }
 
 {

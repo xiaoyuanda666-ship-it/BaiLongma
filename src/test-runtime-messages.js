@@ -183,6 +183,37 @@ assert(continuityContext.includes('freshest evidence'), 'Tick prioritizes recent
 assert(continuityContext.includes('do not repeat it'), 'Tick continuity check blocks already-completed work')
 assert(continuityContext.includes('Time passing by itself is not new evidence'), 'Tick does not treat elapsed time as a retry trigger')
 
+const scheduledMessages = buildLLMMessages({
+  systemPrompt: 'SYS',
+  contextBlock: '<context>L3</context>',
+  conversationWindow: [{
+    role: 'user',
+    from_id: 'SYSTEM',
+    timestamp: '2026-05-25T10:02:00+08:00',
+    content: 'legacy reminder wrapper',
+    channel: 'REMINDER',
+  }],
+  input: '到时间了，提醒用户喝水',
+  msg: {
+    scheduledEventType: 'reminder',
+    reminderRunId: 12,
+    reminderId: 7,
+    reminderTargetId: 'ID:000001',
+    reminderDueAt: '2026-05-25T10:03:00+08:00',
+    reminderAttempt: 1,
+    reminderTask: '提醒用户喝水',
+    deliveryPolicy: 'notify',
+  },
+  runtimeLane: 'l3',
+})
+assertEqual(scheduledMessages.length, 2, 'L3 path has system + runtime context only')
+assert(scheduledMessages[0].content.startsWith('[L3 scheduled task - no new user message]'), 'L3 marker is prepended to system prompt')
+assert(scheduledMessages[0].content.includes('"task": "提醒用户喝水"'), 'L3 prompt carries the structured task payload')
+assert(scheduledMessages[0].content.includes('exactly one useful send_message'), 'L3 prompt requires verified notification delivery')
+assertEqual(scheduledMessages[1].role, 'system', 'L3 runtime context uses system role')
+assert(!scheduledMessages.some(message => message.role === 'user'), 'L3 does not synthesize a user message')
+assert(!scheduledMessages.some(message => message.content.includes('legacy reminder wrapper')), 'L3 excludes legacy system-signal history')
+
 const systemSignal = formatConversationMessage({
   role: 'user',
   from_id: 'SYSTEM',

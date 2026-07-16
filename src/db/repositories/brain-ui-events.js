@@ -41,7 +41,7 @@ function serializePayload(payload) {
 export function insertBrainUiEvent({ timestamp, path = 'l2', eventType, payload = {} }) {
   const db = getDB()
   const ts = timestamp || new Date().toISOString()
-  const normalizedPath = path === 'l1' ? 'l1' : 'l2'
+  const normalizedPath = path === 'l1' || path === 'l3' ? path : 'l2'
   const type = String(eventType || '').slice(0, 80)
   if (!type) return 0
 
@@ -73,7 +73,9 @@ export function insertBrainUiEvent({ timestamp, path = 'l2', eventType, payload 
 
 export function getBrainUiEventHistory({ path = 'l2', limit = 160 } = {}) {
   const db = getDB()
-  const normalizedPath = path === 'all' ? 'all' : (path === 'l1' ? 'l1' : 'l2')
+  const normalizedPath = path === 'all'
+    ? 'all'
+    : (path === 'l1' || path === 'l3' ? path : 'l2')
   const safeLimit = Math.max(1, Math.min(400, Number(limit) || 160))
   const rows = normalizedPath === 'all'
     ? db.prepare(`

@@ -6,6 +6,10 @@ const sseClients = new Set()
 const BRAIN_UI_HISTORY_TYPES = new Set([
   'message_received',
   'tick',
+  'scheduled_task',
+  'scheduled_task_completed',
+  'scheduled_task_retry',
+  'scheduled_task_failed',
   'stream_start',
   'stream_end',
   'tool_preparing',
@@ -23,13 +27,17 @@ let activeBrainUiPath = null
 
 function persistBrainUiEvent(type, data, ts) {
   if (type === 'message_received') {
-    if (activeBrainUiPath === 'l2') {
+    if (activeBrainUiPath === 'l2' || activeBrainUiPath === 'l3') {
       try {
         insertBrainUiEvent({
           timestamp: ts,
-          path: 'l2',
+          path: activeBrainUiPath,
           eventType: 'processing_preempted',
-          payload: { reason: '收到用户消息，心跳让路' },
+          payload: {
+            reason: activeBrainUiPath === 'l3'
+              ? '收到用户消息，定时任务让路'
+              : '收到用户消息，心跳让路',
+          },
         })
       } catch (err) {
         console.warn('[brain-ui-history] preemption persist failed:', err?.message || err)
@@ -44,8 +52,9 @@ function persistBrainUiEvent(type, data, ts) {
     return
   }
   if (type === 'tick') activeBrainUiPath = 'l2'
+  if (type === 'scheduled_task') activeBrainUiPath = 'l3'
   const eventPath = activeBrainUiPath
-  const shouldPersist = (eventPath === 'l1' || eventPath === 'l2') && BRAIN_UI_HISTORY_TYPES.has(type)
+  const shouldPersist = (eventPath === 'l1' || eventPath === 'l2' || eventPath === 'l3') && BRAIN_UI_HISTORY_TYPES.has(type)
 
   if (shouldPersist) {
     try {

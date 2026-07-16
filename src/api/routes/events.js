@@ -6,7 +6,9 @@ import { jsonResponse } from '../utils.js'
 export async function handleEventRoutes(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/events/history') {
     const requestedPath = url.searchParams.get('path')
-    const path = requestedPath === 'all' ? 'all' : (requestedPath === 'l1' ? 'l1' : 'l2')
+    const path = requestedPath === 'all'
+      ? 'all'
+      : (requestedPath === 'l1' || requestedPath === 'l3' ? requestedPath : 'l2')
     const limit = Number(url.searchParams.get('limit') || 160)
     jsonResponse(res, 200, { ok: true, ...getBrainUiEventHistory({ path, limit }) })
     return true

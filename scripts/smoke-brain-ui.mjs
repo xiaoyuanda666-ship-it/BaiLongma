@@ -51,7 +51,8 @@ function createServer() {
   const sseClients = new Set()
   const brainUiEvents = []
   const persistedTypes = new Set([
-    'message_received', 'tick', 'stream_start', 'stream_end', 'tool_preparing', 'tool_executing', 'tool_call',
+    'message_received', 'tick', 'scheduled_task', 'scheduled_task_completed', 'scheduled_task_retry', 'scheduled_task_failed',
+    'stream_start', 'stream_end', 'tool_preparing', 'tool_executing', 'tool_call',
     'response', 'processing_preempted', 'llm_retry', 'message_requeued', 'message_dropped',
     'error', 'protocol_violation',
   ])
@@ -273,7 +274,8 @@ function createServer() {
       brainUiPath = 'l2'
       heartbeatCount += 1
     }
-    if ((brainUiPath === 'l1' || brainUiPath === 'l2') && persistedTypes.has(event?.type)) {
+    if (event?.type === 'scheduled_task') brainUiPath = 'l3'
+    if ((brainUiPath === 'l1' || brainUiPath === 'l2' || brainUiPath === 'l3') && persistedTypes.has(event?.type)) {
       brainUiEvents.push({ ...event, path: brainUiPath })
       if (brainUiEvents.length > 800) brainUiEvents.shift()
     }
@@ -426,6 +428,37 @@ try {
     document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
     && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
     && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
+
+  server.emitSse({
+    type: 'scheduled_task',
+    data: {
+      run_id: 11,
+      reminder_id: 7,
+      target_id: 'ID:000001',
+      task: '提醒用户喝水',
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'send_message' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'send_message' }, ts: new Date().toISOString() })
+  server.emitSse({
+    type: 'tool_call',
+    data: {
+      name: 'send_message',
+      args: { target_id: 'ID:000001', content: '该喝水了' },
+      result: '{"ok":true}',
+      ok: true,
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({ type: 'scheduled_task_completed', data: { run_id: 11, reminder_id: 7 }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'response', data: { runtimeLane: 'l3' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#l3-state')?.dataset.state === 'done'
+    && document.querySelector('#si-l2')?.textContent.includes('提醒用户喝水')
+    && !document.querySelector('#si-l1')?.textContent.includes('提醒用户喝水'))
+
   await page.evaluate(() => {
     localStorage.removeItem('bailongma-action-log-v1')
     localStorage.removeItem('bailongma-heartbeat-count-v1')
@@ -439,6 +472,9 @@ try {
     && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
     && document.querySelector('#si-l1')?.textContent.includes('写入文件')
     && document.querySelector('#cognition-state')?.textContent.includes('最近一轮完成')
+    && document.querySelector('#l3-state')?.dataset.state === 'done'
+    && document.querySelector('#si-l2')?.textContent.includes('提醒用户喝水')
+    && !document.querySelector('#si-l1')?.textContent.includes('提醒用户喝水')
     && document.querySelector('#si-l2')?.textContent.includes('读取文件'))
   await page.fill('#msg-input', '马云是谁')
   await page.click('#send-btn')
@@ -466,6 +502,8 @@ try {
     heartbeatCount: document.querySelector('#heartbeat-count')?.textContent || '',
     actionLog: document.querySelector('#action-log')?.textContent || '',
     l1History: document.querySelector('#si-l1')?.textContent || '',
+    l3History: document.querySelector('#si-l2')?.textContent || '',
+    l3State: document.querySelector('#l3-state')?.textContent || '',
     cognitionState: document.querySelector('#cognition-state')?.textContent || '',
     personCard: document.querySelector('#pc-name')?.textContent || '',
     personSummary: document.querySelector('#pc-summary')?.textContent || '',
@@ -482,6 +520,9 @@ try {
   if (!snapshot.actionLog.includes('读取文件 · src/example.js')) throw new Error('action log did not recover the file action')
   if (!snapshot.actionLog.includes('写入文件 · src/config-demo.js')) throw new Error('action log did not recover the L1 write action')
   if (!snapshot.l1History.includes('请更新配置文件') || !snapshot.l1History.includes('写入文件')) throw new Error('L1 processing history did not recover after reload')
+  if (snapshot.l1History.includes('提醒用户喝水')) throw new Error('L3 task leaked into L1 processing history')
+  if (!snapshot.l3History.includes('提醒用户喝水')) throw new Error('L3 task did not recover in the background cognition stream')
+  if (!snapshot.l3State.includes('L3 已完成')) throw new Error('L3 completion state did not recover after reload')
   if (!snapshot.cognitionState.includes('最近一轮完成')) throw new Error('cognition history did not recover after reload')
   if (!snapshot.personCard.includes('马云')) throw new Error('person card did not render the requested person')
   if (!snapshot.personSummary.includes('阿里巴巴集团创始人')) throw new Error('person card did not absorb assistant summary')

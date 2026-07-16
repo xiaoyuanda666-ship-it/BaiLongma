@@ -625,7 +625,8 @@ body {
 }
 
 .heartbeat-state,
-.cognition-state {
+.cognition-state,
+.l3-state {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -638,6 +639,30 @@ body {
   background: color-mix(in srgb, var(--panel) 76%, transparent);
   font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
   letter-spacing: 0.04em;
+}
+
+.cognition-state-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.l3-state[data-state="running"],
+.l3-state[data-state="retry"] {
+  color: var(--cool);
+  border-color: color-mix(in srgb, var(--cool) 35%, transparent);
+  background: color-mix(in srgb, var(--cool) 8%, transparent);
+}
+
+.l3-state[data-state="done"] {
+  color: #7fcf8f;
+  border-color: rgba(127, 207, 143, 0.28);
+}
+
+.l3-state[data-state="failed"] {
+  color: #d58d8d;
+  border-color: rgba(213, 141, 141, 0.28);
 }
 
 .heartbeat-state-dot {

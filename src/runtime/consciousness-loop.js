@@ -94,7 +94,9 @@ export function createConsciousnessLoop({
       enqueueDueReminders()
       if (hasMessages()) {
         const msg = popMessage()
-        const lane = msg.queueName === 'background' ? 'BG' : 'L1'
+        const lane = msg.runtimeLane === 'l3'
+          ? 'L3'
+          : (msg.queueName === 'background' ? 'BG' : 'L1')
         await runTurnWithWatchdog(msg.raw, `${lane} message from ${msg.fromId}`, msg)
       } else {
         // 防御性边界：即使某个旧 timer、测试入口或外部调用直接触发 onTick，

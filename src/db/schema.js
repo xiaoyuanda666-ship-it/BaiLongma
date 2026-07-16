@@ -293,6 +293,29 @@ export function initializeSchema(db) {
   try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_type TEXT`) } catch {}
   try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_config TEXT`) } catch {}
 
+  // L3 scheduled-task executions are persisted separately from reminder
+  // definitions. A reminder occurrence is materialized here before it enters
+  // the in-memory queue, so a process crash cannot lose an already-fired job.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reminder_runs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      reminder_id  INTEGER NOT NULL REFERENCES reminders(id),
+      user_id      TEXT    NOT NULL,
+      task         TEXT    NOT NULL,
+      due_at       TEXT    NOT NULL,
+      status       TEXT    NOT NULL DEFAULT 'pending',
+      attempts     INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT    NOT NULL,
+      claimed_at   TEXT,
+      finished_at  TEXT,
+      last_error   TEXT    NOT NULL DEFAULT '',
+      created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(reminder_id, due_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reminder_runs_runnable
+      ON reminder_runs(status, available_at, id);
+  `)
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS prefetch_tasks (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,

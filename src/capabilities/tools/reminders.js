@@ -66,7 +66,14 @@ export function calculateNextDueAt(type, config, fromDate = new Date()) {
 }
 
 function buildSystemMessage(targetId, taskText) {
-  return `I am the system. Based on the reminder you set, you now need to perform this task for user ${targetId}: ${taskText}. Handle it immediately, and when needed use send_message to send the result to ${targetId}.`
+  // Legacy storage field retained for database compatibility. Runtime
+  // execution uses the structured L3 reminder-run payload instead of injecting
+  // an English "I am the system" message into a user-role conversation turn.
+  return JSON.stringify({
+    type: 'reminder',
+    target_id: targetId,
+    task: taskText,
+  })
 }
 
 function formatReminderRow(r) {

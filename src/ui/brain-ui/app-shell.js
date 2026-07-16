@@ -170,7 +170,10 @@ const createSecondaryPanel = () => `
           <div class="l2-module-kicker">LIVE COGNITION</div>
           <h2 class="l2-module-title" id="cognition-title">思考与工具</h2>
         </div>
-        <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
+        <div class="cognition-state-group">
+          <span class="l3-state" id="l3-state" data-state="idle">L3 待命</span>
+          <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
+        </div>
       </div>
       <div class="stream cognition-stream">
         <div class="stream-inner" id="si-l2">
