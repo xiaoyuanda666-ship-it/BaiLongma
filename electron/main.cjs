@@ -20,6 +20,7 @@ const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const http = require('http')
+const https = require('https')
 const { EventEmitter } = require('events')
 const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
@@ -68,6 +69,29 @@ const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 const STARTUP_PAGE = path.join(__dirname, 'startup.html')
+
+function isTlsBackend() {
+  return Boolean(
+    process.env.BAILONGMA_TLS_PFX
+    || (process.env.BAILONGMA_TLS_CERT && process.env.BAILONGMA_TLS_KEY)
+  )
+}
+
+function backendUrl(port, pathname = '/') {
+  return `${isTlsBackend() ? 'https' : 'http'}://127.0.0.1:${port}${pathname}`
+}
+
+app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
+  try {
+    const parsed = new URL(url)
+    if (isTlsBackend() && ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+      event.preventDefault()
+      callback(true)
+      return
+    }
+  } catch {}
+  callback(false)
+})
 
 const STARTUP_STEPS = [
   { id: 'port', label: '准备本地端口', detail: '锁定 3721 或备用端口' },
@@ -432,13 +456,24 @@ if (!gotLock) {
   process.exit(0)
 }
 
-async function findFreePort(preferred = 3721) {
+function isLanAccessConfigured() {
+  if (/^(1|true|yes|on)$/i.test(String(process.env.BAILONGMA_ALLOW_LAN || '').trim())) return true
+  const userDir = process.env.BAILONGMA_USER_DIR?.trim() || USER_DIR
+  try {
+    const stored = JSON.parse(fs.readFileSync(path.join(userDir, 'config.json'), 'utf8'))
+    return stored?.network?.allowLanAccess === true
+  } catch {
+    return false
+  }
+}
+
+async function findFreePort(preferred = 3721, host = '127.0.0.1') {
   for (const port of [preferred, 0]) {
     try {
       const actual = await new Promise((resolve, reject) => {
         const server = net.createServer()
         server.once('error', reject)
-        server.listen(port, '127.0.0.1', () => {
+        server.listen(port, host, () => {
           const address = server.address()
           server.close(() => resolve(address.port))
         })
@@ -451,7 +486,7 @@ async function findFreePort(preferred = 3721) {
 
 function waitForBackend(port, timeoutMs = 30000) {
   const startedAt = Date.now()
-  const url = `http://127.0.0.1:${port}/activation-status`
+  const url = backendUrl(port, '/activation-status')
   let lastProbe = 'no probe completed'
 
   return new Promise((resolve, reject) => {
@@ -461,7 +496,9 @@ function waitForBackend(port, timeoutMs = 30000) {
         return
       }
 
-      const req = http.get(url, res => {
+      const client = isTlsBackend() ? https : http
+      const options = isTlsBackend() ? { rejectUnauthorized: false } : undefined
+      const req = client.get(url, options, res => {
         res.resume()
         lastProbe = `HTTP ${res.statusCode || 'unknown'} from ${url}`
         resolve()
@@ -492,7 +529,7 @@ async function loadMainApp() {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (!backendPort) throw new Error('Backend port is not ready')
   emitStartupProgress({ id: 'interface', status: 'running', message: '正在进入界面' })
-  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`)
+  await mainWindow.loadURL(backendUrl(backendPort, '/'))
   emitStartupProgress({ id: 'interface', status: 'done', completed: true, message: '启动完成' })
 }
 
@@ -668,7 +705,7 @@ function createFocusBannerWindow({ task = '', current_step = '', tasks = [] } = 
   focusBannerWindow.webContents.once('did-finish-load', () => {
     if (!focusBannerWindow || focusBannerWindow.isDestroyed()) return
     // 先发端口配置，让语音识别结果能发回后端
-    focusBannerWindow.webContents.send('focus-banner:config', { port: backendPort })
+    focusBannerWindow.webContents.send('focus-banner:config', { port: backendPort, secure: isTlsBackend() })
     focusBannerWindow.webContents.send('focus-banner:update', { task, current_step, tasks })
     autoResizeBannerWindow()
   })
@@ -1069,7 +1106,7 @@ function createTerminalStreamWindow(payload = {}) {
   const { title = 'Bailongma Terminal Stream', stream_id = 'default' } = payload
   const cleanTitle = String(title || 'Bailongma Terminal Stream').slice(0, 120)
   const streamId = normalizeTerminalStreamId(stream_id)
-  const url = `http://127.0.0.1:${backendPort}/terminal-stream?stream_id=${encodeURIComponent(streamId)}`
+  const url = backendUrl(backendPort, `/terminal-stream?stream_id=${encodeURIComponent(streamId)}`)
   const focusWindow = payload.focus !== false
 
   if (terminalStreamWindow && !terminalStreamWindow.isDestroyed()) {
@@ -1191,7 +1228,7 @@ function createVoiceOrbWindow() {
     },
   })
   // 复用 brain-ui 的静态路由(/src/ui/brain-ui/*),voice-orb.html 的 import './voice-core.js' 才能解析
-  voiceOrbWindow.loadURL(`http://127.0.0.1:${backendPort}/src/ui/brain-ui/voice-orb.html`)
+  voiceOrbWindow.loadURL(backendUrl(backendPort, '/src/ui/brain-ui/voice-orb.html'))
   voiceOrbWindow.on('closed', () => { voiceOrbWindow = null })
 }
 
@@ -1433,7 +1470,10 @@ app.whenReady().then(async () => {
 
   try {
     emitStartupProgress({ id: 'port', status: 'running', message: '正在准备本地端口' })
-    backendPort = await findFreePort(3721)
+    backendPort = await findFreePort(
+      3721,
+      isLanAccessConfigured() ? '0.0.0.0' : '127.0.0.1',
+    )
     emitStartupProgress({ id: 'port', status: 'done', detail: `本地端口 ${backendPort} 已准备` })
 
     emitStartupProgress({ id: 'core', status: 'running', message: '正在启动本地核心' })

@@ -306,6 +306,7 @@ body {
 /* ── 状态 ── */
 let state = { task: '', current_step: '', tasks: [], expanded: false }
 let backendPort = null
+let backendSecure = false
 
 /* ── 云端 ASR 状态 ── */
 let micStream = null
@@ -447,7 +448,7 @@ async function startRecording() {
     cloudWs.send(i16.buffer)
   }
 
-  cloudWs = new WebSocket(`ws://127.0.0.1:${backendPort}/voice/cloud`)
+  cloudWs = new WebSocket(`${backendSecure ? 'wss' : 'ws'}://127.0.0.1:${backendPort}/voice/cloud`)
   cloudWs.binaryType = 'arraybuffer'
 
   cloudWs.onopen = () => {
@@ -519,7 +520,7 @@ function sendMessage() {
   if (!text || !backendPort) return
   clearTimeout(sendTimer)
   showSendHint(false)
-  fetch(`http://127.0.0.1:${backendPort}/message`, {
+  fetch(`${backendSecure ? 'https' : 'http'}://127.0.0.1:${backendPort}/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ from_id: 'ID:000001', content: text, channel: 'FocusBanner' }),
@@ -589,6 +590,7 @@ if (window.focusBanner) {
   })
   window.focusBanner.onConfig(cfg => {
     if (cfg.port) backendPort = cfg.port
+    backendSecure = cfg.secure === true
   })
 }
 

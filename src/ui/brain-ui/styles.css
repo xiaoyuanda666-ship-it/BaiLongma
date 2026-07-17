@@ -1,5 +1,8 @@
 :root {
   --app-titlebar-height: 38px;
+  --side-panel-width: clamp(260px, 25vw, 362px);
+  --side-panel-console-inset: calc(var(--side-panel-width) + 40px);
+  --side-panel-tab-offset: calc(var(--side-panel-width) + 20px);
   --bg0: #111821;
   --bg1: #172231;
   --bg-deep: #0d141d;
@@ -192,7 +195,7 @@ body {
   position: fixed;
   top: 20px;
   bottom: 20px;
-  width: 362px;
+  width: var(--side-panel-width);
   z-index: 3;
   padding: 16px 18px;
   border-radius: 16px;
@@ -1178,8 +1181,8 @@ body {
 
 .console {
   position: fixed;
-  left: 420px;
-  right: 420px;
+  left: var(--side-panel-console-inset);
+  right: var(--side-panel-console-inset);
   bottom: 22px;
   z-index: 4;
   transition: left 0.38s cubic-bezier(0.4,0,0.2,1), right 0.38s cubic-bezier(0.4,0,0.2,1);
@@ -2720,14 +2723,14 @@ body.image-mode .panel-tab {
 
 /* 左面板 tab：紧贴面板右边缘，右侧圆角 */
 .panel-tab-left {
-  left: 382px;
+  left: var(--side-panel-tab-offset);
   border-radius: 0 8px 8px 0;
   border-left: none;
 }
 
 /* 右面板 tab：紧贴面板左边缘，左侧圆角 */
 .panel-tab-right {
-  right: 382px;
+  right: var(--side-panel-tab-offset);
   border-radius: 8px 0 0 8px;
   border-right: none;
 }
@@ -2762,16 +2765,6 @@ body.l2-collapsed .panel-tab-right::before {
 }
 body.l2-collapsed .console {
   right: 24px;
-}
-
-@media (max-width: 1180px) {
-  .panel { width: 300px; }
-  #panel-l2 { right: 20px; }
-  .console { left: 340px; right: 340px; }
-  .panel-tab-left  { left: 320px; }
-  .panel-tab-right { right: 320px; }
-  body.l1-collapsed .console { left: 24px; }
-  body.l2-collapsed .console { right: 24px; }
 }
 
 @media (max-width: 900px) {

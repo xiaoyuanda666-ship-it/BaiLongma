@@ -152,6 +152,17 @@ function ensureCtx() {
   return _ctx
 }
 
+export async function resumeJarvisAudioContext() {
+  const ctx = ensureCtx()
+  if (!ctx) return { supported: false, state: 'unavailable' }
+  try {
+    if (ctx.state === 'suspended') await ctx.resume()
+  } catch (error) {
+    return { supported: true, state: ctx.state, error: String(error?.message || error) }
+  }
+  return { supported: true, state: ctx.state }
+}
+
 // 失真曲线（经典 waveshaper 公式）：amount 0~1，越大越脏越有"重量颗粒感"
 function makeDistortionCurve(amount) {
   const k = Math.max(0, amount) * 120

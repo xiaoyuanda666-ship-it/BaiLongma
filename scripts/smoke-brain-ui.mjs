@@ -107,10 +107,14 @@ function createServer() {
     }
 
     if (url.pathname === '/memories') {
-      sendJson(res, [
-        { id: 1, mem_id: 'm1', type: 'fact', content: 'Alpha memory', detail: 'First smoke node', created_at: new Date().toISOString() },
-        { id: 2, mem_id: 'm2', type: 'preference', content: 'Beta memory', detail: 'Second smoke node', created_at: new Date().toISOString() },
-      ])
+      sendJson(res, Array.from({ length: 64 }, (_, index) => ({
+        id: index + 1,
+        mem_id: `m${index + 1}`,
+        type: index % 3 === 0 ? 'preference' : 'fact',
+        content: `Smoke memory ${index + 1}`,
+        detail: `Graph layout smoke node ${index + 1}`,
+        created_at: new Date(Date.now() - index * 60_000).toISOString(),
+      })))
       return
     }
 
@@ -622,6 +626,105 @@ try {
   if (themeColorSwitch.restored.lineType !== themeColorSwitch.midnight.lineType
       || themeColorSwitch.restored.lineTool !== themeColorSwitch.midnight.lineTool) {
     throw new Error(`dark theme colors were not restored: ${JSON.stringify(themeColorSwitch)}`)
+  }
+
+  await page.setViewportSize({ width: 1194, height: 834 })
+  await page.waitForTimeout(650)
+  const ipadLayout = await page.evaluate(() => {
+    const rect = selector => {
+      const value = document.querySelector(selector)?.getBoundingClientRect()
+      return value ? {
+        left: value.left,
+        right: value.right,
+        top: value.top,
+        bottom: value.bottom,
+        width: value.width,
+        height: value.height,
+      } : null
+    }
+    const circles = [...document.querySelectorAll('#graph circle')]
+    const nodeCenter = circles.length ? {
+      x: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cx') || 0), 0) / circles.length,
+      y: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cy') || 0), 0) / circles.length,
+    } : null
+    const nodeBounds = circles.length ? circles.reduce((bounds, circle) => {
+      const x = Number(circle.getAttribute('cx') || 0)
+      const y = Number(circle.getAttribute('cy') || 0)
+      const radius = Number(circle.getAttribute('r') || 0)
+      bounds.left = Math.min(bounds.left, x - radius)
+      bounds.right = Math.max(bounds.right, x + radius)
+      bounds.top = Math.min(bounds.top, y - radius)
+      bounds.bottom = Math.max(bounds.bottom, y + radius)
+      return bounds
+    }, { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity }) : null
+    return {
+      layout: window.bailongmaGraphLayout?.(),
+      leftPanel: rect('#panel-l1'),
+      rightPanel: rect('#panel-l2'),
+      console: rect('.console'),
+      nodeCenter,
+      nodeBounds,
+    }
+  })
+  if (!ipadLayout.layout?.stage) throw new Error(`iPad graph diagnostics missing: ${JSON.stringify(ipadLayout)}`)
+  if (ipadLayout.layout.viewport.width !== 1194 || ipadLayout.layout.viewport.height !== 834) {
+    throw new Error(`iPad graph viewport was not refreshed: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.left < ipadLayout.leftPanel.right
+      || ipadLayout.layout.stage.right > ipadLayout.rightPanel.left) {
+    throw new Error(`iPad graph stage overlaps side panels: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.bottom > ipadLayout.console.top) {
+    throw new Error(`iPad graph stage overlaps the composer: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.scale >= 1) {
+    throw new Error(`iPad graph did not compact for the available stage: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (!ipadLayout.nodeCenter
+      || Math.abs(ipadLayout.nodeCenter.x - ipadLayout.layout.stage.centerX) > 110
+      || Math.abs(ipadLayout.nodeCenter.y - ipadLayout.layout.stage.centerY) > 110) {
+    throw new Error(`iPad graph nodes are not centered in the stage: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (!ipadLayout.nodeBounds
+      || ipadLayout.nodeBounds.left < ipadLayout.layout.stage.left - 36
+      || ipadLayout.nodeBounds.right > ipadLayout.layout.stage.right + 36
+      || ipadLayout.nodeBounds.top < ipadLayout.layout.stage.top - 36
+      || ipadLayout.nodeBounds.bottom > ipadLayout.layout.stage.bottom + 36) {
+    throw new Error(`iPad graph nodes do not fit the stage: ${JSON.stringify(ipadLayout)}`)
+  }
+
+  await page.hover('#graph')
+  await page.mouse.wheel(0, -300)
+  await page.waitForTimeout(100)
+  const zoomedTransform = await page.locator('#graph > g').getAttribute('transform')
+  if (!zoomedTransform || zoomedTransform === 'translate(0,0) scale(1)') {
+    throw new Error(`graph zoom setup failed before resize: ${zoomedTransform}`)
+  }
+
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.waitForTimeout(650)
+  const resizedGraph = await page.evaluate(() => ({
+    layout: window.bailongmaGraphLayout?.(),
+    transform: document.querySelector('#graph > g')?.getAttribute('transform') || '',
+    nodeCenter: (() => {
+      const circles = [...document.querySelectorAll('#graph circle')]
+      if (!circles.length) return null
+      return {
+        x: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cx') || 0), 0) / circles.length,
+        y: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cy') || 0), 0) / circles.length,
+      }
+    })(),
+  }))
+  if (resizedGraph.layout?.viewport.width !== 1024 || resizedGraph.layout?.viewport.height !== 768) {
+    throw new Error(`resized graph viewport is stale: ${JSON.stringify(resizedGraph)}`)
+  }
+  if (resizedGraph.transform && resizedGraph.transform !== 'translate(0,0) scale(1)') {
+    throw new Error(`graph zoom was not reset after resize: ${JSON.stringify(resizedGraph)}`)
+  }
+  if (!resizedGraph.nodeCenter
+      || Math.abs(resizedGraph.nodeCenter.x - resizedGraph.layout.stage.centerX) > 110
+      || Math.abs(resizedGraph.nodeCenter.y - resizedGraph.layout.stage.centerY) > 110) {
+    throw new Error(`graph nodes were not recentered after resize: ${JSON.stringify(resizedGraph)}`)
   }
 
   await page.setViewportSize({ width: 320, height: 480 })

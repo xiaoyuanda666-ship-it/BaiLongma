@@ -15,6 +15,7 @@ import { createVoiceCore } from './voice-core.js';
 import { createContinuousPolicy } from './voice-continuous.js';
 import { createPttController } from './voice-ptt.js';
 import { createWakeFlow } from './voice-wake.js';
+import { getApiToken } from './api-client.js';
 
 export function initVoicePanel({
   btnId, panelId, canvasId, statusId, transcriptId,
@@ -53,6 +54,19 @@ export function initVoicePanel({
   // 常开会话开关：点球/按钮触发，也被 PTT 在「mic 未开」时复用（保持叠加语义）
   async function toggleVoice() {
     if (!core.micActive) {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        if (transcript) {
+          transcript.textContent = window.isSecureContext === false
+            ? '局域网麦克风需要 HTTPS，请使用安全访问链接'
+            : '当前浏览器无法访问麦克风';
+        }
+        return false;
+      }
+      const isRemoteHost = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+      if (isRemoteHost && !getApiToken()) {
+        if (transcript) transcript.textContent = '局域网访问未配对，请使用桌面端显示的带口令链接';
+        return false;
+      }
       // startSession 内部已处理失败回退 + 状态同步
       return Boolean(await core.startSession());
     }

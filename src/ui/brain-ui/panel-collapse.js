@@ -13,6 +13,9 @@ export function initPanelCollapse() {
   function setPanel(side, collapsed) {
     document.body.classList.toggle(classForSide(side), collapsed);
     try { localStorage.setItem(storageKeyForSide(side), collapsed ? "1" : "0"); } catch {}
+    window.dispatchEvent(new CustomEvent("bailongma:panel-layout-change", {
+      detail: { side, collapsed },
+    }));
   }
 
   function togglePanel(side) {

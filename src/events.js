@@ -2,6 +2,10 @@ import { insertBrainUiEvent } from './db.js'
 
 // 内部事件总线：SSE 客户端管理 + 事件广播
 const sseClients = new Set()
+const SSE_REPLAY_LIMIT = 600
+const SSE_REPLAY_TTL_MS = 5 * 60 * 1000
+const recentEvents = []
+let nextEventId = 1
 
 const BRAIN_UI_HISTORY_TYPES = new Set([
   'message_received',
@@ -88,6 +92,44 @@ export function flushStickyEvents(res) {
   }
 }
 
+function pruneRecentEvents(now = Date.now()) {
+  while (
+    recentEvents.length > SSE_REPLAY_LIMIT
+    || (recentEvents[0] && now - recentEvents[0].createdAt > SSE_REPLAY_TTL_MS)
+  ) {
+    recentEvents.shift()
+  }
+}
+
+function writeSSEEvent(res, event) {
+  res.write(`id: ${event.id}\ndata: ${event.payload}\n\n`)
+}
+
+export function flushEventsSince(res, lastEventId = 0) {
+  const normalized = Number(lastEventId) || 0
+  if (normalized <= 0) return { replayed: 0, oldestEventId: recentEvents[0]?.id || 0 }
+  pruneRecentEvents()
+  let replayed = 0
+  for (const event of recentEvents) {
+    if (event.id <= normalized) continue
+    try {
+      writeSSEEvent(res, event)
+      replayed++
+    } catch {
+      break
+    }
+  }
+  return {
+    replayed,
+    oldestEventId: recentEvents[0]?.id || 0,
+    latestEventId: recentEvents.at(-1)?.id || 0,
+  }
+}
+
+export function getLatestEventId() {
+  return recentEvents.at(-1)?.id || 0
+}
+
 export function addSSEClient(res) {
   sseClients.add(res)
 }
@@ -99,11 +141,15 @@ export function removeSSEClient(res) {
 export function emitEvent(type, data) {
   const ts = new Date().toISOString()
   persistBrainUiEvent(type, data, ts)
+  const id = nextEventId++
+  const payload = JSON.stringify({ type, data, ts, event_id: id })
+  recentEvents.push({ id, payload, createdAt: Date.now() })
+  pruneRecentEvents()
   if (sseClients.size === 0) return
-  const payload = JSON.stringify({ type, data, ts })
+  const event = { id, payload }
   for (const res of sseClients) {
     try {
-      res.write(`data: ${payload}\n\n`)
+      writeSSEEvent(res, event)
     } catch (_) {
       sseClients.delete(res)
     }

@@ -1,5 +1,5 @@
 ﻿import { renderBrainUiApp } from "./app-shell.js";
-import { API } from "./api-client.js";
+import { API, getUiClientId, isUiClientTarget } from "./api-client.js";
 import { bootstrapScene } from "../scene-shell/bootstrap.js";
 import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
@@ -12,8 +12,9 @@ import { enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode, sho
 import { initDocPanel, setDocPanelMode } from "./doc.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
-import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx } from "./tts-fx.js";
+import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx, resumeJarvisAudioContext } from "./tts-fx.js";
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
+import { createVoiceReplyCoordinator } from "./voice-reply-coordinator.js";
 const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
 document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
 if (hasWindowsTitleBarOverlay) {
@@ -37,6 +38,26 @@ const UI_ZOOM_STEP = 0.1;
 const UI_ZOOM_WHEEL_STEP = 0.05;
 const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
 const MEMORY_GRAPH_ENABLED = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) !== "false";
+const UI_CLIENT_ID = getUiClientId();
+const SSE_LAST_EVENT_KEY = "bailongma-sse-last-event-id";
+const voiceReplyCoordinator = createVoiceReplyCoordinator(UI_CLIENT_ID);
+const voiceDiagnosticLog = [];
+window.bailongmaVoiceDiagnostics = voiceDiagnosticLog;
+
+function voiceDiag(stage, detail = {}) {
+  const record = {
+    at: new Date().toISOString(),
+    stage,
+    client_id: UI_CLIENT_ID,
+    visibility: document.visibilityState,
+    ...detail,
+  };
+  voiceDiagnosticLog.push(record);
+  if (voiceDiagnosticLog.length > 200) voiceDiagnosticLog.shift();
+  console.info("[voice-diag]", record);
+  return record;
+}
+window.bailongmaVoiceDiag = voiceDiag;
 
 const themeSwitcher = document.getElementById("theme-switcher");
 const resetViewBtn = document.getElementById("reset-view-btn");
@@ -287,6 +308,70 @@ nodeSizeSlider.addEventListener("input", () => {
 let W = window.innerWidth;
 let H = window.innerHeight;
 
+function elementOccupiesViewport(element) {
+  if (!element) return false;
+  const style = getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return false;
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0
+    && rect.height > 0
+    && rect.right > 0
+    && rect.left < W
+    && rect.bottom > 0
+    && rect.top < H;
+}
+
+function measureGraphLayout() {
+  const outerPadding = W <= 900 ? 12 : 18;
+  const panelGap = W <= 900 ? 10 : 16;
+  let left = outerPadding;
+  let right = Math.max(left + 1, W - outerPadding);
+  let top = outerPadding;
+  let bottom = Math.max(top + 1, H - outerPadding);
+  const leftPanel = document.getElementById("panel-l1");
+  const rightPanel = document.getElementById("panel-l2");
+  const consoleEl = document.querySelector(".console");
+
+  if (elementOccupiesViewport(leftPanel)) {
+    left = Math.max(left, leftPanel.getBoundingClientRect().right + panelGap);
+  }
+  if (elementOccupiesViewport(rightPanel)) {
+    right = Math.min(right, rightPanel.getBoundingClientRect().left - panelGap);
+  }
+  if (elementOccupiesViewport(consoleEl)) {
+    const consoleRect = consoleEl.getBoundingClientRect();
+    if (consoleRect.top > top + 180) bottom = Math.min(bottom, consoleRect.top - panelGap);
+  }
+
+  // 极窄的中间区域仍保留一个有效舞台，避免断点或面板动画期间产生负尺寸。
+  if (right - left < 180) {
+    const center = W / 2;
+    left = Math.max(outerPadding, center - 90);
+    right = Math.min(W - outerPadding, center + 90);
+  }
+  if (bottom - top < 180) {
+    top = outerPadding;
+    bottom = Math.max(top + 180, H - outerPadding);
+  }
+
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const scale = Math.max(0.48, Math.min(1, width / 720, height / 680));
+  return {
+    left,
+    right,
+    top,
+    bottom,
+    width,
+    height,
+    centerX: left + width / 2,
+    centerY: top + height / 2,
+    scale,
+  };
+}
+
+let graphLayout = measureGraphLayout();
+
 const svg = d3.select("#graph").attr("width", W).attr("height", H);
 const tip = d3.select("#tip");
 
@@ -320,18 +405,11 @@ svg.node().addEventListener("wheel", event => {
   const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
   const nextScale = Math.max(0.1, Math.min(5, current.k * factor));
   const k = nextScale / current.k;
-  const px = W / 2, py = H / 2;
+  const px = graphLayout.centerX, py = graphLayout.centerY;
   const nextX = px - (px - current.x) * k;
   const nextY = py - (py - current.y) * k;
   svg.call(zoom.transform, d3.zoomIdentity.translate(nextX, nextY).scale(nextScale));
 }, { passive: false });
-
-function resetZoom() {
-  svg.transition().duration(420).call(
-    zoom.transform,
-    d3.zoomIdentity
-  );
-}
 
 const glowSet = new Map();
 const usePulseSet = new Map();
@@ -437,10 +515,10 @@ const sim = MEMORY_GRAPH_ENABLED
   ? d3.forceSimulation()
     .force("link", d3.forceLink().id(d => d._nid))
     .force("charge", d3.forceManyBody())
-    .force("center", d3.forceCenter(W / 2, H / 2 - 10))
-    .force("x", d3.forceX(W / 2))
-    .force("y", d3.forceY(H / 2 - 10))
-    .force("radial", d3.forceRadial(180, W / 2, H / 2 - 10))
+    .force("center", d3.forceCenter(graphLayout.centerX, graphLayout.centerY))
+    .force("x", d3.forceX(graphLayout.centerX))
+    .force("y", d3.forceY(graphLayout.centerY))
+    .force("radial", d3.forceRadial(180, graphLayout.centerX, graphLayout.centerY))
     .force("collision", d3.forceCollide())
     .alphaDecay(0.028)
     .alphaMin(0.02) // 肉眼已静止后别再空烧 GPU（默认 0.001 要多跑约 2 秒）
@@ -451,9 +529,11 @@ const sim = MEMORY_GRAPH_ENABLED
 
 function linkDistance(link) {
   const countFactor = Math.min(34, Math.sqrt(Math.max(1, nodeData.length)) * 4.2);
-  if (link._kind === "visual_parent") return 82 + countFactor * 0.45;
-  if (link._kind === "visual_random") return 108 + countFactor;
-  return 76 + countFactor * 0.55;
+  let distance;
+  if (link._kind === "visual_parent") distance = 82 + countFactor * 0.45;
+  else if (link._kind === "visual_random") distance = 108 + countFactor;
+  else distance = 76 + countFactor * 0.55;
+  return distance * graphLayout.scale;
 }
 
 function linkStrength(link) {
@@ -465,7 +545,8 @@ function linkStrength(link) {
 function chargeStrength(node) {
   const countBoost = Math.min(76, Math.sqrt(Math.max(1, nodeData.length)) * 3.5);
   const baseCharge = -92 - countBoost * 0.4 - (node._deg || 0) * 2.4 - (node._childCount || 0) * 1.2;
-  return baseCharge * physicsSettings.repulsion;
+  const compactness = Math.max(0.34, graphLayout.scale * graphLayout.scale);
+  return baseCharge * physicsSettings.repulsion * compactness;
 }
 
 function radialStrength() {
@@ -493,17 +574,20 @@ function updateSimulationForces() {
     .strength(chargeStrength);
 
   sim.force("x")
-    .x(W / 2)
+    .x(graphLayout.centerX)
     .strength(centerPullStrength());
 
   sim.force("y")
-    .y(H / 2 - 10)
+    .y(graphLayout.centerY)
     .strength(centerPullStrength());
 
   sim.force("radial")
-    .radius(Math.min(Math.max(24, Math.sqrt(Math.max(1, nodeData.length)) * 6), 64))
-    .x(W / 2)
-    .y(H / 2 - 10)
+    .radius(Math.max(
+      18,
+      Math.min(Math.max(24, Math.sqrt(Math.max(1, nodeData.length)) * 6), 64) * graphLayout.scale,
+    ))
+    .x(graphLayout.centerX)
+    .y(graphLayout.centerY)
     .strength(radialStrength());
 
   sim.force("collision")
@@ -511,6 +595,65 @@ function updateSimulationForces() {
     .strength(0.82)
     .iterations(nodeData.length > 40 ? 2 : 1);
 }
+
+function updateGraphViewport() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  graphLayout = measureGraphLayout();
+  svg.attr("width", W).attr("height", H);
+}
+
+function reseedGraphNodes() {
+  if (!nodeData.length) return;
+  const movableNodes = nodeData.filter(node => !node._core);
+  const maxRadius = Math.max(
+    26,
+    Math.min(graphLayout.width, graphLayout.height) * 0.3,
+  );
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  let movableIndex = 0;
+
+  nodeData.forEach((node, index) => {
+    node.fx = null;
+    node.fy = null;
+    node.vx = 0;
+    node.vy = 0;
+    if (node._core) {
+      node.x = graphLayout.centerX;
+      node.y = graphLayout.centerY;
+      return;
+    }
+
+    const progress = Math.sqrt((movableIndex + 1) / Math.max(1, movableNodes.length));
+    const phase = (deterministicIndex(node._nid || index, 360) / 180) * Math.PI;
+    const angle = phase + movableIndex * goldenAngle;
+    const radius = Math.max(18, maxRadius * progress);
+    node.x = graphLayout.centerX + Math.cos(angle) * radius;
+    node.y = graphLayout.centerY + Math.sin(angle) * radius;
+    movableIndex += 1;
+  });
+}
+
+function graphLayoutSnapshot() {
+  return {
+    viewport: { width: W, height: H },
+    stage: { ...graphLayout },
+    nodeCount: nodeData.length,
+  };
+}
+
+function resetGraphLayout({ reseed = true, restartAlpha = 1 } = {}) {
+  updateGraphViewport();
+  svg.call(zoom.transform, d3.zoomIdentity);
+  if (!MEMORY_GRAPH_ENABLED || !sim) return;
+  sim.force("center", d3.forceCenter(graphLayout.centerX, graphLayout.centerY));
+  updateSimulationForces();
+  if (reseed) reseedGraphNodes();
+  sim.alphaTarget(0).alpha(Math.max(0.35, restartAlpha)).restart();
+  writeGraphDom();
+}
+
+window.bailongmaGraphLayout = graphLayoutSnapshot;
 
 function applyPhysicsSettings(restartAlpha = 2) {
   updatePhysicsReadout();
@@ -536,8 +679,8 @@ function refreshNodeVisuals() {
 
 function dampTangentialMotion() {
   if (!MEMORY_GRAPH_ENABLED || !sim) return;
-  const cx = W / 2;
-  const cy = H / 2 - 10;
+  const cx = graphLayout.centerX;
+  const cy = graphLayout.centerY;
   const twitching = sim.alpha() > 0.45;
 
   nodeData.forEach(node => {
@@ -590,10 +733,10 @@ function naturalTwitch(big = Math.random() < 0.3) {
     const anchor = anchorMap.get(String(node._nid)) || nodeData[deterministicIndex(node._nid, nodeData.length)];
     if (!anchor) return;
 
-    const anchorX = anchor.x ?? (W / 2);
-    const anchorY = anchor.y ?? (H / 2 - 10);
+    const anchorX = anchor.x ?? graphLayout.centerX;
+    const anchorY = anchor.y ?? graphLayout.centerY;
     const angle = Math.random() * Math.PI * 2;
-    const offset = 36 + Math.random() * 52;
+    const offset = (36 + Math.random() * 52) * graphLayout.scale;
     const nextX = anchorX + Math.cos(angle) * offset;
     const nextY = anchorY + Math.sin(angle) * offset;
     const currentX = node.x ?? nextX;
@@ -920,6 +1063,7 @@ async function loadMemories() {
   try {
     const rows = await fetch(`${API}/memories?limit=120`).then(r => r.json());
     if (!Array.isArray(rows)) return;
+    const isInitialGraphLoad = nodeData.length === 0;
 
     const prevPositions = new Map(nodeData.map(n => [n._nid, {
       x: n.x, y: n.y, vx: n.vx, vy: n.vy, fx: n.fx, fy: n.fy,
@@ -932,8 +1076,8 @@ async function loadMemories() {
         ...row,
         _nid: nid,
         _ts: prev ? Date.now() : Date.now() - Math.random() * 8000,
-        x: prev ? prev.x : W / 2 + (Math.random() - 0.5) * 180,
-        y: prev ? prev.y : H / 2 + (Math.random() - 0.5) * 180,
+        x: prev ? prev.x : graphLayout.centerX + (Math.random() - 0.5) * 180 * graphLayout.scale,
+        y: prev ? prev.y : graphLayout.centerY + (Math.random() - 0.5) * 180 * graphLayout.scale,
         vx: prev ? prev.vx : 0,
         vy: prev ? prev.vy : 0,
         fx: prev ? prev.fx : null,
@@ -946,6 +1090,9 @@ async function loadMemories() {
     addRandomVisualLinks(linkSet);
 
     renderGraph(1.1);
+    if (isInitialGraphLoad) {
+      resetGraphLayout({ reseed: true, restartAlpha: 1 });
+    }
   } catch (error) {
     console.warn("[graph] load failed:", error.message);
     setConnectionState("未连接", false);
@@ -960,8 +1107,8 @@ function addNewNodes(memories) {
     const nid = memory.mem_id || memory.id;
     if (!nid || nodeMap.has(String(nid))) return;
     const anchor = findAnchorNode(memory, nodeMap);
-    const anchorX = anchor?.x ?? W / 2;
-    const anchorY = anchor?.y ?? (H / 2 - 10);
+    const anchorX = anchor?.x ?? graphLayout.centerX;
+    const anchorY = anchor?.y ?? graphLayout.centerY;
     const node = {
       ...memory,
       _nid: String(nid),
@@ -969,8 +1116,8 @@ function addNewNodes(memories) {
       event_type: memory.event_type || memory.type || "fact",
       _ts: Date.now(),
       _strength: 0.85,
-      x: anchorX + (Math.random() - 0.5) * 72,
-      y: anchorY + (Math.random() - 0.5) * 72,
+      x: anchorX + (Math.random() - 0.5) * 72 * graphLayout.scale,
+      y: anchorY + (Math.random() - 0.5) * 72 * graphLayout.scale,
       vx: 0, vy: 0,
     };
     nodeData.push(node);
@@ -1727,20 +1874,37 @@ function flashFocusCompressed() {
 function connectSSE() {
   setConnectionState("连接中", true);
   setHeartbeatConnection("waiting", "连接中");
-  const es = new EventSource(`${API}/events`);
+  const eventsUrl = new URL("/events", `${API}/`);
+  eventsUrl.searchParams.set("client_id", UI_CLIENT_ID);
+  let lastEventId = "";
+  try { lastEventId = sessionStorage.getItem(SSE_LAST_EVENT_KEY) || ""; } catch {}
+  if (lastEventId) eventsUrl.searchParams.set("last_event_id", lastEventId);
+  const es = new EventSource(eventsUrl);
 
   es.onopen = () => {
     setConnectionState("已连接", true);
     setHeartbeatConnection("alive", formatHeartbeatInterval());
+    chat?.restoreChatHistory?.();
+    voiceDiag("sse-open", { last_event_id: lastEventId || "none" });
   };
 
   es.onmessage = event => {
-    try { handle(JSON.parse(event.data)); } catch (_) {}
+    try {
+      const parsed = JSON.parse(event.data);
+      handle(parsed);
+      const eventId = event.lastEventId || parsed.event_id || "";
+      if (eventId) {
+        try { sessionStorage.setItem(SSE_LAST_EVENT_KEY, String(eventId)); } catch {}
+      }
+    } catch (error) {
+      console.warn("[SSE] event handling failed:", error);
+    }
   };
 
   es.onerror = () => {
     setConnectionState("重连中", false);
     setHeartbeatConnection("offline", "连接中断");
+    voiceDiag("sse-error", { last_event_id: lastEventId || "none" });
     es.close();
     setTimeout(connectSSE, 3000);
   };
@@ -1826,12 +1990,25 @@ function handle({ type, data = {}, ts = null }) {
       // 正文流（plainReply）：把 token 实时打进聊天气泡。一轮可能有多段正文（正文→工具→正文），
       // 只在尚未开始时建气泡，后续段累积进同一个。speak 轮（语音）额外开启逐句流式合成。
       if (data.mode === "text" && data.plainReply) {
-        if (data.speak) liveTurnSpeak = true;
+        const voiceDecision = voiceReplyCoordinator.streamStart(data, {
+          streamingEnabled: isTTSStreamingEnabled(),
+        });
+        if (data.speak) {
+          voiceDiag("stream-start", {
+            turn_id: data.turn_id || "",
+            target_client_id: data.target_client_id || "",
+            target_matched: voiceDecision.turn.targetMatched,
+            speak: true,
+            playback_mode: voiceDecision.startStreaming ? "sentence-stream" : "whole-reply",
+            reason: voiceDecision.reason,
+          });
+        }
+        if (voiceDecision.eligible) liveTurnSpeak = true;
         if (!liveReplyActive) {
           liveReplyActive = true;
           liveRawText = "";
           chat.beginLiveJarvisMsg({ alert: true });
-          if (liveTurnSpeak && isTTSStreamingEnabled()) beginStreamingTTS();
+          if (voiceDecision.startStreaming) beginStreamingTTS(data);
         }
       }
       break;
@@ -1843,7 +2020,7 @@ function handle({ type, data = {}, ts = null }) {
       if (data.mode === "text" && liveReplyActive) {
         liveRawText += data.text;
         chat.updateLiveJarvisMsg(cleanStreamText(liveRawText));
-        if (sttsActive) feedStreamingTTS(liveRawText);
+        if (sttsActive && isStreamingTTSTurn(data)) feedStreamingTTS(liveRawText);
       }
       break;
     case "stream_end":
@@ -1851,7 +2028,7 @@ function handle({ type, data = {}, ts = null }) {
       setVoiceThinking(false);
       if (currentPath === "l2" && activeHeartbeatRound) setCognitionState("判断下一步", "thinking");
       // 正文段结束：把残句先送去合成，降低尾句延迟（不结束会话，可能还有后续正文段）
-      if (data.mode === "text" && sttsActive) flushStreamingTTSBuf();
+      if (data.mode === "text" && sttsActive && isStreamingTTSTurn(data)) flushStreamingTTSBuf();
       break;
     case "tool_preparing": {
       setVoiceThinking(false);
@@ -1901,7 +2078,7 @@ function handle({ type, data = {}, ts = null }) {
       // 兜底：本轮结束时（response 必在 message 之后发）若流式合成会话仍开着——极少见，模型只调了工具
       // 没产出可投递正文、message 未到达——标记正文已尽让队列放完即恢复麦克风，避免麦克风一直挂起。
       // 正常情况 message 已 finalize 过，此处幂等无副作用，不会打断仍在播放的尾句。
-      if (sttsActive) finalizeStreamingTTS();
+      if (sttsActive && isStreamingTTSTurn(data)) finalizeStreamingTTS();
       if (chat.hasLiveJarvisMsg()) chat.finalizeLiveJarvisMsg(null);
       liveReplyActive = false; liveRawText = ""; liveTurnSpeak = false;
       break;
@@ -2007,7 +2184,6 @@ function handle({ type, data = {}, ts = null }) {
     case "message":
       if (data.from === "consciousness") {
         lastJarvisContent = data.content;
-        const shouldSpeakMessage = data.speak === true;
         const viaLabel = friendlyChannelLabel(data.channel);
         const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
         const messageId = data.conversation_id || data.conversationId || "";
@@ -2017,12 +2193,24 @@ function handle({ type, data = {}, ts = null }) {
         } else {
           addMsg("jarvis", content, { messageId });
         }
-        // 语音轮的 TTS 收尾：逐句会话进行中 → flush 尾句并收尾；若未走逐句（流式合成关闭）→ 整段播一次
-        if (liveTurnSpeak) {
-          if (sttsActive) finalizeStreamingTTS();
-          else playTTSReply(toPlainSpeech(data.content));
-        } else if (shouldSpeakMessage) {
-          playTTSReplyIfReadable(data.content);
+        const speechText = toPlainSpeech(data.content);
+        const voiceDecision = voiceReplyCoordinator.finalMessage(data, speechText);
+        if (data.speak === true) {
+          voiceDiag("message-final", {
+            turn_id: data.turn_id || "",
+            conversation_id: messageId,
+            target_client_id: data.target_client_id || "",
+            target_matched: voiceDecision.turn?.targetMatched ?? isUiClientTarget(data),
+            action: voiceDecision.action,
+            reason: voiceDecision.reason,
+            streaming_active: sttsActive,
+          });
+        }
+        if (voiceDecision.action === "finalize_stream") {
+          if (sttsActive && isStreamingTTSTurn(data)) finalizeStreamingTTS();
+          else startVoiceFallback(voiceDecision, "stream-state-missing");
+        } else if (voiceDecision.action === "play_full" || voiceDecision.action === "play_remaining") {
+          startVoiceFallback(voiceDecision);
         }
         liveReplyActive = false;
         liveRawText = "";
@@ -2041,6 +2229,21 @@ function handle({ type, data = {}, ts = null }) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
         addMsg("external", data.content, { label, alert: false, messageId: data.conversation_id || data.conversationId || "" });
         openChat(true);
+      } else {
+        const reconciled = chat?.reconcileSentMessage?.(
+          data.client_message_id || data.clientMessageId,
+          data.conversation_id || data.conversationId,
+        );
+        if (!reconciled) {
+          const voiceMessage = ch === "VOICE" || ch === "语音识别";
+          addMsg("user", data.content, {
+            label: voiceMessage ? "You · 语音对话" : "You",
+            alert: false,
+            pending: false,
+            messageId: data.conversation_id || data.conversationId || "",
+          });
+          openChat(true);
+        }
       }
       break;
     }
@@ -2078,7 +2281,7 @@ function handle({ type, data = {}, ts = null }) {
       showFeishuPopup();
       break;
     case "audio_created":
-      if (data.autoPlay && data.path) {
+      if (data.autoPlay && data.path && isUiClientTarget(data)) {
         const audioUrl = `${API}/${data.path}`;
         const audioEl = new Audio(audioUrl);
         applyOutputSink(audioEl).catch(() => {}); // 与 TTS 同路由，避开虚拟/已拔出设备
@@ -2086,11 +2289,11 @@ function handle({ type, data = {}, ts = null }) {
       }
       break;
     case "tts_reply":
-      if (data.text) playTTSReply(data.text);
+      if (data.text && isUiClientTarget(data)) playTTSReply(data.text);
       break;
     case "key_configured":
       chat.deleteLastUserMsg();
-      if (data.service === 'tts' && data.ttsText) playTTSReply(data.ttsText);
+      if (data.ttsText && isUiClientTarget(data)) playTTSReply(data.ttsText);
       break;
     default:
       break;
@@ -2108,6 +2311,11 @@ let ttsInterruptionApplied = false;
 let ttsInterruptionDbTimer = null;
 let ttsStreamReader = null; // 当前流式合成的网络读取器；打断/重播时取消，避免旧流继续占用
 let ttsAudioGraph = null;   // 当前 TTS <audio> 的 Web Audio 图，用于音效和语音球可视化
+let ttsAudioCancel = null;
+let appleSharedAudioEl = null;
+let appleAudioPrimed = false;
+let pendingTTSPlayback = null;
+const startedTTSPlaybackKeys = new Set();
 
 // ── 边出文字边逐句流式合成（streaming sentence TTS）─────────────────────────────
 // 正文 token 边到边按句末标点切句入队，一个顺序播放队列逐句 /tts/stream 播放——第一句在
@@ -2119,10 +2327,12 @@ let sttsConsumed = 0;         // liveRawText 已喂入切句器的「干净文�
 let sttsBuf = '';             // 尚未凑成整句的残句缓冲
 let sttsQueue = [];           // 已切出、待合成播放的句子
 let sttsPlaying = false;      // 当前有一段正在 fetch / 播放
+let sttsCurSegStarted = false;
 let sttsSpoken = '';          // 已完整播放过的句子拼接（打断时算"已说到哪"）
 let sttsCurSeg = '';          // 当前正在播放的句子文本
 let sttsStreamDone = false;   // 正文已全部到达（message 定稿），队列放完即收尾
 let sttsMicSuspended = false; // 已对麦克风做过一次 suspendForTTS
+let sttsTurnData = null;      // 当前逐句会话所属的后端 turn / target
 
 const STTS_SENTENCE_RE = /[^。！？!?\n]*[。！？!?\n]+/g;
 function sttsHasReadable(s) { return /[\p{L}\p{N}]/u.test(s); }
@@ -2141,11 +2351,28 @@ function isTTSStreamingEnabled() {
 function setTTSStreamingEnabled(on) {
   try { localStorage.setItem(TTS_STREAMING_KEY, on ? '1' : '0'); } catch {}
 }
+function isAppleMobileBrowser() {
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/i.test(ua)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
 // 仅当开启 + 浏览器支持 MSE 流式 MP3 时才走流式，否则退回整段 blob 播放（绝不让声音变哑）
 function ttsCanStream() {
   if (!isTTSStreamingEnabled()) return false;
+  // iPadOS may advertise audio/mpeg MSE support while sourceopen/addSourceBuffer
+  // or background resume remains unreliable. Sentence streaming still works,
+  // but each sentence is downloaded as a Blob before using the primed audio element.
+  if (isAppleMobileBrowser()) return false;
   if (typeof window.MediaSource === 'undefined') return false;
   try { return MediaSource.isTypeSupported('audio/mpeg'); } catch { return false; }
+}
+
+function isStreamingTTSTurn(data = {}) {
+  if (!sttsTurnData) return false;
+  const activeTurn = String(sttsTurnData.turn_id || sttsTurnData.turnId || "");
+  const eventTurn = String(data.turn_id || data.turnId || "");
+  if (activeTurn && eventTurn) return activeTurn === eventTurn;
+  return isUiClientTarget(data);
 }
 
 // Estimate spoken char count from audio progress, snapping to a sentence boundary
@@ -2218,6 +2445,7 @@ window.stopTTS = () => {
   // When duration is not yet loaded (NaN): spokenUpTo=0, remaining='', falls back to full text
   ttsInterruptedRemaining = remaining || ttsCurrentText;
   applyTTSInterruption(spokenUpTo);
+  ttsAudioCancel?.("interrupted");
   clearTTSAudioGraph();
   ttsAudioEl.pause();
   try { URL.revokeObjectURL(ttsAudioEl.src); } catch {}
@@ -2273,65 +2501,152 @@ function clearTTSAudioGraph(graph) {
   window.bailongmaVoice?.setTTSAnalyser?.(null);
 }
 
-// 接管一个 <audio> 元素开始播放：叠加音色音效、挂起 ASR、注册结束/出错清理。
-// revokeUrl 为该元素 src 的 objectURL（播放结束/出错时回收）。多条播放路径共用。
-// opts.manageMic：是否由本函数挂起/恢复麦克风（单段播放=true；逐句队列由队列在首尾统一管，传 false）。
-// opts.onComplete：播放正常/出错收尾时的回调（队列用它推进下一段）；不传则走默认收尾（恢复麦克风）。
-function startTTSAudio(audioEl, revokeUrl, opts = {}) {
-  const { manageMic = true, onComplete = null } = opts;
+const SILENT_WAV_DATA_URL = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+
+function createTTSAudio(url) {
+  if (!isAppleMobileBrowser()) return new Audio(url);
+  if (!appleSharedAudioEl) {
+    appleSharedAudioEl = new Audio();
+    appleSharedAudioEl.playsInline = true;
+    appleSharedAudioEl.preload = "auto";
+  }
+  ttsAudioCancel?.("replaced");
+  appleSharedAudioEl.pause();
+  appleSharedAudioEl.removeAttribute("src");
+  appleSharedAudioEl.load();
+  appleSharedAudioEl.src = url;
+  return appleSharedAudioEl;
+}
+
+function primeAppleTTSPlayback() {
+  if (!isAppleMobileBrowser() || appleAudioPrimed) return;
+  const audioEl = createTTSAudio(SILENT_WAV_DATA_URL);
+  audioEl.volume = 1;
+  const result = audioEl.play();
+  Promise.resolve(result).then(() => {
+    appleAudioPrimed = true;
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    voiceDiag("audio-primed", { platform: "apple-mobile" });
+  }).catch(error => {
+    voiceDiag("audio-prime-rejected", {
+      error_name: error?.name || "",
+      error: error?.message || String(error),
+    });
+  });
+  resumeJarvisAudioContext().then(state => voiceDiag("audio-context-unlock", state));
+}
+
+for (const eventName of ["pointerdown", "touchstart", "keydown"]) {
+  window.addEventListener(eventName, primeAppleTTSPlayback, { capture: true, passive: true });
+}
+
+// 接管一个 <audio> 元素并明确返回播放结果；Safari 的 play() 拒绝、解码错误不再静默吞掉。
+async function startTTSAudio(audioEl, revokeUrl, opts = {}) {
+  const { manageMic = true, onStart = null } = opts;
   ttsAudioEl = audioEl;
   audioEl.volume = 1.0; // ensure full volume (avoid residual duck state from previous play)
-  const audioGraph = attachJarvisAudioGraph(audioEl, activeTTSVoiceId);
+  const audioContextState = await resumeJarvisAudioContext();
+  const audioGraph = isAppleMobileBrowser() ? null : attachJarvisAudioGraph(audioEl, activeTTSVoiceId);
   activateTTSAudioGraph(audioGraph);
   // Suspend cloud ASR but keep the mic hardware open for interruption detection
   if (manageMic) window.bailongmaVoice?.suspendForTTS?.();
-  // 结束/出错收尾。注意：被新一轮播放替换掉的旧元素，其 onerror 可能在 pause/revoke 后迟到触发；
-  // 此时全局已指向新元素，必须用 ttsAudioEl===audioEl 守卫，否则会误杀新播放的流读取器和状态。
-  const finish = () => {
-    clearTTSAudioGraph(audioGraph);
-    if (revokeUrl) { try { URL.revokeObjectURL(revokeUrl); } catch {} } // 释放本元素 URL（无论是否当前）
-    if (ttsAudioEl !== audioEl) return; // 已不是当前播放对象：仅回收 URL，不动全局
-    if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
-    ttsAudioEl = null;
-    if (onComplete) { onComplete(); return; } // 队列段：交回队列推进，麦克风/收尾由队列统一管
-    ttsCurrentText = '';
-    if (manageMic) window.bailongmaVoice?.resumeAfterMedia();
-  };
-  audioEl.onended = finish;
-  audioEl.onerror = finish;
-  // 把这段语音显式路由到真实输出设备（规避被系统默认占用的虚拟/已拔出声卡）。
-  // setSinkId 是异步的，但对流式 TTS，首个音频样本要等网络首包到达才流出，
-  // 这点路由耗时（毫秒级）远在出声之前完成 → 不必 await，也不会让首音漏到默认设备。
-  applyOutputSink(audioEl).catch(() => {});
-  audioEl.play().catch(() => {
-    clearTTSAudioGraph(audioGraph);
-    if (ttsAudioEl !== audioEl) return;
-    if (onComplete) { ttsAudioEl = null; onComplete(); return; }
-    if (manageMic) window.bailongmaVoice?.resumeAfterMedia();
+  const sink = await applyOutputSink(audioEl).catch(error => ({ sinkApplyError: String(error?.message || error) }));
+
+  return new Promise(resolve => {
+    let settled = false;
+    let started = false;
+    let startTimer = null;
+    const finish = (ok, kind, error = null) => {
+      if (settled) return;
+      settled = true;
+      if (startTimer) clearTimeout(startTimer);
+      if (ttsAudioCancel === cancel) ttsAudioCancel = null;
+      clearTTSAudioGraph(audioGraph);
+      if (revokeUrl) { try { URL.revokeObjectURL(revokeUrl); } catch {} }
+      if (ttsAudioEl === audioEl) {
+        if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
+        ttsAudioEl = null;
+        if (manageMic) {
+          ttsCurrentText = "";
+          window.bailongmaVoice?.resumeAfterMedia();
+        }
+      }
+      resolve({
+        ok,
+        kind,
+        started,
+        error,
+        audioContextState,
+        sink,
+      });
+    };
+    const cancel = (kind = "cancelled") => finish(false, kind, new Error(kind));
+    ttsAudioCancel = cancel;
+    startTimer = setTimeout(() => {
+      if (!started) finish(false, "playback-start-timeout", new Error("audio did not start within 10 seconds"));
+    }, 10_000);
+    audioEl.onplaying = () => {
+      started = true;
+      if (startTimer) { clearTimeout(startTimer); startTimer = null; }
+      onStart?.();
+    };
+    audioEl.onended = () => finish(true, "ended");
+    audioEl.onerror = () => {
+      const mediaError = audioEl.error;
+      finish(false, "media-error", mediaError
+        ? new Error(`MediaError ${mediaError.code}: ${mediaError.message || "audio decode/playback failed"}`)
+        : new Error("audio element error"));
+    };
+    try {
+      Promise.resolve(audioEl.play()).catch(error => finish(false, "play-rejected", error));
+    } catch (error) {
+      finish(false, "play-threw", error);
+    }
   });
 }
 
 // 流式播放：把 /tts/stream 的分块响应喂进 MediaSource，首包到达即出声。
-function playTTSViaMediaSource(resp, opts = {}) {
+async function playTTSViaMediaSource(resp, opts = {}) {
   const mediaSource = new MediaSource();
   const url = URL.createObjectURL(mediaSource);
-  const audioEl = new Audio(url);
+  const audioEl = createTTSAudio(url);
   const isCurrentAudio = () => ttsAudioEl === audioEl;
-  startTTSAudio(audioEl, url, opts); // play() 会在缓冲到首包后自动开始
+  let sourceOpened = false;
+  const sourceOpenTimer = setTimeout(() => {
+    if (!sourceOpened && isCurrentAudio()) {
+      voiceDiag("mse-sourceopen-timeout");
+      try { audioEl.src = ""; audioEl.load(); } catch {}
+    }
+  }, 4000);
   mediaSource.addEventListener('sourceopen', () => {
+    sourceOpened = true;
+    clearTimeout(sourceOpenTimer);
     if (!isCurrentAudio()) { try { mediaSource.endOfStream(); } catch {} return; }
     let sb;
     try { sb = mediaSource.addSourceBuffer('audio/mpeg'); }
-    catch { try { mediaSource.endOfStream(); } catch {} return; }
+    catch (error) {
+      voiceDiag("mse-source-buffer-failed", { error: error?.message || String(error) });
+      try { audioEl.src = ""; audioEl.load(); } catch {}
+      return;
+    }
     const reader = resp.body.getReader();
     if (!isCurrentAudio()) { try { reader.cancel(); } catch {} return; }
     ttsStreamReader = reader;
     const queue = [];
     let finished = false;
+    let receivedBytes = 0;
     // appendBuffer 是异步的，更新中不能再次 append；用队列在 updateend 时串行送入
     const flush = () => {
       if (sb.updating) return;
-      if (queue.length) { try { sb.appendBuffer(queue.shift()); } catch {} return; }
+      if (queue.length) {
+        try { sb.appendBuffer(queue.shift()); }
+        catch (error) {
+          voiceDiag("mse-append-failed", { error: error?.message || String(error) });
+          try { audioEl.src = ""; audioEl.load(); } catch {}
+        }
+        return;
+      }
       if (finished && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch {} }
     };
     sb.addEventListener('updateend', flush);
@@ -2346,50 +2661,141 @@ function playTTSViaMediaSource(resp, opts = {}) {
           }
           if (done) {
             if (ttsStreamReader === reader) ttsStreamReader = null;
+            if (!receivedBytes) {
+              try { audioEl.src = ""; audioEl.load(); } catch {}
+              break;
+            }
             finished = true; flush(); break;
           }
-          if (value && value.byteLength) { queue.push(value); flush(); }
+          if (value && value.byteLength) {
+            receivedBytes += value.byteLength;
+            queue.push(value);
+            flush();
+          }
         }
-      } catch {
+      } catch (error) {
         if (ttsStreamReader === reader) ttsStreamReader = null;
+        voiceDiag("mse-read-failed", { error: error?.message || String(error) });
         finished = true; flush();
       } // 被取消/网络中断：收尾，已播部分照常结束
     })();
   }, { once: true });
+  const result = await startTTSAudio(audioEl, url, opts);
+  clearTimeout(sourceOpenTimer);
+  return result;
 }
 
-async function playTTSReply(text) {
+async function requestTTS(text) {
+  voiceDiag("tts-request", { text_length: text.length });
+  const resp = await fetch(`${API}/tts/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!resp.ok) {
+    let errMsg = `HTTP ${resp.status}`;
+    try { const j = await resp.json(); errMsg = j.error || errMsg; } catch {}
+    throw new Error(errMsg);
+  }
+  voiceDiag("tts-response", {
+    ok: true,
+    content_type: resp.headers.get("content-type") || "",
+  });
+  return resp;
+}
+
+async function playTTSAsBlob(text, opts = {}) {
+  const resp = await requestTTS(text);
+  const blob = await resp.blob();
+  if (!blob.size) throw new Error("TTS returned an empty audio Blob");
+  const url = URL.createObjectURL(blob);
+  return startTTSAudio(createTTSAudio(url), url, opts);
+}
+
+async function synthesizeAndPlay(text, opts = {}) {
+  if (ttsCanStream()) {
+    try {
+      const resp = await requestTTS(text);
+      const streamed = await playTTSViaMediaSource(resp, opts);
+      if (streamed.ok || streamed.started) return { ...streamed, mode: "media-source" };
+      voiceDiag("tts-stream-fallback", {
+        reason: streamed.kind,
+        error_name: streamed.error?.name || "",
+        error: streamed.error?.message || "",
+      });
+    } catch (error) {
+      voiceDiag("tts-stream-fallback", {
+        reason: "stream-exception",
+        error_name: error?.name || "",
+        error: error?.message || String(error),
+      });
+    }
+  }
+  const blobResult = await playTTSAsBlob(text, opts);
+  return { ...blobResult, mode: "blob" };
+}
+
+async function playTTSReply(text, { playbackKey = "", reason = "whole-reply" } = {}) {
+  const normalized = String(text || "").trim();
+  if (!normalized || !sttsHasReadable(normalized)) return false;
+  if (playbackKey && startedTTSPlaybackKeys.has(playbackKey)) {
+    voiceDiag("tts-duplicate-suppressed", { playback_key: playbackKey, reason });
+    return false;
+  }
+  if (playbackKey) startedTTSPlaybackKeys.add(playbackKey);
   ttsStreamingMode = false; // 单段整段播放：stopTTS 走原有进度估算分支
-  ttsCurrentText = text;
+  ttsCurrentText = normalized;
   ttsInterruptedRemaining = '';
   ttsInterruptionApplied = false;
   ttsInterruptedOriginalContent = '';
   // 取消上一段仍在进行的流式读取，避免旧网络流继续占用
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   try {
-    const resp = await fetch(`${API}/tts/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+    if (ttsAudioEl) {
+      ttsAudioCancel?.("replaced");
+      clearTTSAudioGraph();
+      ttsAudioEl.pause();
+      try { URL.revokeObjectURL(ttsAudioEl.src); } catch {}
+    }
+    const result = await synthesizeAndPlay(normalized, {
+      manageMic: true,
+      onStart: () => voiceDiag("audio-playing", {
+        playback_key: playbackKey,
+        mode: "whole-reply",
+      }),
     });
-    if (!resp.ok) {
-      let errMsg = `HTTP ${resp.status}`;
-      try { const j = await resp.json(); errMsg = j.error || errMsg; } catch {}
-      throw new Error(errMsg);
+    voiceDiag(result.ok ? "tts-complete" : "tts-playback-failed", {
+      playback_key: playbackKey,
+      playback_mode: result.mode,
+      started: result.started,
+      kind: result.kind,
+      error_name: result.error?.name || "",
+      error: result.error?.message || "",
+      audio_context_state: result.audioContextState?.state || "",
+    });
+    if (!result.ok) {
+      if (playbackKey) startedTTSPlaybackKeys.delete(playbackKey);
+      pendingTTSPlayback = {
+        text: normalized,
+        playbackKey,
+        reason: `${reason}:${result.kind}`,
+      };
+      return false;
     }
-    if (ttsAudioEl) { clearTTSAudioGraph(); ttsAudioEl.pause(); try { URL.revokeObjectURL(ttsAudioEl.src); } catch {} }
-    // 默认流式：边下边播；不支持 MSE / 已关闭流式 → 退回整段 blob 播放
-    if (ttsCanStream() && resp.body) {
-      playTTSViaMediaSource(resp);
-    } else {
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      startTTSAudio(new Audio(url), url);
-    }
-  } catch {
+    pendingTTSPlayback = null;
+    return true;
+  } catch (error) {
+    if (playbackKey) startedTTSPlaybackKeys.delete(playbackKey);
     clearTTSAudioGraph();
     ttsCurrentText = '';
     window.bailongmaVoice?.resumeAfterMedia();
+    pendingTTSPlayback = { text: normalized, playbackKey, reason: `${reason}:exception` };
+    voiceDiag("tts-playback-failed", {
+      playback_key: playbackKey,
+      error_name: error?.name || "",
+      error: error?.message || String(error),
+    });
+    return false;
   }
 }
 
@@ -2425,16 +2831,90 @@ function playTTSReplyIfReadable(text) {
   if (plain && sttsHasReadable(plain)) playTTSReply(plain);
 }
 
+function startVoiceFallback(decision, overrideReason = "") {
+  if (!decision?.turn || !decision.text) return;
+  if (!voiceReplyCoordinator.markFallbackStarted(decision.turn)) {
+    voiceDiag("tts-fallback-suppressed", {
+      turn_id: decision.turn.id,
+      reason: "already-started",
+    });
+    return;
+  }
+  voiceDiag("tts-fallback", {
+    turn_id: decision.turn.id,
+    target_client_id: decision.turn.targetClientId,
+    playback_key: decision.playbackKey,
+    fallback_kind: decision.action,
+    reason: overrideReason || decision.reason,
+    text_length: decision.text.length,
+  });
+  playTTSReply(decision.text, {
+    playbackKey: decision.playbackKey,
+    reason: overrideReason || decision.reason,
+  });
+}
+
+function retryPendingTTSPlayback(trigger) {
+  if (!pendingTTSPlayback || document.hidden) return;
+  const pending = pendingTTSPlayback;
+  pendingTTSPlayback = null;
+  voiceDiag("tts-pending-retry", {
+    trigger,
+    playback_key: pending.playbackKey,
+    reason: pending.reason,
+  });
+  playTTSReply(pending.text, {
+    playbackKey: pending.playbackKey,
+    reason: `resume:${trigger}`,
+  });
+}
+
+function streamingSpokenPrefix() {
+  return sttsSpoken + (sttsCurSegStarted ? sttsCurSeg : "");
+}
+
+function failStreamingTTS(reason, error = null) {
+  if (!sttsTurnData) return;
+  const failedTurn = sttsTurnData;
+  const spokenPrefix = streamingSpokenPrefix();
+  const decision = voiceReplyCoordinator.streamFailed(failedTurn, { spokenPrefix, reason });
+  voiceDiag("sentence-stream-failed", {
+    turn_id: failedTurn.turn_id || "",
+    target_client_id: failedTurn.target_client_id || "",
+    reason,
+    error_name: error?.name || "",
+    error: error?.message || (error ? String(error) : ""),
+    spoken_prefix_length: spokenPrefix.length,
+    fallback_action: decision.action,
+  });
+  endStreamingTTS();
+  if (decision.action === "play_full" || decision.action === "play_remaining") {
+    startVoiceFallback(decision);
+  }
+}
+
 // ── 逐句流式 TTS 队列 ──────────────────────────────────────────────────────────
-function beginStreamingTTS() {
+function beginStreamingTTS(turnData = {}) {
   // 停掉上一段仍在进行的单段播放 / 流读取
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
-  if (ttsAudioEl) { clearTTSAudioGraph(); try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {} ttsAudioEl = null; }
+  if (ttsAudioEl) {
+    ttsAudioCancel?.("replaced");
+    clearTTSAudioGraph();
+    try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {}
+    ttsAudioEl = null;
+  }
   ttsStreamingMode = true;
   sttsActive = true;
   sttsConsumed = 0; sttsBuf = ''; sttsQueue = []; sttsPlaying = false;
   sttsSpoken = ''; sttsCurSeg = ''; sttsStreamDone = false; sttsMicSuspended = false;
+  sttsCurSegStarted = false;
+  sttsTurnData = { ...turnData };
   ttsCurrentText = '';
+  voiceDiag("sentence-stream-begin", {
+    turn_id: turnData.turn_id || "",
+    target_client_id: turnData.target_client_id || "",
+    transport: ttsCanStream() ? "media-source" : "blob",
+  });
 }
 
 // 喂入到目前为止的全部原始正文，内部只取新增的干净尾巴做切句
@@ -2451,13 +2931,13 @@ function extractSttsSentences({ flushPartial = false, markDone = false } = {}) {
   let lastIdx = 0, m;
   STTS_SENTENCE_RE.lastIndex = 0;
   while ((m = STTS_SENTENCE_RE.exec(sttsBuf)) !== null) {
-    const s = m[0].trim();
+    const s = toPlainSpeech(m[0]);
     lastIdx = STTS_SENTENCE_RE.lastIndex;
     if (s && sttsHasReadable(s)) sttsQueue.push(s);
   }
   sttsBuf = sttsBuf.slice(lastIdx);
   if (flushPartial) {
-    const tail = sttsBuf.trim();
+    const tail = toPlainSpeech(sttsBuf);
     sttsBuf = '';
     if (tail && sttsHasReadable(tail)) sttsQueue.push(tail);
   }
@@ -2474,32 +2954,34 @@ async function pumpSttsQueue() {
   }
   sttsPlaying = true;
   sttsCurSeg = seg;
+  sttsCurSegStarted = false;
   // 麦克风只在首段挂起一次（后续段之间保持挂起，避免反复重置 bargein 缓冲/预热计时）
   if (!sttsMicSuspended) { sttsMicSuspended = true; window.bailongmaVoice?.suspendForTTS?.(); }
-  const onComplete = () => {
-    sttsSpoken += seg;
-    sttsCurSeg = '';
-    sttsPlaying = false;
-    pumpSttsQueue();
-  };
   try {
-    const resp = await fetch(`${API}/tts/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: seg }),
+    const result = await synthesizeAndPlay(seg, {
+      manageMic: false,
+      onStart: () => {
+        sttsCurSegStarted = true;
+        voiceReplyCoordinator.audioStarted(sttsTurnData || {});
+        voiceDiag("sentence-audio-playing", {
+          turn_id: sttsTurnData?.turn_id || "",
+          text_length: seg.length,
+        });
+      },
     });
     if (!sttsActive) return; // 期间被打断/收尾
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    if (ttsCanStream() && resp.body) {
-      playTTSViaMediaSource(resp, { manageMic: false, onComplete });
-    } else {
-      const blob = await resp.blob();
-      if (!sttsActive) return;
-      const url = URL.createObjectURL(blob);
-      startTTSAudio(new Audio(url), url, { manageMic: false, onComplete });
+    if (!result.ok) {
+      failStreamingTTS(result.kind || "audio-playback-failed", result.error);
+      return;
     }
-  } catch {
-    onComplete(); // 本句合成失败：跳过，继续下一句，绝不卡住队列
+    sttsSpoken += seg;
+    sttsCurSeg = '';
+    sttsCurSegStarted = false;
+    sttsPlaying = false;
+    pumpSttsQueue();
+  } catch (error) {
+    if (!sttsActive) return;
+    failStreamingTTS("tts-request-failed", error);
   }
 }
 
@@ -2519,6 +3001,8 @@ function endStreamingTTS() {
   clearTTSAudioGraph();
   if (sttsMicSuspended) { sttsMicSuspended = false; window.bailongmaVoice?.resumeAfterMedia(); }
   sttsQueue = []; sttsBuf = ''; sttsCurSeg = ''; sttsSpoken = ''; sttsPlaying = false;
+  sttsCurSegStarted = false;
+  sttsTurnData = null;
 }
 
 // 打断（barge-in）：停当前句、清队列，算出"已说到哪"标 ✋，并把剩余文本留给 resumeTTSIfNoSpeech 续播。
@@ -2537,15 +3021,20 @@ function stopStreamingTTS() {
   ttsCurrentText = fullPlain;                       // 让 ✋/续播的文本计算有一致的全文基准
   ttsInterruptedRemaining = remainingPlain || fullPlain;
   applyTTSInterruption(spokenPlain.length);
-  if (ttsAudioEl) { clearTTSAudioGraph(); try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {} }
+  if (ttsAudioEl) {
+    ttsAudioCancel?.("interrupted");
+    clearTTSAudioGraph();
+    try { ttsAudioEl.pause(); URL.revokeObjectURL(ttsAudioEl.src); } catch {}
+  }
   if (ttsStreamReader) { try { ttsStreamReader.cancel(); } catch {} ttsStreamReader = null; }
   ttsAudioEl = null;
   sttsActive = false; ttsStreamingMode = false;
   sttsQueue = []; sttsBuf = ''; sttsCurSeg = ''; sttsSpoken = ''; sttsPlaying = false;
+  sttsCurSegStarted = false; sttsTurnData = null;
   sttsMicSuspended = false; // 麦克风恢复交给 voice-panel 的 resumeVoiceInputFromMedia(true)
 }
 
-resetViewBtn.addEventListener("click", resetZoom);
+resetViewBtn.addEventListener("click", () => resetGraphLayout({ reseed: true, restartAlpha: 1 }));
 
 document.querySelectorAll(".panel, .console, .theme-switcher, .reset-view").forEach(el => {
   el.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
@@ -2553,18 +3042,27 @@ document.querySelectorAll(".panel, .console, .theme-switcher, .reset-view").forE
 
 physicsControl.addEventListener("wheel", event => event.stopPropagation(), { passive: true });
 
-window.addEventListener("resize", () => {
+let graphResetTimer = null;
+function scheduleGraphLayoutReset(delay = 140) {
+  clearTimeout(graphResetTimer);
+  graphResetTimer = setTimeout(() => {
+    graphResetTimer = null;
+    resetGraphLayout({ reseed: true, restartAlpha: 1 });
+  }, delay);
+}
+
+function handleGraphViewportChange() {
+  // 先同步 SVG 外框，连续 resize 停止后再重排节点，避免拖动窗口时反复打散。
   W = window.innerWidth;
   H = window.innerHeight;
   svg.attr("width", W).attr("height", H);
-  if (!MEMORY_GRAPH_ENABLED || !sim) return;
-  sim.force("center", d3.forceCenter(W / 2, H / 2 - 10))
-     .force("x", d3.forceX(W / 2))
-     .force("y", d3.forceY(H / 2 - 10))
-     .force("radial", d3.forceRadial(180, W / 2, H / 2 - 10));
-  updateSimulationForces();
-  sim.alpha(5).restart();
-});
+  scheduleGraphLayoutReset();
+}
+
+window.addEventListener("resize", handleGraphViewportChange);
+window.addEventListener("orientationchange", () => scheduleGraphLayoutReset(260));
+window.visualViewport?.addEventListener("resize", handleGraphViewportChange);
+window.addEventListener("bailongma:panel-layout-change", () => scheduleGraphLayoutReset(440));
 
 let _lastVisualRefresh = 0;
 d3.timer(() => {
@@ -2684,10 +3182,39 @@ loadAgentProfile();
 initPersonCard();
 initDocPanel().catch((err) => console.warn('[DocPanel] init failed:', err));
 chat.restoreChatHistory();
+setInterval(() => chat?.restoreChatHistory?.(), 15_000);
+window.addEventListener("focus", () => chat?.restoreChatHistory?.());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    chat?.restoreChatHistory?.();
+    resumeJarvisAudioContext().then(state => voiceDiag("visibility-audio-context", state));
+    if (ttsAudioEl?.paused && !ttsAudioEl.ended) {
+      Promise.resolve(ttsAudioEl.play()).then(() => {
+        voiceDiag("visibility-audio-resumed");
+      }).catch(error => {
+        voiceDiag("visibility-audio-resume-failed", {
+          error_name: error?.name || "",
+          error: error?.message || String(error),
+        });
+        if (sttsActive) failStreamingTTS("visibility-resume-failed", error);
+      });
+    }
+    retryPendingTTSPlayback("visibility");
+  } else {
+    voiceDiag("page-hidden", {
+      tts_active: Boolean(ttsAudioEl),
+      sentence_stream_active: sttsActive,
+    });
+  }
+});
+window.addEventListener("pageshow", () => retryPendingTTSPlayback("pageshow"));
 chat.unlockAudioOnFirstGesture();
 
 bootstrapScene();  // Scene 架构 shell(/scene):声明式 Agent-UI 投影层。
 initPanelCollapse();
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => resetGraphLayout({ reseed: true, restartAlpha: 1 }));
+});
 initWechatPopup();
 initFeishuPopup();
 
@@ -3252,6 +3779,16 @@ function initTTSSettings() {
   const fileSandboxToggle = document.getElementById("security-file-sandbox");
   const execSandboxToggle = document.getElementById("security-exec-sandbox");
   const lanAccessToggle   = document.getElementById("security-lan-access");
+  const lanAccessToken    = document.getElementById("security-lan-token");
+  const copyLanTokenBtn   = document.getElementById("security-copy-lan-token");
+  const lanAddressSelect  = document.getElementById("security-lan-address");
+  const lanAccessUrl      = document.getElementById("security-lan-url");
+  const copyLanUrlBtn     = document.getElementById("security-copy-lan-url");
+  const lanSharePanel     = document.getElementById("security-lan-share");
+  const lanAccessQr       = document.getElementById("security-lan-access-qr");
+  const lanCertificateQr  = document.getElementById("security-lan-cert-qr");
+  const lanCertificateLink = document.getElementById("security-lan-cert-link");
+  const lanAccessHint     = document.getElementById("security-lan-hint");
   const saveSecurityBtn   = document.getElementById("settings-save-security");
   const restartSecurityBtn = document.getElementById("settings-restart-security");
   const securityFeedback  = document.getElementById("settings-security-feedback");
@@ -3329,12 +3866,58 @@ function initTTSSettings() {
     });
   }
 
+  let lanAccessEntries = [];
+
+  function showSelectedLanAccessEntry() {
+    const index = Number(lanAddressSelect?.value || 0);
+    const entry = lanAccessEntries[index] || lanAccessEntries[0] || null;
+    if (lanAccessUrl) lanAccessUrl.value = entry?.url || "";
+    if (lanAccessQr) lanAccessQr.src = entry?.qrDataUrl || "";
+    if (lanCertificateQr) lanCertificateQr.src = entry?.certificateQrDataUrl || "";
+    if (lanCertificateLink) {
+      lanCertificateLink.href = entry?.certificateUrl || "#";
+      lanCertificateLink.style.pointerEvents = entry ? "" : "none";
+    }
+    if (lanSharePanel) lanSharePanel.style.display = entry ? "" : "none";
+  }
+
+  function applyLanNetworkSettings(network = {}) {
+    const previousAddress = lanAccessEntries[Number(lanAddressSelect?.value || 0)]?.address;
+    if (lanAccessToggle) lanAccessToggle.checked = network.allowLanAccess === true;
+    if (lanAccessToken) lanAccessToken.value = network.accessToken || "";
+    lanAccessEntries = Array.isArray(network.accessEntries) ? network.accessEntries : [];
+    if (lanAddressSelect) {
+      lanAddressSelect.innerHTML = "";
+      lanAccessEntries.forEach((entry, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = entry.address;
+        lanAddressSelect.appendChild(option);
+      });
+      const previousIndex = lanAccessEntries.findIndex(entry => entry.address === previousAddress);
+      lanAddressSelect.value = String(previousIndex >= 0 ? previousIndex : 0);
+      lanAddressSelect.disabled = lanAccessEntries.length === 0;
+    }
+    showSelectedLanAccessEntry();
+    if (lanAccessHint) {
+      if (!network.allowLanAccess) {
+        lanAccessHint.textContent = "开启局域网访问并重启后，这里会生成完整链接和二维码。";
+      } else if (network.httpsEnabled) {
+        lanAccessHint.textContent = "首次使用先安装根证书并启用完全信任，再扫描访问二维码。完整链接包含访问口令，请勿发给不信任的人。";
+      } else {
+        lanAccessHint.textContent = "当前未启用 HTTPS，iPad Safari 无法使用麦克风。";
+      }
+    }
+  }
+
+  lanAddressSelect?.addEventListener("change", showSelectedLanAccessEntry);
+
   async function loadSecuritySettings() {
     try {
       const { security, network } = await fetch(`${API}/settings/security`).then(r => r.json());
       if (fileSandboxToggle) fileSandboxToggle.checked = security.fileSandbox !== false;
       if (execSandboxToggle) execSandboxToggle.checked = security.execSandbox !== false;
-      if (lanAccessToggle) lanAccessToggle.checked = network?.allowLanAccess === true;
+      applyLanNetworkSettings(network);
       restartSecurityBtn?.classList.add("hidden");
       document.querySelectorAll(".security-blocked-tool").forEach(cb => {
         cb.checked = (security.blockedTools || []).includes(cb.value);
@@ -3362,6 +3945,7 @@ function initTTSSettings() {
         });
         const data = await res.json();
         if (data.ok) {
+          applyLanNetworkSettings(data.network);
           if (data.network?.restartRequired) {
             showFeedback(securityFeedback, "已保存 — 重启后生效");
             restartSecurityBtn?.classList.remove("hidden");
@@ -3475,6 +4059,36 @@ function initTTSSettings() {
     });
   }
 
+  copyLanTokenBtn?.addEventListener("click", async () => {
+    const token = lanAccessToken?.value?.trim();
+    if (!token) {
+      showFeedback(securityFeedback, "请先开启局域网访问并保存", true);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(token);
+      showFeedback(securityFeedback, "访问口令已复制");
+    } catch {
+      showFeedback(securityFeedback, "复制失败，请手动选择口令", true);
+    }
+  });
+
+  copyLanUrlBtn?.addEventListener("click", async () => {
+    const url = lanAccessUrl?.value?.trim();
+    if (!url) {
+      showFeedback(securityFeedback, "请先开启局域网访问并重启", true);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showFeedback(securityFeedback, "完整访问链接已复制");
+    } catch {
+      lanAccessUrl.focus();
+      lanAccessUrl.select();
+      showFeedback(securityFeedback, "已选中链接，请手动复制", true);
+    }
+  });
+
   if (conversationContextSlider && conversationContextVal) {
     conversationContextSlider.addEventListener("input", () => {
       conversationContextVal.textContent = `${conversationContextSlider.value} 条`;
@@ -3566,7 +4180,12 @@ function initTTSSettings() {
     if (!voiceMicSelect) return;
     if (!navigator.mediaDevices?.enumerateDevices) {
       voiceMicSelect.disabled = true;
-      setVoiceMicStatus("当前环境不支持麦克风设备枚举，将使用系统默认麦克风。", true);
+      setVoiceMicStatus(
+        window.isSecureContext === false
+          ? "当前局域网页面不是安全上下文，Safari 无法使用麦克风；请改用 HTTPS 安全访问链接。"
+          : "当前环境不支持麦克风设备枚举，将使用系统默认麦克风。",
+        true,
+      );
       return;
     }
 
@@ -3749,6 +4368,31 @@ function initTTSSettings() {
     }
   }
 
+  function applyVoiceConfigStatus(voice = null, error = "") {
+    const el = document.getElementById("voice-config-status");
+    if (!el) return;
+    if (error) {
+      el.textContent = error;
+      el.style.color = "var(--warm)";
+      return;
+    }
+    const provider = voice?.voiceProvider || "aliyun";
+    const definitions = {
+      local: { label: "本机识别（macOS）", keys: [] },
+      aliyun: { label: "阿里云百炼 ASR", keys: ["aliyunApiKey"] },
+      volcengine: { label: "火山豆包 ASR", keys: ["volcAsrApiKey"] },
+      tencent: { label: "腾讯云 ASR", keys: ["tencentSecretId", "tencentSecretKey", "tencentAppId"] },
+      xunfei: { label: "科大讯飞 RTASR", keys: ["xunfeiAppId", "xunfeiApiKey", "xunfeiApiSecret"] },
+    };
+    const definition = definitions[provider] || definitions.aliyun;
+    const configured = definition.keys.length === 0
+      || definition.keys.every(key => voice?.[key]?.configured === true);
+    el.textContent = configured
+      ? `已读取主机配置：${definition.label}（已配置）`
+      : `已读取主机配置：${definition.label}（配置尚未完整）`;
+    el.style.color = configured ? "var(--ok, #4caf50)" : "var(--dim)";
+  }
+
   async function loadHeartbeatSettings() {
     try {
       const response = await fetch(`${API}/settings/heartbeat`);
@@ -3860,7 +4504,7 @@ function initTTSSettings() {
     const apiKey = volcAsrKeyInput.value.trim();
     const request = ++volcAsrSaveRequest;
     try {
-      const resp = await fetch("http://127.0.0.1:3721/settings/voice", {
+      const resp = await fetch(`${API}/settings/voice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ voiceProvider: "volcengine", volcAsrApiKey: apiKey }),
@@ -3914,15 +4558,22 @@ function initTTSSettings() {
 
     let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
     try {
-      const resp = await fetch("http://127.0.0.1:3721/settings/voice");
+      const resp = await fetch(`${API}/settings/voice`);
       const data = await resp.json().catch(() => ({}));
+      if (resp.status === 403) {
+        showFeedback(voiceFeedback, "局域网访问未配对，请使用带口令的访问链接", true);
+        applyVoiceConfigStatus(null, "无法读取主机配置：局域网访问尚未配对");
+      }
       if (resp.ok && data?.voice?.voiceProvider) {
         savedProvider = data.voice.voiceProvider;
         localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
+        applyVoiceConfigStatus(data.voice);
       }
       const savedVolcAsrKey = data?.voice?.volcAsrApiKey?.value;
       if (volcAsrKeyInput) volcAsrKeyInput.value = typeof savedVolcAsrKey === "string" ? savedVolcAsrKey : "";
-    } catch {}
+    } catch {
+      applyVoiceConfigStatus(null, "无法读取主机上的语音识别配置");
+    }
     if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
     applyVoiceProviderUI(savedProvider);
   }
@@ -3974,7 +4625,7 @@ function initTTSSettings() {
       if (Object.keys(body).length > 0) {
         try {
           saveVoiceBtn.disabled = true;
-          const resp = await fetch("http://127.0.0.1:3721/settings/voice", {
+          const resp = await fetch(`${API}/settings/voice`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -3992,6 +4643,7 @@ function initTTSSettings() {
           });
           if (voiceAutoDetect) voiceAutoDetect.textContent = "";
           showFeedback(voiceFeedback, "已保存");
+          loadVoiceSettings();
         } catch { showFeedback(voiceFeedback, "保存失败", true); }
         finally { saveVoiceBtn.disabled = false; }
       } else {

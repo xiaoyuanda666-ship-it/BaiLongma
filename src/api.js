@@ -1,12 +1,15 @@
 import http from 'http'
+import https from 'https'
 import crypto from 'crypto'
+import fs from 'fs'
 import { WebSocketServer } from 'ws'
 import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-server.js'
 import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
 import { getConfig, insertUISignal } from './db.js'
 import { emitEvent, setStickyEvent } from './events.js'
-import { getNetworkConfig, getSecurity, getVoiceRuntimeConfig, setSecurity } from './config.js'
+import { getLanAccessToken, getNetworkConfig, getSecurity, getVoiceRuntimeConfig, setSecurity } from './config.js'
+import { ensureLanTlsCertificates } from './lan-access.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { jsonResponse } from './api/utils.js'
 import { handleActivationRoutes } from './api/routes/activation.js'
@@ -35,6 +38,35 @@ import {
 export { emitEvent }
 
 const DEFAULT_API_HOST = '127.0.0.1'
+
+function getTlsOptions() {
+  const pfxPath = String(globalThis.process?.env?.BAILONGMA_TLS_PFX || '').trim()
+  const certPath = String(globalThis.process?.env?.BAILONGMA_TLS_CERT || '').trim()
+  const keyPath = String(globalThis.process?.env?.BAILONGMA_TLS_KEY || '').trim()
+  if (pfxPath) {
+    return {
+      pfx: fs.readFileSync(pfxPath),
+      passphrase: String(globalThis.process?.env?.BAILONGMA_TLS_PFX_PASSPHRASE || ''),
+    }
+  }
+  if (certPath && keyPath) {
+    return {
+      cert: fs.readFileSync(certPath),
+      key: fs.readFileSync(keyPath),
+    }
+  }
+  if (isLanAccessEnabled()) {
+    const files = ensureLanTlsCertificates()
+    globalThis.process.env.BAILONGMA_TLS_CERT = files.serverCert
+    globalThis.process.env.BAILONGMA_TLS_KEY = files.serverKey
+    globalThis.process.env.BAILONGMA_LAN_CA_CERT = files.rootCer
+    return {
+      cert: fs.readFileSync(files.serverCert),
+      key: fs.readFileSync(files.serverKey),
+    }
+  }
+  return null
+}
 
 function getApiHost() {
   const envHost = String(globalThis.process?.env?.BAILONGMA_HOST || '').trim()
@@ -77,7 +109,7 @@ function isAllowedOrigin(origin = '') {
 }
 
 function getAuthToken() {
-  return String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
+  return getLanAccessToken({ ensure: isLanAccessEnabled() })
 }
 
 function hasValidAuthToken(req, url) {
@@ -277,6 +309,8 @@ function attachWebSocketUpgrades(server, port, { sceneWss, cloudWss }) {
 export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = null } = {}) {
   const onActivatedCallback = onActivated
   const host = getApiHost()
+  const tlsOptions = getTlsOptions()
+  const protocol = tlsOptions ? 'https' : 'http'
   let pendingActivation = null
 
   function storePreparedActivation({ apiKey, info }) {
@@ -319,8 +353,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     onActivated: onActivatedCallback,
   }
 
-  const server = http.createServer(async (req, res) => {
-    const base = `http://localhost:${port}`
+  const requestHandler = async (req, res) => {
+    const base = `${protocol}://localhost:${port}`
     const url = new URL(req.url, base)
     const origin = req.headers.origin
 
@@ -352,14 +386,17 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
       if (!res.headersSent) jsonResponse(res, 500, { ok: false, error: err.message || 'internal error' })
       else try { res.end() } catch {}
     }
-  })
+  }
+  const server = tlsOptions
+    ? https.createServer(tlsOptions, requestHandler)
+    : http.createServer(requestHandler)
 
   const cloudWss = attachCloudASR()
   const sceneWss = attachSceneProtocol()
   attachWebSocketUpgrades(server, port, { sceneWss, cloudWss })
 
   server.listen(port, host, () => {
-    console.log(`[API] Listening at http://${host}:${port}`)
+    console.log(`[API] Listening at ${protocol}://${host}:${port}`)
     console.log('[API]   POST /message  - send message to agent')
     console.log('[API]   GET  /events   - SSE real-time stream (receive agent messages)')
     console.log('[API]   GET  /memories - query memories')

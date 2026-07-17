@@ -1,4 +1,5 @@
 import { createMarkdownBody } from "./markdown.js";
+import { getUiClientId } from "./api-client.js";
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -41,7 +42,9 @@ export function initChat({
   let audioCtx = null;
   let audioUnlocked = false;
   let warmupTimer = null;
+  let historySyncPromise = null;
   const renderedMessageIds = new Set();
+  const pendingClientMessages = new Map();
   const recentRenderedKeys = new Map();
   const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
 
@@ -242,7 +245,15 @@ export function initChat({
   }
 
   function addMsg(role, text, options = {}) {
-    const { alert = role === "jarvis", pending = true, label, messageId, source = "event", dedupe = true } = options;
+    const {
+      alert = role === "jarvis",
+      pending = true,
+      label,
+      messageId,
+      clientMessageId,
+      source = "event",
+      dedupe = true,
+    } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
     const labelText = label || defaultLabel;
     if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
@@ -250,6 +261,11 @@ export function initChat({
     div.className = `msg msg-${role}`;
     const normalizedId = normalizeMessageId(messageId);
     if (normalizedId) div.dataset.messageId = normalizedId;
+    const normalizedClientMessageId = normalizeMessageId(clientMessageId);
+    if (normalizedClientMessageId) {
+      div.dataset.clientMessageId = normalizedClientMessageId;
+      pendingClientMessages.set(normalizedClientMessageId, div);
+    }
     const labelSpan = document.createElement("span");
     labelSpan.className = "msg-label";
     labelSpan.textContent = labelText;
@@ -275,20 +291,41 @@ export function initChat({
     return true;
   }
 
-  async function restoreChatHistory() {
-    const history = await fetchChatHistory();
-    history.forEach(i => addMsg(i.role, i.text, {
-      persist: false,
-      alert: false,
-      pending: false,
-      label: i.label,
-      messageId: i.messageId,
-      source: "history",
-    }));
-    if (history.length) {
-      pendingMessageDismissed = true;
-      chatMessages.scrollTop = chatMessages.scrollHeight;
+  function reconcileSentMessage(clientMessageId, conversationId) {
+    const clientId = normalizeMessageId(clientMessageId);
+    if (!clientId) return false;
+    const element = pendingClientMessages.get(clientId)
+      || chatMessages.querySelector(`[data-client-message-id="${CSS.escape(clientId)}"]`);
+    if (!element) return false;
+    const messageId = normalizeMessageId(conversationId);
+    if (messageId) {
+      element.dataset.messageId = messageId;
+      renderedMessageIds.add(messageId);
     }
+    pendingClientMessages.delete(clientId);
+    return true;
+  }
+
+  function restoreChatHistory() {
+    if (historySyncPromise) return historySyncPromise;
+    historySyncPromise = fetchChatHistory().then(history => {
+      history.forEach(i => addMsg(i.role, i.text, {
+        persist: false,
+        alert: false,
+        pending: false,
+        label: i.label,
+        messageId: i.messageId,
+        source: "history",
+      }));
+      if (history.length) {
+        pendingMessageDismissed = true;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+      return history;
+    }).finally(() => {
+      historySyncPromise = null;
+    });
+    return historySyncPromise;
   }
 
   // text 显式传入时直接发送、不经过输入框（语音识别用：voice 完全不在 msg-input 留草稿）；
@@ -476,7 +513,12 @@ export function initChat({
     }
     // If onUserMessage returns a string, use it as the backend payload; if it returns false, skip the backend call
     const override = onUserMessage?.(content);
-    addMsg("user", prepared.displayContent || content, { label: label || undefined, dedupe: false });
+    const clientMessageId = newClientMessageId();
+    addMsg("user", prepared.displayContent || content, {
+      label: label || undefined,
+      clientMessageId,
+      dedupe: false,
+    });
     openChat();
     scheduleClose(1000);
     if (override === false) {
@@ -486,9 +528,22 @@ export function initChat({
 
     try {
       const backendText = (typeof override === "string") ? override : content;
-      const payload = { content: backendText, from_id: "ID:000001", client_message_id: newClientMessageId() };
+      const payload = {
+        content: backendText,
+        from_id: "ID:000001",
+        client_id: getUiClientId(),
+        client_message_id: clientMessageId,
+      };
       if (prepared.attachments.length && backendText === content) payload.attachments = prepared.attachments;
       if (channel) payload.channel = channel;
+      if (String(channel || "").toUpperCase() === "VOICE" || channel === "语音识别") {
+        window.bailongmaVoiceDiag?.("voice-message-post", {
+          client_id: payload.client_id,
+          client_message_id: clientMessageId,
+          channel,
+          text_length: backendText.length,
+        });
+      }
       const resp = await fetch(`${apiBase}/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -502,6 +557,15 @@ export function initChat({
         } catch {}
         throw new Error(message);
       }
+      const responseBody = await resp.json();
+      if (String(channel || "").toUpperCase() === "VOICE" || channel === "语音识别") {
+        window.bailongmaVoiceDiag?.("voice-message-accepted", {
+          client_id: responseBody.client_id || payload.client_id,
+          client_message_id: responseBody.client_message_id || clientMessageId,
+          conversation_id: responseBody.conversation_id || 0,
+        });
+      }
+      reconcileSentMessage(clientMessageId, responseBody.conversation_id || responseBody.conversationId);
     } catch (error) {
       console.warn("[send]", error.message);
       addMsg("jarvis", "发送失败 — 请检查本地服务是否运行。");
@@ -810,6 +874,7 @@ export function initChat({
     isTyping,
     openChat,
     restoreChatHistory,
+    reconcileSentMessage,
     send,
     unlockAudioOnFirstGesture,
   };

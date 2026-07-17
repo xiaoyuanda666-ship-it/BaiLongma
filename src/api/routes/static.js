@@ -80,6 +80,17 @@ function serveAsset(req, res, assetRoot, relativePrefix) {
 }
 
 export async function handleStaticRoutes(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/bailongma-lan-root-ca.cer') {
+    const caPath = String(globalThis.process?.env?.BAILONGMA_LAN_CA_CERT || '').trim()
+    if (!caPath) {
+      res.writeHead(404)
+      res.end('LAN root certificate is not configured')
+      return true
+    }
+    serveFile(res, caPath, 'LAN root certificate not found', 'no-store')
+    return true
+  }
+
   if (req.method === 'GET' && (url.pathname === '/turn-trace' || url.pathname === '/turn-trace.html')) {
     serveHtml(res, TURN_TRACE_PATH, 'turn-trace.html not found')
     return true

@@ -14,6 +14,8 @@
 //
 // 点云算法移植自 ACUI (Remix)/Voice Component.html
 
+import { apiWebSocketProtocols, apiWebSocketUrl } from './api-client.js';
+
 // ─── 球面采样（Fibonacci） ───
 function fibSphere(n, radius) {
   const pts = [];
@@ -80,7 +82,7 @@ const STATE_CFG = {
 // 放 core 作单一来源，continuous 从这里 import，避免两处各写一份。
 export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 AEC 残留）
 
-const CLOUD_WS_URL  = 'ws://127.0.0.1:3721/voice/cloud';
+const CLOUD_WS_URL = () => apiWebSocketUrl('/voice/cloud');
 const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
 
@@ -641,6 +643,10 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   }
 
   async function startMic() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('error');
+      return null;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: makeAudioConstraints(),
@@ -676,7 +682,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // ─── Cloud ASR 传输（后端代理） ───
   function connectCloudWs() {
     cloudWsIntentional = false; // 新连接建立时清除上一次主动关闭的标记
-    const ws = new WebSocket(CLOUD_WS_URL);
+    const ws = new WebSocket(CLOUD_WS_URL(), apiWebSocketProtocols());
     ws.binaryType = 'arraybuffer';
     cloudWs = ws;
 
@@ -918,7 +924,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       resetTranscriptAccumulation();
       if (transcript) transcript.textContent = '';
       cloudWsIntentional = false; // stopCloudStream(TTS) 留下的是旧连接标志，新连接要恢复自愈重连
-      const bargeinWs = new WebSocket(CLOUD_WS_URL);
+      const bargeinWs = new WebSocket(CLOUD_WS_URL(), apiWebSocketProtocols());
       bargeinWs.binaryType = 'arraybuffer';
       cloudWs = bargeinWs;
       bargeinWs.onopen = () => {

@@ -430,6 +430,8 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     conversation_id: insertedId,
     channel: channelLabel,
     external_party_id: delivery.externalTargetId || '',
+    target_client_id: context.replyClientId || '',
+    turn_id: context.replyTurnId || '',
     ...(shouldSpeakLocally ? { speak: true } : {}),
     ...(media ? { media_path: media.path, media_kind: media.kind, file_name: media.fileName } : {}),
   })
@@ -504,4 +506,10 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     error: 'external_delivery_unknown',
     reason: 'The external channel returned no authoritative success result, so delivery was not assumed.',
   })
+  if (shouldSpeakLocally) {
+    console.log(
+      `[voice-route] message turn=${context.replyTurnId || 'missing'}`
+      + ` target=${context.replyClientId || 'missing'} conversation=${insertedId || 0}`,
+    )
+  }
 }

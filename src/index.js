@@ -19,7 +19,7 @@ import { recordSelfEvolutionFromMemories } from './memory/self-evolution.js'
 import { runRuntimeInjector } from './context/runtime-injector.js'
 import { selectContextSections } from './context/section-gate.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
-import { calculateNextDueAt, autoSpeakForVoiceReply, detectOpenFollowupQuestion } from './capabilities/executor.js'
+import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
@@ -357,6 +357,9 @@ function deliverFallbackReply(msg, content, timestamp) {
     conversation_id: insertedId,
     channel,
     external_party_id: externalPartyId,
+    target_client_id: msg.clientId || '',
+    turn_id: msg.turnId || '',
+    ...(isVoiceChannel(channel) ? { speak: true } : {}),
   })
   if (externalPartyId) {
     dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
@@ -399,7 +402,7 @@ export function buildToolContext({ currentTargetId = null, conversationWindow = 
   return { currentTargetId: currentTargetId || null, allowedTargetIds: unique, visibleTargetIds: unique }
 }
 
-function buildToolContextForProcess(msg, injection) {
+function buildToolContextForProcess(msg, injection, turnId = '') {
   const currentChannel = msg?.notificationChannel || msg?.channel || null
   const voiceReply = msg?.notificationVoiceReply === true
     || msg?.voiceReply === true
@@ -425,6 +428,8 @@ function buildToolContextForProcess(msg, injection) {
     // 当前 turn 的渠道信息：execSendMessage 在 AUTO 模式下优先用这里，确保"在哪儿收的消息就回到哪儿"
     currentChannel,
     currentExternalPartyId: msg?.notificationExternalPartyId || msg?.externalPartyId || null,
+    replyClientId: msg?.clientId || null,
+    replyTurnId: turnId || null,
     voiceReply,
     currentUserMessage: msg?.content || null,
     // 自我感知信号：传给工具执行层（如 upsert_memory 守门），让"镜像污染"在写入长期记忆前就被拦截
@@ -473,7 +478,6 @@ function getProcessPriority(msg) {
 
 function deliverDirectReply(msg, content, finishTurn) {
   const timestamp = nowTimestamp()
-  if (isVoiceChannel(msg?.channel)) autoSpeakForVoiceReply(content)
   deliverFallbackReply(msg, content, timestamp)
   finishTurn?.(content)
 }
@@ -752,6 +756,7 @@ async function projectWeatherSurfaceForTurn(message = '') {
 
 async function runTurn(input, label, msg = null) {
   const sessionRef = newSessionRef()
+  if (msg) msg.turnId = sessionRef
   const turnStartedAtMs = Date.now()
   const runtimeLane = !msg ? 'l2' : (msg.runtimeLane === 'l3' ? 'l3' : 'l1')
   const isTick = runtimeLane === 'l2'
@@ -776,6 +781,7 @@ async function runTurn(input, label, msg = null) {
       label,
       content: isScheduledTask ? '' : content,
       runtimeLane,
+      target_client_id: msg?.clientId || '',
     })
   }
 
@@ -794,7 +800,12 @@ async function runTurn(input, label, msg = null) {
         task: semanticInput.slice(0, 500),
       })
     } else {
-      emitEvent('message_received', { label, input: input.slice(0, 300) })
+      emitEvent('message_received', {
+        label,
+        input: input.slice(0, 300),
+        turn_id: sessionRef,
+        target_client_id: msg?.clientId || '',
+      })
     }
   }
 
@@ -827,6 +838,7 @@ async function runTurn(input, label, msg = null) {
         // Notify frontend: remove last user message bubble + speak via TTS if available
         emitEvent('key_configured', {
           ttsText: autoConfigResult.hasTTS ? 'Voice synthesis successful' : null,
+          target_client_id: msg?.clientId || '',
         })
         finishTurn()
         return  // Skip LLM, silent round
@@ -1252,7 +1264,7 @@ async function runTurn(input, label, msg = null) {
     emitEvent('system_prompt', { content: combinePromptForPreview(systemPrompt, contextBlock), fastUserPath })
 
     // 3. Call Jarvis LLM (can be interrupted by a new message)
-    const toolContext = buildToolContextForProcess(msg, injection)
+    const toolContext = buildToolContextForProcess(msg, injection, sessionRef)
     // A reply being delivered is not evidence that a requested side effect
     // happened.  Keep a narrow action contract for clear imperative requests;
     // callLLM uses it to require a successful matching tool result before it
@@ -1405,17 +1417,34 @@ async function runTurn(input, label, msg = null) {
             // TUI/TTS before the runtime has established that anything ran.
             plainReply: mode === 'text' && localReply && !actionContract,
             speak: mode === 'text' && voiceTurn && !silentSignal && !actionContract,
+            turn_id: sessionRef,
+            target_client_id: msg?.clientId || '',
           })
+          if (mode === 'text' && voiceTurn) {
+            console.log(
+              `[voice-route] stream_start turn=${sessionRef}`
+              + ` target=${msg?.clientId || 'missing'} speak=${!silentSignal && !actionContract}`,
+            )
+          }
         } else if (event === 'chunk') {
           if (capabilityDemoTurn && curStreamMode === 'text') return
           if (curStreamMode === 'text') sawTextStream = true
-          emitEvent('stream_chunk', { text, mode: curStreamMode })
+          emitEvent('stream_chunk', {
+            text,
+            mode: curStreamMode,
+            turn_id: sessionRef,
+            target_client_id: msg?.clientId || '',
+          })
         } else if (event === 'end') {
           if (capabilityDemoTurn && curStreamMode === 'text') {
             curStreamMode = null
             return
           }
-          emitEvent('stream_end', { mode: curStreamMode })
+          emitEvent('stream_end', {
+            mode: curStreamMode,
+            turn_id: sessionRef,
+            target_client_id: msg?.clientId || '',
+          })
         }
         else if (event === 'tool_preparing') emitEvent('tool_preparing', { name })
       },
@@ -1652,9 +1681,13 @@ async function main() {
     console.log('[system] No persona set — waiting for Jarvis to self-define')
   }
 
-  // Start HTTP API — must start regardless of activation status; the activation page depends on it
+  // Start HTTP(S) API — must start regardless of activation status; the activation page depends on it
   const apiPort = Number(process.env.BAILONGMA_PORT) || 3721
-  reportStartupProgress('api', 'running', `准备监听 127.0.0.1:${apiPort}`, '正在启动本地 API')
+  const apiProtocol = process.env.BAILONGMA_TLS_PFX
+    || (process.env.BAILONGMA_TLS_CERT && process.env.BAILONGMA_TLS_KEY)
+    ? 'https'
+    : 'http'
+  reportStartupProgress('api', 'running', `准备监听 ${apiProtocol}://127.0.0.1:${apiPort}`, '正在启动本地 API')
   startAPI(apiPort, {
     getStateSnapshot: () => ({
       action: state.action,
@@ -1677,7 +1710,7 @@ async function main() {
   })
   // 仅在配置了正式预警 API 与目标地区时启用；避免把普通路径数据当作安全预警。
   startTyphoonAlertMonitor()
-  reportStartupProgress('api', 'running', `等待 127.0.0.1:${apiPort} 就绪`, '正在等待本地 API 就绪')
+  reportStartupProgress('api', 'running', `等待 ${apiProtocol}://127.0.0.1:${apiPort} 就绪`, '正在等待本地 API 就绪')
   startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
   // 恢复重启前未完成的 AI 视频生成任务（继续轮询，避免面板永远卡“生成中”）
@@ -1687,7 +1720,7 @@ async function main() {
   startTUI('ID:000001')
 
   if (config.needsActivation) {
-    console.log(`Please open http://127.0.0.1:${apiPort}/activation in your browser to activate before sending messages\n`)
+    console.log(`Please open ${apiProtocol}://127.0.0.1:${apiPort}/activation in your browser to activate before sending messages\n`)
     return
   }
 

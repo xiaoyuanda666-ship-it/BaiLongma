@@ -284,7 +284,7 @@ async function executeToolUnchecked(name, args, context = {}) {
       case 'skip_consolidation':
         return await execSkipConsolidation(args)
       case 'speak':
-        return await execSpeak(args)
+        return await execSpeak(args, context)
       case 'generate_lyrics':
         return await execGenerateLyrics(args)
       case 'generate_music':
@@ -442,7 +442,7 @@ async function execExpress({ target_id, content, channel = 'AUTO', format = 'tex
     // 语音表达：先发文字消息再生成语音
     const sendResult = await execSendMessage({ target_id, content, channel }, context)
     if (!commandResultLooksSuccessful(sendResult)) return sendResult
-    return await execSpeak({ text: content })
+    return await execSpeak({ text: content }, context)
   }
   // 默认：文字表达
   return await execSendMessage({ target_id, content, channel }, context)
@@ -621,6 +621,7 @@ function execCapabilityDemo(args = {}, context = {}) {
     channel: context.currentChannel || 'TUI',
     speak: true,
     message: true,
+    clientId: context.replyClientId || '',
   })
   emitEvent('action', {
     tool: 'capability_demo',

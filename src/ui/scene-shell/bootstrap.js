@@ -3,6 +3,7 @@
 
 import { SceneClient } from './client.js'
 import { Shell } from './shell.js'
+import { apiWebSocketProtocols, apiWebSocketUrl } from '../brain-ui/api-client.js'
 
 export function bootstrapScene() {
   // 叠加层根容器(#stage,与 styles.css 对应)。已存在则复用。
@@ -22,9 +23,7 @@ export function bootstrapScene() {
     document.head.appendChild(link)
   }
 
-  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsHost = location.host || 'localhost:3721'
-  const wsUrl = `${wsProto}//${wsHost}/scene`
+  const wsUrl = apiWebSocketUrl('/scene')
 
   let client
   const shell = new Shell(stage, {
@@ -33,7 +32,7 @@ export function bootstrapScene() {
   })
   client = new SceneClient(wsUrl, {
     onScene: (scene) => shell.applyScene(scene),
-  })
+  }, apiWebSocketProtocols())
   client.connect()
 
   return { shell, client }

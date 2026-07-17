@@ -39,11 +39,36 @@ import { getAgentName, validateAgentName } from '../agent.js'
 import { jsonResponse, readJsonBody } from '../utils.js'
 import { setConfig } from '../../db.js'
 import { getMapServiceSettings, setMapServiceSettings } from '../../map-service.js'
+import QRCode from 'qrcode'
 
 function checkLocalOrToken(req, res, url, requireLocalOrToken) {
   if (typeof requireLocalOrToken === 'function') return requireLocalOrToken(req, res, url)
   jsonResponse(res, 403, { ok: false, error: 'forbidden' })
   return false
+}
+
+async function getNetworkSettingsForUi() {
+  const network = getNetworkConfig()
+  const accessEntries = await Promise.all((network.accessEntries || []).map(async entry => ({
+    ...entry,
+    qrDataUrl: await QRCode.toDataURL(entry.url, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 320,
+      color: { dark: '#07110d', light: '#ffffff' },
+    }),
+    certificateQrDataUrl: await QRCode.toDataURL(entry.certificateUrl, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 240,
+      color: { dark: '#07110d', light: '#ffffff' },
+    }),
+  })))
+  return {
+    ...network,
+    accessEntries,
+    preferredAccessUrl: accessEntries[0]?.url || '',
+  }
 }
 
 export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken, hasAllowedAccess } = {}) {
@@ -158,7 +183,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       jsonResponse(res, 403, { ok: false, error: 'forbidden' })
       return true
     }
-    jsonResponse(res, 200, { ok: true, security: getSecurity(), network: getNetworkConfig() })
+    jsonResponse(res, 200, { ok: true, security: getSecurity(), network: await getNetworkSettingsForUi() })
     return true
   }
 
@@ -186,7 +211,11 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const network = Object.prototype.hasOwnProperty.call(updates, 'allowLanAccess')
         ? setNetworkConfig({ allowLanAccess: !!updates.allowLanAccess })
         : getNetworkConfig()
-      jsonResponse(res, 200, { ok: true, security: result, network })
+      jsonResponse(res, 200, {
+        ok: true,
+        security: result,
+        network: network.allowLanAccess ? await getNetworkSettingsForUi() : network,
+      })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }

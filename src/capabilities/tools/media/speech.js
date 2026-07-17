@@ -86,7 +86,7 @@ function normalizeTTSError(err, provider) {
   return `语音合成失败：${msg}`
 }
 
-export async function execSpeak(args) {
+export async function execSpeak(args, context = {}) {
   const rawText = args.text || args.content || args.words || args.speech
   const { filename } = args
   console.log(`[speak] args:`, JSON.stringify(args))
@@ -123,7 +123,12 @@ export async function execSpeak(args) {
   fs.writeFileSync(resolved, buffer)
 
   const relPath = `audio/${fname}`
-  emitEvent('audio_created', { path: relPath, text: text.slice(0, 60), autoPlay: true })
+  emitEvent('audio_created', {
+    path: relPath,
+    text: text.slice(0, 60),
+    autoPlay: true,
+    target_client_id: context.replyClientId || '',
+  })
   console.log(`[speak] 已生成: ${relPath}`)
   return `语音已生成：${relPath}`
 }
@@ -147,12 +152,12 @@ export function stripMarkdownForSpeech(text) {
 
 // 语音消息自动回复 TTS：检测到用户用语音输入时，通知前端播放语音
 // 由 index.js 调用，前端收到 tts_reply 事件后调用 /tts/stream 完成实际合成
-export function autoSpeakForVoiceReply(text) {
+export function autoSpeakForVoiceReply(text, { targetClientId = '' } = {}) {
   if (!text) return
   const plain = stripMarkdownForSpeech(text)
   if (!plain) return
   // 纯表情 / 标点（没有任何可读文字）不合成语音：播放确认现在用单个 emoji 代替，
   // 语音模式下不该把它念出来（\p{L}=字母含汉字，\p{N}=数字）。
   if (!/[\p{L}\p{N}]/u.test(plain)) return
-  emitEvent('tts_reply', { text: plain })
+  emitEvent('tts_reply', { text: plain, target_client_id: targetClientId })
 }

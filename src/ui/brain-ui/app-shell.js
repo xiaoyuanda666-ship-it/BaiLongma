@@ -488,6 +488,7 @@ const createSettingsModal = () => `
                 <option value="xunfei">科大讯飞 RTASR</option>
               </select>
             </div>
+            <p class="settings-hint" id="voice-config-status">正在读取主机上的语音识别配置…</p>
             <div id="voice-cred-aliyun">
               <div class="settings-row">
                 <label class="settings-label" for="voice-aliyun-key">阿里云 API Key</label>
@@ -794,7 +795,7 @@ const createSettingsModal = () => `
           </div>
           <div class="settings-section">
             <div class="settings-section-label">局域网访问</div>
-            <p class="settings-hint">允许同一局域网内的设备访问本机白龙马 API，用于多台白龙马互相通信。开启或关闭后需要重启应用生效。</p>
+            <p class="settings-hint">允许同一局域网内的设备访问本机白龙马。语音输入需要 HTTPS；远程设置和 WebSocket 使用下方口令配对。开启或关闭后需要重启应用生效。</p>
             <div class="settings-row">
               <label class="settings-label" for="security-lan-access">允许局域网访问</label>
               <label class="settings-toggle">
@@ -802,6 +803,36 @@ const createSettingsModal = () => `
                 <span class="settings-toggle-track"></span>
               </label>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="security-lan-token">访问口令</label>
+              <input class="settings-input" id="security-lan-token" type="text" readonly placeholder="开启后自动生成">
+              <button class="settings-save-btn" id="security-copy-lan-token" type="button" style="width:auto;padding:0 12px;">复制</button>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="security-lan-address">访问地址</label>
+              <select class="settings-select" id="security-lan-address"></select>
+            </div>
+            <div class="settings-row">
+              <label class="settings-label" for="security-lan-url">完整链接</label>
+              <input class="settings-input" id="security-lan-url" type="text" readonly placeholder="开启并重启后自动生成">
+              <button class="settings-save-btn" id="security-copy-lan-url" type="button" style="width:auto;padding:0 12px;">复制链接</button>
+            </div>
+            <div id="security-lan-share" style="display:none;margin-top:12px;">
+              <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start;">
+                <div style="text-align:center;">
+                  <div class="settings-hint" style="margin-bottom:6px;">① 首次使用：安装根证书</div>
+                  <img id="security-lan-cert-qr" alt="局域网根证书二维码" style="width:150px;height:150px;background:#fff;padding:6px;border-radius:8px;">
+                  <div style="margin-top:6px;">
+                    <a id="security-lan-cert-link" href="#" target="_blank" rel="noreferrer" style="color:var(--cool);font-size:12px;">打开证书地址 ↗</a>
+                  </div>
+                </div>
+                <div style="text-align:center;">
+                  <div class="settings-hint" style="margin-bottom:6px;">② 扫码访问白龙马</div>
+                  <img id="security-lan-access-qr" alt="白龙马局域网访问二维码" style="width:200px;height:200px;background:#fff;padding:6px;border-radius:8px;">
+                </div>
+              </div>
+            </div>
+            <p class="settings-hint" id="security-lan-hint">口令只用于局域网配对，请勿把完整链接或二维码发给不信任的人。</p>
           </div>
           <div class="settings-section">
             <div class="settings-section-label">工具黑名单</div>

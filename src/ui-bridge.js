@@ -41,18 +41,7 @@ export function isVoiceChannel(channel) {
 export function deliverFallbackReply(msg, content, timestamp = nowTimestamp()) {
   const channel = msg.channel || ''
   const externalPartyId = msg.externalPartyId || ''
-  emitEvent('message', {
-    from: 'consciousness',
-    to: msg.fromId,
-    content,
-    timestamp,
-    channel,
-    external_party_id: externalPartyId,
-  })
-  if (externalPartyId) {
-    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
-  }
-  insertConversation({
+  const insertedId = insertConversation({
     role: 'jarvis',
     from_id: 'jarvis',
     to_id: msg.fromId,
@@ -62,6 +51,20 @@ export function deliverFallbackReply(msg, content, timestamp = nowTimestamp()) {
     external_party_id: externalPartyId,
     open_question: detectOpenFollowupQuestion(content) ? 1 : 0,
   })
+  emitEvent('message', {
+    from: 'consciousness',
+    to: msg.fromId,
+    content,
+    timestamp,
+    conversation_id: insertedId,
+    channel,
+    external_party_id: externalPartyId,
+    target_client_id: msg.clientId || '',
+    turn_id: msg.turnId || '',
+  })
+  if (externalPartyId) {
+    dispatchSocialMessage(externalPartyId, content).catch(err => console.warn('[social] fallback send failed:', err.message))
+  }
   try {
     insertActionLog({
       timestamp,
@@ -82,7 +85,9 @@ export function deliverFallbackReply(msg, content, timestamp = nowTimestamp()) {
 
 export function deliverDirectReply(msg, content, finishTurn) {
   const timestamp = nowTimestamp()
-  if (isVoiceChannel(msg?.channel)) autoSpeakForVoiceReply(content)
+  if (isVoiceChannel(msg?.channel)) {
+    autoSpeakForVoiceReply(content, { targetClientId: msg?.clientId || '' })
+  }
   deliverFallbackReply(msg, content, timestamp)
   finishTurn?.(content)
 }

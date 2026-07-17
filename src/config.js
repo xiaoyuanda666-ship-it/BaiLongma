@@ -1,8 +1,10 @@
 import './network-proxy.js'
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { paths } from './paths.js'
 import { nowTimestamp } from './time.js'
+import { getPrivateLanAddresses } from './lan-access.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
 export const MINIMAX_PROVIDER = 'minimax'
@@ -991,6 +993,7 @@ export const config = {
   },
   network: {
     allowLanAccess: false,
+    accessToken: '',
     updatedAt: null,
   },
 }
@@ -1045,6 +1048,7 @@ if (parsedConfig) {
   if (parsedConfig.network && typeof parsedConfig.network === 'object') {
     const n = parsedConfig.network
     if (typeof n.allowLanAccess === 'boolean') config.network.allowLanAccess = n.allowLanAccess
+    if (typeof n.accessToken === 'string') config.network.accessToken = n.accessToken.trim()
     if (typeof n.updatedAt === 'string') config.network.updatedAt = n.updatedAt
   }
 }
@@ -1476,9 +1480,40 @@ export function setSecurity(updates) {
   return getSecurity()
 }
 
+export function getLanAccessToken({ ensure = false } = {}) {
+  const envToken = String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
+  if (envToken) return envToken
+  if (config.network.accessToken) return config.network.accessToken
+  if (!ensure) return ''
+
+  config.network.accessToken = crypto.randomBytes(32).toString('base64url')
+  patchConfig({ network: { ...config.network } })
+  return config.network.accessToken
+}
+
 export function getNetworkConfig() {
+  const allowLanAccess = !!config.network.allowLanAccess
+    || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.BAILONGMA_ALLOW_LAN || '').trim())
+  const accessToken = allowLanAccess ? getLanAccessToken({ ensure: true }) : ''
+  const port = Number(globalThis.process?.env?.BAILONGMA_PORT) || 3721
+  const httpsEnabled = allowLanAccess || Boolean(
+    globalThis.process?.env?.BAILONGMA_TLS_PFX
+    || (globalThis.process?.env?.BAILONGMA_TLS_CERT && globalThis.process?.env?.BAILONGMA_TLS_KEY)
+  )
+  const protocol = httpsEnabled ? 'https' : 'http'
+  const accessEntries = allowLanAccess
+    ? getPrivateLanAddresses().map(address => ({
+        address,
+        url: `${protocol}://${address}:${port}/#token=${encodeURIComponent(accessToken)}`,
+        certificateUrl: `${protocol}://${address}:${port}/bailongma-lan-root-ca.cer`,
+      }))
+    : []
   return {
-    allowLanAccess: !!config.network.allowLanAccess,
+    allowLanAccess,
+    accessToken,
+    httpsEnabled,
+    accessEntries,
+    preferredAccessUrl: accessEntries[0]?.url || '',
     updatedAt: config.network.updatedAt || null,
   }
 }
@@ -1487,6 +1522,7 @@ export function setNetworkConfig(updates) {
   const before = getNetworkConfig()
   if (typeof updates.allowLanAccess === 'boolean') {
     config.network.allowLanAccess = updates.allowLanAccess
+    if (updates.allowLanAccess) getLanAccessToken({ ensure: true })
   }
   const changed = before.allowLanAccess !== config.network.allowLanAccess
   if (changed) config.network.updatedAt = nowTimestamp()
