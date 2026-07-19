@@ -518,27 +518,27 @@ function waitForBackend(port, timeoutMs = 30000) {
   })
 }
 
-async function loadStartupPage() {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+async function loadStartupPage(targetWindow = mainWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return
   emitStartupProgress({ id: 'window', status: 'running', message: '正在打开桌面窗口' })
-  await mainWindow.loadFile(STARTUP_PAGE)
+  await targetWindow.loadFile(STARTUP_PAGE)
   emitStartupProgress({ id: 'window', status: 'done', message: '桌面窗口已打开' })
 }
 
-async function loadMainApp() {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+async function loadMainApp(targetWindow = mainWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return
   if (!backendPort) throw new Error('Backend port is not ready')
   emitStartupProgress({ id: 'interface', status: 'running', message: '正在进入界面' })
-  await mainWindow.loadURL(backendUrl(backendPort, '/'))
+  await targetWindow.loadURL(backendUrl(backendPort, '/'))
   emitStartupProgress({ id: 'interface', status: 'done', completed: true, message: '启动完成' })
 }
 
-async function createWindow({ loadStartup = true } = {}) {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
+async function createWindow({ loadStartup = true, show = true, assignAsMain = true, bounds = null } = {}) {
+  const window = new BrowserWindow({
+    ...(bounds || { width: 1280, height: 840 }),
     minWidth: 320,
     minHeight: 480,
+    show,
     backgroundColor: '#0b0b0e',
     title: 'Bailongma',
     icon: getAppIconPath(),
@@ -561,11 +561,13 @@ async function createWindow({ loadStartup = true } = {}) {
   })
 
   // 授予麦克风权限（语音输入需要）
-  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+  if (assignAsMain) mainWindow = window
+
+  window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media') return callback(true)
     callback(false)
   })
-  mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
+  window.webContents.session.setPermissionCheckHandler((webContents, permission) => {
     if (permission === 'media') return true
     return false
   })
@@ -574,33 +576,33 @@ async function createWindow({ loadStartup = true } = {}) {
   //   F12      → 切换 DevTools
   //   F11      → 切换全屏
   //   Ctrl+R   → reload（仅 dev）
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+  window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     if (input.key === 'F12') {
-      mainWindow.webContents.toggleDevTools()
+      window.webContents.toggleDevTools()
       event.preventDefault()
       return
     }
     if (input.key === 'F11') {
-      mainWindow.setFullScreen(!mainWindow.isFullScreen())
+      window.setFullScreen(!window.isFullScreen())
       event.preventDefault()
       return
     }
     if (IS_DEV && (input.control || input.meta) && input.key.toLowerCase() === 'r') {
-      mainWindow.webContents.reload()
+      window.webContents.reload()
       event.preventDefault()
       return
     }
   })
 
   const sendFullScreenState = (fullscreen) => {
-    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
-    mainWindow.webContents.send('window:fullscreen-changed', Boolean(fullscreen))
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send('window:fullscreen-changed', Boolean(fullscreen))
   }
-  mainWindow.on('enter-full-screen', () => sendFullScreenState(true))
-  mainWindow.on('leave-full-screen', () => sendFullScreenState(false))
+  window.on('enter-full-screen', () => sendFullScreenState(true))
+  window.on('leave-full-screen', () => sendFullScreenState(false))
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
       shell.openExternal(url)
       return { action: 'deny' }
@@ -608,22 +610,64 @@ async function createWindow({ loadStartup = true } = {}) {
     return { action: 'allow' }
   })
 
-  if (loadStartup) {
-    await loadStartupPage()
-  } else if (backendPort) {
-    await loadMainApp()
+  try {
+    if (loadStartup) {
+      await loadStartupPage(window)
+    } else if (backendPort) {
+      await loadMainApp(window)
+    }
+  } catch (err) {
+    if (window === mainWindow) mainWindow = null
+    if (!window.isDestroyed()) window.destroy()
+    throw err
   }
   // Windows/Linux 关闭主窗口时最小化到托盘；macOS 允许销毁窗口，Dock/托盘可重建。
-  mainWindow.on('close', (e) => {
-    if (!app.isQuiting && !IS_MAC) {
+  window.on('close', (e) => {
+    if (window === mainWindow && !app.isQuiting && !IS_MAC) {
       e.preventDefault()
-      mainWindow.hide()
+      window.hide()
     }
   })
 
-  mainWindow.on('closed', () => {
-    mainWindow = null
+  window.on('closed', () => {
+    if (window === mainWindow) mainWindow = null
   })
+
+  return window
+}
+
+async function replaceStartupWithMainApp() {
+  const startupWindow = mainWindow
+  const hasStartupWindow = startupWindow && !startupWindow.isDestroyed()
+  const bounds = hasStartupWindow ? startupWindow.getBounds() : null
+  const wasMaximized = Boolean(hasStartupWindow && startupWindow.isMaximized())
+  const wasFullScreen = Boolean(hasStartupWindow && startupWindow.isFullScreen())
+  let readyWindow = null
+
+  try {
+    // Keep the startup renderer visible while the main renderer navigates and
+    // paints off-screen. This prevents Chromium from exposing a partial white
+    // surface during the file:// -> http:// renderer swap on Windows.
+    readyWindow = await createWindow({ loadStartup: false, show: false, assignAsMain: false, bounds })
+    await readyWindow.webContents.executeJavaScript(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+      true,
+    )
+
+    const shouldShow = !hasStartupWindow || startupWindow.isVisible()
+    mainWindow = readyWindow
+    if (wasFullScreen) readyWindow.setFullScreen(true)
+    else if (wasMaximized) readyWindow.maximize()
+    if (shouldShow) {
+      readyWindow.show()
+      readyWindow.focus()
+    }
+
+    if (hasStartupWindow && !startupWindow.isDestroyed()) startupWindow.destroy()
+  } catch (err) {
+    if (readyWindow && !readyWindow.isDestroyed()) readyWindow.destroy()
+    throw err
+  }
 }
 
 async function showMainWindow() {
@@ -1492,7 +1536,7 @@ app.whenReady().then(async () => {
   }
 
   try {
-    await loadMainApp()
+    await replaceStartupWithMainApp()
   } catch (err) {
     console.error('[main] Failed to load Bailongma UI', err?.stack || err?.message || err)
     emitStartupProgress({ id: 'interface', status: 'error', error: true, message: `进入界面失败: ${err.message}` })

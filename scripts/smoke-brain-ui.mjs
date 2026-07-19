@@ -332,7 +332,9 @@ try {
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
   const l2CardStyles = await page.evaluate(() => {
     const left = getComputedStyle(document.querySelector('#panel-l1'))
+    const rail = getComputedStyle(document.querySelector('#panel-l2'))
     return {
+      railOverflow: rail.overflow,
       left: {
         backgroundColor: left.backgroundColor,
         backgroundImage: left.backgroundImage,
@@ -351,6 +353,9 @@ try {
     }
   })
   if (l2CardStyles.cards.length !== 3) throw new Error(`expected 3 L2 cards, got ${l2CardStyles.cards.length}`)
+  if (l2CardStyles.railOverflow !== 'visible') {
+    throw new Error(`L2 rail clips card shadows: overflow is ${l2CardStyles.railOverflow}`)
+  }
   if (l2CardStyles.cards.some(style => JSON.stringify(style) !== JSON.stringify(l2CardStyles.left))) {
     throw new Error(`L2 card surface styles do not match L1: ${JSON.stringify(l2CardStyles)}`)
   }

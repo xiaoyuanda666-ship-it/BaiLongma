@@ -221,7 +221,9 @@ body {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
-  overflow: hidden;
+  /* The dashboard cards provide their own surface and shadow. Keep the
+     transparent rail from clipping those shadows at its outer bounds. */
+  overflow: visible;
 }
 
 #panel-l2 .heartbeat-stats {
