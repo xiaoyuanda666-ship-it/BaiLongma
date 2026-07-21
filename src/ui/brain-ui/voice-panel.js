@@ -15,17 +15,37 @@ import { createVoiceCore } from './voice-core.js';
 import { createContinuousPolicy } from './voice-continuous.js';
 import { createPttController } from './voice-ptt.js';
 import { createWakeFlow } from './voice-wake.js';
+import { getApiToken } from './api-client.js';
 
 export function initVoicePanel({
   btnId, panelId, canvasId, statusId, transcriptId,
+  compactTranscriptId, compactPanelId,
   getChatInput, getSendBtn, getSendMessage, getLang, getAutoSend, getAutoMic,
 }) {
   const btn        = document.getElementById(btnId);
   const panel      = document.getElementById(panelId);
   const canvas     = document.getElementById(canvasId);
   const transcript = document.getElementById(transcriptId);
+  const compactTranscript = document.getElementById(compactTranscriptId);
+  const compactPanel = document.getElementById(compactPanelId);
 
   if (!panel || !canvas) return;
+
+  // 窄窗口会隐藏左侧栏，紧凑聊天区仍需同步显示实时识别文字。
+  // 使用镜像而不是搬动 voice-panel，避免与世界杯/热点等媒体模式争夺同一 DOM 节点。
+  if (transcript && compactTranscript) {
+    const syncCompactTranscript = () => {
+      const text = transcript.textContent.trim();
+      compactTranscript.textContent = text || '按住空格键开始说话';
+      compactPanel?.classList.toggle('has-transcript', Boolean(text));
+    };
+    new MutationObserver(syncCompactTranscript).observe(transcript, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    syncCompactTranscript();
+  }
 
   // ─── 组装 core + 两个模式策略 ───
   const core = createVoiceCore({ canvas, transcript, getChatInput, getSendMessage, getLang });
@@ -34,6 +54,19 @@ export function initVoicePanel({
   // 常开会话开关：点球/按钮触发，也被 PTT 在「mic 未开」时复用（保持叠加语义）
   async function toggleVoice() {
     if (!core.micActive) {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        if (transcript) {
+          transcript.textContent = window.isSecureContext === false
+            ? '局域网麦克风需要 HTTPS，请使用安全访问链接'
+            : '当前浏览器无法访问麦克风';
+        }
+        return false;
+      }
+      const isRemoteHost = !['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+      if (isRemoteHost && !getApiToken()) {
+        if (transcript) transcript.textContent = '局域网访问未配对，请使用桌面端显示的带口令链接';
+        return false;
+      }
       // startSession 内部已处理失败回退 + 状态同步
       return Boolean(await core.startSession());
     }
@@ -71,6 +104,8 @@ export function initVoicePanel({
   // ─── 承重墙：window.bailongmaVoice 接口契约（app.js 依赖，不可改形状） ───
   window.bailongmaVoice = {
     isActive: () => core.micActive,
+    // app.js 的模型事件流驱动：键盘/语音/心跳入口共用同一个思考视觉状态。
+    setThinking: (active) => core.setThinking(active),
     // 视频/音乐模式：完全停止 mic（不需要打断能力）
     suspendForMedia: () => core.suspendForMedia(),
     // TTS 模式：只停云端 ASR WebSocket，保持 mic 硬件 + ScriptProcessor，开启打断预缓冲
@@ -112,6 +147,7 @@ export function initVoicePanel({
   canvas.addEventListener('click', toggleVoice);
 
   core.setStatus('idle');
+  core.setThinking(document.body.classList.contains('model-thinking'));
   openPanel();
   if (getAutoMic?.()) toggleVoice();
 }

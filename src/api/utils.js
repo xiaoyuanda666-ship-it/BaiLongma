@@ -118,6 +118,9 @@ export function contentTypeFor(filePath) {
       return 'image/jpeg'
     case '.webp':
       return 'image/webp'
+    case '.cer':
+    case '.crt':
+      return 'application/x-x509-ca-cert'
     default:
       return 'text/plain; charset=utf-8'
   }

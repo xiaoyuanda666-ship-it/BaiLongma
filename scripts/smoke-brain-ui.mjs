@@ -14,6 +14,7 @@ function contentTypeFor(filePath) {
     case '.js': return 'text/javascript; charset=utf-8'
     case '.css': return 'text/css; charset=utf-8'
     case '.json': return 'application/json; charset=utf-8'
+    case '.png': return 'image/png'
     default: return 'text/plain; charset=utf-8'
   }
 }
@@ -48,6 +49,15 @@ function sendFile(res, filePath) {
 
 function createServer() {
   const sseClients = new Set()
+  const brainUiEvents = []
+  const persistedTypes = new Set([
+    'message_received', 'tick', 'scheduled_task', 'scheduled_task_completed', 'scheduled_task_retry', 'scheduled_task_failed',
+    'stream_start', 'stream_end', 'tool_preparing', 'tool_executing', 'tool_call',
+    'response', 'processing_preempted', 'llm_retry', 'message_requeued', 'message_dropped',
+    'error', 'protocol_violation',
+  ])
+  let brainUiPath = null
+  let heartbeatCount = 0
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1')
 
@@ -58,6 +68,11 @@ function createServer() {
 
     if (url.pathname === '/vendor/d3/d3.min.js') {
       sendFile(res, path.join(root, 'node_modules', 'd3', 'dist', 'd3.min.js'))
+      return
+    }
+
+    if (url.pathname === '/site-assets/icon.png') {
+      sendFile(res, path.join(root, 'build', 'icon.png'))
       return
     }
 
@@ -73,16 +88,33 @@ function createServer() {
       return
     }
 
+    if (url.pathname.startsWith('/src/ui/scene-shell/')) {
+      const sceneShellRoot = path.join(root, 'src', 'ui', 'scene-shell')
+      const relativePath = decodeURIComponent(url.pathname.slice('/src/ui/scene-shell/'.length))
+      const assetPath = path.resolve(sceneShellRoot, relativePath)
+      if (!isPathInside(sceneShellRoot, assetPath)) {
+        res.writeHead(403)
+        res.end('forbidden')
+        return
+      }
+      sendFile(res, assetPath)
+      return
+    }
+
     if (url.pathname === '/agent-profile') {
       sendJson(res, { name: 'SmokeLongma' })
       return
     }
 
     if (url.pathname === '/memories') {
-      sendJson(res, [
-        { id: 1, mem_id: 'm1', type: 'fact', content: 'Alpha memory', detail: 'First smoke node', created_at: new Date().toISOString() },
-        { id: 2, mem_id: 'm2', type: 'preference', content: 'Beta memory', detail: 'Second smoke node', created_at: new Date().toISOString() },
-      ])
+      sendJson(res, Array.from({ length: 64 }, (_, index) => ({
+        id: index + 1,
+        mem_id: `m${index + 1}`,
+        type: index % 3 === 0 ? 'preference' : 'fact',
+        content: `Smoke memory ${index + 1}`,
+        detail: `Graph layout smoke node ${index + 1}`,
+        created_at: new Date(Date.now() - index * 60_000).toISOString(),
+      })))
       return
     }
 
@@ -195,6 +227,24 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/events/history') {
+      sendJson(res, { ok: true, events: brainUiEvents.slice(-160), heartbeatCount })
+      return
+    }
+
+    if (url.pathname === '/settings/heartbeat') {
+      sendJson(res, {
+        ok: true,
+        heartbeat: {
+          enabled: true,
+          defaultIntervalMinutes: 20,
+          defaultIntervalMs: 20 * 60 * 1000,
+          updatedAt: null,
+        },
+      })
+      return
+    }
+
     if (url.pathname === '/events') {
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -223,6 +273,19 @@ function createServer() {
     sseClients.clear()
   }
   server.emitSse = (event) => {
+    if (event?.type === 'message_received') brainUiPath = 'l1'
+    if (event?.type === 'tick') {
+      brainUiPath = 'l2'
+      heartbeatCount += 1
+    }
+    if (event?.type === 'scheduled_task') brainUiPath = 'l3'
+    if ((brainUiPath === 'l1' || brainUiPath === 'l2' || brainUiPath === 'l3') && persistedTypes.has(event?.type)) {
+      brainUiEvents.push({ ...event, path: brainUiPath })
+      if (brainUiEvents.length > 800) brainUiEvents.shift()
+    }
+    if (['response', 'processing_preempted', 'message_dropped', 'protocol_violation'].includes(event?.type)) {
+      brainUiPath = null
+    }
     for (const client of sseClients) {
       try { client.write(`data: ${JSON.stringify(event)}\n\n`) } catch {}
     }
@@ -240,7 +303,8 @@ function listen(server) {
 const server = createServer()
 const port = await listen(server)
 const baseUrl = `http://127.0.0.1:${port}`
-const browser = await chromium.launch()
+const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined
+const browser = await chromium.launch(executablePath ? { executablePath } : {})
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } })
 await page.addInitScript(() => {
   localStorage.setItem('bailongma-memory-graph-enabled', 'true')
@@ -249,6 +313,7 @@ const errors = []
 page.on('pageerror', err => errors.push(err.message))
 page.on('console', msg => {
   if (msg.text().includes('/acui') && msg.text().includes('WebSocket connection')) return
+  if (msg.text().includes("/scene") && msg.text().includes('WebSocket connection')) return
   if (msg.text().includes('Failed to load resource: the server responded with a status of 404')) return
   if (msg.type() === 'error') errors.push(msg.text())
 })
@@ -263,6 +328,163 @@ try {
   await page.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('#graph circle', { timeout: 5000 })
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+  const l2CardStyles = await page.evaluate(() => {
+    const left = getComputedStyle(document.querySelector('#panel-l1'))
+    const rail = getComputedStyle(document.querySelector('#panel-l2'))
+    return {
+      railOverflow: rail.overflow,
+      left: {
+        backgroundColor: left.backgroundColor,
+        backgroundImage: left.backgroundImage,
+        boxShadow: left.boxShadow,
+        backdropFilter: left.backdropFilter,
+      },
+      cards: Array.from(document.querySelectorAll('#panel-l2 .l2-module')).map(element => {
+        const style = getComputedStyle(element)
+        return {
+          backgroundColor: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
+          boxShadow: style.boxShadow,
+          backdropFilter: style.backdropFilter,
+        }
+      }),
+    }
+  })
+  if (l2CardStyles.cards.length !== 3) throw new Error(`expected 3 L2 cards, got ${l2CardStyles.cards.length}`)
+  if (l2CardStyles.railOverflow !== 'visible') {
+    throw new Error(`L2 rail clips card shadows: overflow is ${l2CardStyles.railOverflow}`)
+  }
+  if (l2CardStyles.cards.some(style => JSON.stringify(style) !== JSON.stringify(l2CardStyles.left))) {
+    throw new Error(`L2 card surface styles do not match L1: ${JSON.stringify(l2CardStyles)}`)
+  }
+  server.emitSse({
+    type: 'heartbeat_settings_updated',
+    data: { enabled: true, defaultIntervalMinutes: 45, defaultIntervalMs: 45 * 60 * 1000 },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '45 分钟')
+  const heartbeatChartHeight = await page.locator('#heartbeat-chart').evaluate(element => element.getBoundingClientRect().height)
+  if (heartbeatChartHeight < 92) throw new Error(`heartbeat chart is too short: ${heartbeatChartHeight}px`)
+  const idleHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
+  await page.waitForTimeout(4000)
+  const settledHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
+  if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without real activity')
+  server.emitSse({ type: 'tool_executing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]')
+  await page.waitForFunction(() => {
+    const values = document.querySelector('#heartbeat-wave')?.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
+    const yValues = values.filter((_, index) => index % 2 === 1)
+    return yValues.some(y => Math.abs(y - 36) > 19)
+  })
+  server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="major"]')
+  await page.waitForFunction(() => {
+    const values = document.querySelector('#heartbeat-wave')?.getAttribute('d')?.match(/-?\d+(?:\.\d+)?/g)?.map(Number) || []
+    const yValues = values.filter((_, index) => index % 2 === 1)
+    return yValues.some(y => Math.abs(y - 36) > 24)
+  })
+  await page.waitForFunction(() => document.body.classList.contains('model-thinking'))
+  const thinkingCanvasStyle = await page.locator('.voice-canvas-card').evaluate(element => {
+    const style = getComputedStyle(element)
+    const canvas = element.querySelector('#voice-canvas')
+    const frameRect = element.getBoundingClientRect()
+    const canvasRect = canvas.getBoundingClientRect()
+    return {
+      borderRadius: style.borderRadius,
+      borderColor: style.borderColor,
+      animationName: style.animationName,
+      frameWidth: frameRect.width,
+      canvasWidth: canvasRect.width,
+      canvasBorderWidth: getComputedStyle(canvas).borderWidth,
+    }
+  })
+  if (thinkingCanvasStyle.borderRadius !== '18px') throw new Error(`voice canvas card radius mismatch: ${thinkingCanvasStyle.borderRadius}`)
+  if (thinkingCanvasStyle.animationName !== 'voice-card-thinking-glow') throw new Error('voice canvas thinking glow is not active')
+  if (thinkingCanvasStyle.frameWidth <= thinkingCanvasStyle.canvasWidth) throw new Error('voice canvas card must sit outside the canvas')
+  if (thinkingCanvasStyle.canvasBorderWidth !== '0px') throw new Error('voice canvas must not own the card border')
+  await page.waitForFunction(previousPath => (
+    document.querySelector('#heartbeat-wave')?.getAttribute('d') !== previousPath
+  ), idleHeartbeatPath)
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'read_file' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]')
+  await page.waitForFunction(() => !document.body.classList.contains('model-thinking'))
+  server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: { path: 'src/example.js' }, result: 'smoke file', ok: true }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() => document.body.classList.contains('model-thinking'))
+  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#heartbeat-count')?.textContent === '1'
+    && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
+    && document.querySelector('#cognition-state')?.dataset.state === 'done'
+    && !document.body.classList.contains('model-thinking')
+    && Boolean(document.querySelector('#heartbeat-wave')?.getAttribute('d')))
+  await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
+  server.emitSse({ type: 'message_received', data: { input: '请更新配置文件' }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor[data-beat="major"]')
+  if (await page.locator('#heartbeat-count').textContent() !== '1') {
+    throw new Error('L1 message pulse must not increment the L2 heartbeat count')
+  }
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'write_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'write_file' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_call', data: { name: 'write_file', args: { path: 'src/config-demo.js' }, result: '{"ok":true}', ok: true }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'response', data: {}, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
+    && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
+    && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
+
+  server.emitSse({
+    type: 'scheduled_task',
+    data: {
+      run_id: 11,
+      reminder_id: 7,
+      target_id: 'ID:000001',
+      task: '提醒用户喝水',
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({ type: 'stream_start', data: { mode: 'thinking' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_preparing', data: { name: 'send_message' }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'tool_executing', data: { name: 'send_message' }, ts: new Date().toISOString() })
+  server.emitSse({
+    type: 'tool_call',
+    data: {
+      name: 'send_message',
+      args: { target_id: 'ID:000001', content: '该喝水了' },
+      result: '{"ok":true}',
+      ok: true,
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({ type: 'scheduled_task_completed', data: { run_id: 11, reminder_id: 7 }, ts: new Date().toISOString() })
+  server.emitSse({ type: 'response', data: { runtimeLane: 'l3' }, ts: new Date().toISOString() })
+  await page.waitForFunction(() =>
+    document.querySelector('#l3-state')?.dataset.state === 'done'
+    && document.querySelector('#si-l2')?.textContent.includes('提醒用户喝水')
+    && !document.querySelector('#si-l1')?.textContent.includes('提醒用户喝水'))
+
+  await page.evaluate(() => {
+    localStorage.removeItem('bailongma-action-log-v1')
+    localStorage.removeItem('bailongma-heartbeat-count-v1')
+  })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() =>
+    document.querySelector('#heartbeat-count')?.textContent === '1'
+    && document.querySelector('#action-log')?.textContent.includes('读取文件 · src/example.js')
+    && document.querySelector('#action-log')?.textContent.includes('写入文件 · src/config-demo.js')
+    && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
+    && document.querySelector('#si-l1')?.textContent.includes('写入文件')
+    && document.querySelector('#cognition-state')?.textContent.includes('最近一轮完成')
+    && document.querySelector('#l3-state')?.dataset.state === 'done'
+    && document.querySelector('#si-l2')?.textContent.includes('提醒用户喝水')
+    && !document.querySelector('#si-l1')?.textContent.includes('提醒用户喝水')
+    && document.querySelector('#si-l2')?.textContent.includes('读取文件'))
   await page.fill('#msg-input', '马云是谁')
   await page.click('#send-btn')
   await page.waitForTimeout(300)
@@ -285,7 +507,13 @@ try {
     d3: Boolean(window.d3),
     nodes: document.querySelectorAll('#graph circle').length,
     links: document.querySelectorAll('#graph line').length,
-    acuiHost: Boolean(document.getElementById('acui-host')),
+    sceneStage: Boolean(document.getElementById('stage')),
+    heartbeatCount: document.querySelector('#heartbeat-count')?.textContent || '',
+    actionLog: document.querySelector('#action-log')?.textContent || '',
+    l1History: document.querySelector('#si-l1')?.textContent || '',
+    l3History: document.querySelector('#si-l2')?.textContent || '',
+    l3State: document.querySelector('#l3-state')?.textContent || '',
+    cognitionState: document.querySelector('#cognition-state')?.textContent || '',
     personCard: document.querySelector('#pc-name')?.textContent || '',
     personSummary: document.querySelector('#pc-summary')?.textContent || '',
     personKnownFor: [...document.querySelectorAll('#pc-known-list li')].map(li => li.textContent).join(' / '),
@@ -296,7 +524,15 @@ try {
 
   if (!snapshot.d3) throw new Error('d3 global missing')
   if (snapshot.nodes < 2) throw new Error(`expected at least 2 graph nodes, saw ${snapshot.nodes}`)
-  if (!snapshot.acuiHost) throw new Error('ACUI host was not bootstrapped')
+  if (!snapshot.sceneStage) throw new Error('scene shell was not bootstrapped')
+  if (snapshot.heartbeatCount !== '1') throw new Error('heartbeat monitor did not count the Tick')
+  if (!snapshot.actionLog.includes('读取文件 · src/example.js')) throw new Error('action log did not recover the file action')
+  if (!snapshot.actionLog.includes('写入文件 · src/config-demo.js')) throw new Error('action log did not recover the L1 write action')
+  if (!snapshot.l1History.includes('请更新配置文件') || !snapshot.l1History.includes('写入文件')) throw new Error('L1 processing history did not recover after reload')
+  if (snapshot.l1History.includes('提醒用户喝水')) throw new Error('L3 task leaked into L1 processing history')
+  if (!snapshot.l3History.includes('提醒用户喝水')) throw new Error('L3 task did not recover in the background cognition stream')
+  if (!snapshot.l3State.includes('L3 已完成')) throw new Error('L3 completion state did not recover after reload')
+  if (!snapshot.cognitionState.includes('最近一轮完成')) throw new Error('cognition history did not recover after reload')
   if (!snapshot.personCard.includes('马云')) throw new Error('person card did not render the requested person')
   if (!snapshot.personSummary.includes('阿里巴巴集团创始人')) throw new Error('person card did not absorb assistant summary')
   if (!snapshot.personKnownFor.includes('淘宝')) throw new Error('person card did not absorb assistant known-for items')
@@ -315,11 +551,236 @@ try {
     document.body.classList.contains('person-card-mode')
     || document.querySelector('#person-card-panel')?.classList.contains('pc-visible'))
   if (falsePersonCard) throw new Error('person card opened for a non-person introduction request')
+
+  server.emitSse({ type: 'message_received', data: { input: 'action log limit smoke' }, ts: new Date().toISOString() })
+  server.emitSse({
+    type: 'tool_call',
+    data: { name: 'send_message', args: { content: 'action-log-hidden-message' }, result: 'ok', ok: true },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'tool_call',
+    data: { name: 'ui_set', args: { id: 'action-log-hidden-surface' }, result: 'ok', ok: true },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'tool_call',
+    data: { name: 'read_file', args: { path: 'failed-action.js' }, result: 'failed', ok: false },
+    ts: new Date().toISOString(),
+  })
+  for (let index = 0; index < 60; index += 1) {
+    server.emitSse({
+      type: 'tool_call',
+      data: { name: 'read_file', args: { path: `bulk-${index}.js` }, result: 'ok', ok: true },
+      ts: new Date(Date.now() + index).toISOString(),
+    })
+  }
+  server.emitSse({ type: 'response', data: {}, ts: new Date(Date.now() + 60).toISOString() })
+  await page.waitForFunction(() => {
+    const log = document.querySelector('#action-log')
+    const entries = [...document.querySelectorAll('#action-log .action-log-entry')]
+    return !document.querySelector('#action-log-count')
+      && entries.length === 58
+      && entries[0]?.textContent.includes('bulk-2.js')
+      && entries.at(-1)?.textContent.includes('bulk-59.js')
+      && Math.abs(log.scrollHeight - log.clientHeight - log.scrollTop) <= 1
+      && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('action-log-hidden-message')
+      && !log?.textContent.includes('action-log-hidden-surface')
+      && !log?.textContent.includes('bulk-1.js')
+      && log?.textContent.includes('bulk-2.js')
+      && log?.textContent.includes('bulk-59.js')
+  })
+
+  await page.evaluate(() => localStorage.removeItem('bailongma-action-log-v1'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await page.waitForFunction(() => {
+    const log = document.querySelector('#action-log')
+    const entries = [...document.querySelectorAll('#action-log .action-log-entry')]
+    return !document.querySelector('#action-log-count')
+      && entries.length === 58
+      && entries[0]?.textContent.includes('bulk-2.js')
+      && entries.at(-1)?.textContent.includes('bulk-59.js')
+      && Math.abs(log.scrollHeight - log.clientHeight - log.scrollTop) <= 1
+      && !log?.textContent.includes('failed-action.js')
+      && !log?.textContent.includes('action-log-hidden-message')
+      && !log?.textContent.includes('action-log-hidden-surface')
+      && !log?.textContent.includes('bulk-1.js')
+      && log?.textContent.includes('bulk-2.js')
+      && log?.textContent.includes('bulk-59.js')
+  })
+
+  const themeColorSwitch = await page.evaluate(() => {
+    const probe = () => ({
+      lineType: getComputedStyle(document.querySelector('#si-l1 .line-type')).color,
+      lineTool: getComputedStyle(document.querySelector('#si-l1 .line-tool')).color,
+    })
+    document.body.dataset.theme = 'midnight'
+    const midnight = probe()
+    document.body.dataset.theme = 'sand'
+    const sand = probe()
+    document.body.dataset.theme = 'midnight'
+    const restored = probe()
+    return { midnight, sand, restored }
+  })
+  if (themeColorSwitch.midnight.lineType === themeColorSwitch.sand.lineType
+      || themeColorSwitch.midnight.lineTool === themeColorSwitch.sand.lineTool) {
+    throw new Error(`thought stream colors did not follow the theme: ${JSON.stringify(themeColorSwitch)}`)
+  }
+  if (themeColorSwitch.restored.lineType !== themeColorSwitch.midnight.lineType
+      || themeColorSwitch.restored.lineTool !== themeColorSwitch.midnight.lineTool) {
+    throw new Error(`dark theme colors were not restored: ${JSON.stringify(themeColorSwitch)}`)
+  }
+
+  await page.setViewportSize({ width: 1194, height: 834 })
+  await page.waitForTimeout(650)
+  const ipadLayout = await page.evaluate(() => {
+    const rect = selector => {
+      const value = document.querySelector(selector)?.getBoundingClientRect()
+      return value ? {
+        left: value.left,
+        right: value.right,
+        top: value.top,
+        bottom: value.bottom,
+        width: value.width,
+        height: value.height,
+      } : null
+    }
+    const circles = [...document.querySelectorAll('#graph circle')]
+    const nodeCenter = circles.length ? {
+      x: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cx') || 0), 0) / circles.length,
+      y: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cy') || 0), 0) / circles.length,
+    } : null
+    const nodeBounds = circles.length ? circles.reduce((bounds, circle) => {
+      const x = Number(circle.getAttribute('cx') || 0)
+      const y = Number(circle.getAttribute('cy') || 0)
+      const radius = Number(circle.getAttribute('r') || 0)
+      bounds.left = Math.min(bounds.left, x - radius)
+      bounds.right = Math.max(bounds.right, x + radius)
+      bounds.top = Math.min(bounds.top, y - radius)
+      bounds.bottom = Math.max(bounds.bottom, y + radius)
+      return bounds
+    }, { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity }) : null
+    return {
+      layout: window.bailongmaGraphLayout?.(),
+      leftPanel: rect('#panel-l1'),
+      rightPanel: rect('#panel-l2'),
+      console: rect('.console'),
+      nodeCenter,
+      nodeBounds,
+    }
+  })
+  if (!ipadLayout.layout?.stage) throw new Error(`iPad graph diagnostics missing: ${JSON.stringify(ipadLayout)}`)
+  if (ipadLayout.layout.viewport.width !== 1194 || ipadLayout.layout.viewport.height !== 834) {
+    throw new Error(`iPad graph viewport was not refreshed: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.left < ipadLayout.leftPanel.right
+      || ipadLayout.layout.stage.right > ipadLayout.rightPanel.left) {
+    throw new Error(`iPad graph stage overlaps side panels: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.bottom > ipadLayout.console.top) {
+    throw new Error(`iPad graph stage overlaps the composer: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (ipadLayout.layout.stage.scale >= 1) {
+    throw new Error(`iPad graph did not compact for the available stage: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (!ipadLayout.nodeCenter
+      || Math.abs(ipadLayout.nodeCenter.x - ipadLayout.layout.stage.centerX) > 110
+      || Math.abs(ipadLayout.nodeCenter.y - ipadLayout.layout.stage.centerY) > 110) {
+    throw new Error(`iPad graph nodes are not centered in the stage: ${JSON.stringify(ipadLayout)}`)
+  }
+  if (!ipadLayout.nodeBounds
+      || ipadLayout.nodeBounds.left < ipadLayout.layout.stage.left - 36
+      || ipadLayout.nodeBounds.right > ipadLayout.layout.stage.right + 36
+      || ipadLayout.nodeBounds.top < ipadLayout.layout.stage.top - 36
+      || ipadLayout.nodeBounds.bottom > ipadLayout.layout.stage.bottom + 36) {
+    throw new Error(`iPad graph nodes do not fit the stage: ${JSON.stringify(ipadLayout)}`)
+  }
+
+  await page.hover('#graph')
+  await page.mouse.wheel(0, -300)
+  await page.waitForTimeout(100)
+  const zoomedTransform = await page.locator('#graph > g').getAttribute('transform')
+  if (!zoomedTransform || zoomedTransform === 'translate(0,0) scale(1)') {
+    throw new Error(`graph zoom setup failed before resize: ${zoomedTransform}`)
+  }
+
+  await page.setViewportSize({ width: 1024, height: 768 })
+  await page.waitForTimeout(650)
+  const resizedGraph = await page.evaluate(() => ({
+    layout: window.bailongmaGraphLayout?.(),
+    transform: document.querySelector('#graph > g')?.getAttribute('transform') || '',
+    nodeCenter: (() => {
+      const circles = [...document.querySelectorAll('#graph circle')]
+      if (!circles.length) return null
+      return {
+        x: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cx') || 0), 0) / circles.length,
+        y: circles.reduce((sum, circle) => sum + Number(circle.getAttribute('cy') || 0), 0) / circles.length,
+      }
+    })(),
+  }))
+  if (resizedGraph.layout?.viewport.width !== 1024 || resizedGraph.layout?.viewport.height !== 768) {
+    throw new Error(`resized graph viewport is stale: ${JSON.stringify(resizedGraph)}`)
+  }
+  if (resizedGraph.transform && resizedGraph.transform !== 'translate(0,0) scale(1)') {
+    throw new Error(`graph zoom was not reset after resize: ${JSON.stringify(resizedGraph)}`)
+  }
+  if (!resizedGraph.nodeCenter
+      || Math.abs(resizedGraph.nodeCenter.x - resizedGraph.layout.stage.centerX) > 110
+      || Math.abs(resizedGraph.nodeCenter.y - resizedGraph.layout.stage.centerY) > 110) {
+    throw new Error(`graph nodes were not recentered after resize: ${JSON.stringify(resizedGraph)}`)
+  }
+
+  await page.setViewportSize({ width: 320, height: 480 })
+  await page.waitForTimeout(500)
+  await page.evaluate(() => {
+    document.querySelector('#chat-history')?.classList.remove('open')
+    const transcript = document.querySelector('#voice-transcript')
+    if (transcript) transcript.textContent = '这是紧凑窗口语音识别测试'
+  })
+  await page.waitForFunction(() => document.querySelector('#compact-voice-transcript')?.textContent === '这是紧凑窗口语音识别测试')
+  const compactLayout = await page.evaluate(() => {
+    const rect = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+    return {
+      bodyClass: document.body.className,
+      graphDisplay: getComputedStyle(document.querySelector('#graph')).display,
+      leftPanelDisplay: getComputedStyle(document.querySelector('#panel-l1')).display,
+      rightPanelDisplay: getComputedStyle(document.querySelector('#panel-l2')).display,
+      voiceStripDisplay: getComputedStyle(document.querySelector('#compact-voice-strip')).display,
+      historyHeight: rect('#chat-history')?.height || 0,
+      consoleHeight: rect('#chat-area')?.height || 0,
+      consoleWidth: rect('#chat-area')?.width || 0,
+      consoleLeft: rect('#chat-area')?.left || 0,
+      bodyScrollWidth: document.body.scrollWidth,
+      viewportWidth: window.innerWidth,
+      inputWidth: rect('#msg-input')?.width || 0,
+      sendRight: rect('#send-btn')?.right || 0,
+      transcriptWidth: rect('#compact-voice-transcript')?.width || 0,
+    }
+  })
+  if (compactLayout.graphDisplay !== 'none') throw new Error('compact layout must hide the memory graph')
+  if (compactLayout.leftPanelDisplay !== 'none' || compactLayout.rightPanelDisplay !== 'none') {
+    throw new Error('compact layout must hide both side panels')
+  }
+  if (compactLayout.voiceStripDisplay !== 'flex') throw new Error('compact layout voice transcript strip is hidden')
+  if (compactLayout.historyHeight < 250) throw new Error(`compact chat history collapsed: ${compactLayout.historyHeight}px`)
+  if (compactLayout.consoleHeight < 430) throw new Error(`compact console does not fill the window: ${compactLayout.consoleHeight}px`)
+  if (compactLayout.consoleWidth < 285 || compactLayout.consoleLeft > 20) {
+    throw new Error(`compact console does not span the window: ${JSON.stringify(compactLayout)}`)
+  }
+  if (compactLayout.bodyScrollWidth > compactLayout.viewportWidth || compactLayout.sendRight > compactLayout.viewportWidth) {
+    throw new Error(`compact layout overflows horizontally: ${JSON.stringify(compactLayout)}`)
+  }
+  if (compactLayout.inputWidth < 70 || compactLayout.transcriptWidth < 80) {
+    throw new Error(`compact composer or transcript is too narrow: ${JSON.stringify(compactLayout)}`)
+  }
   if (errors.length) throw new Error(`browser errors:\n${errors.join('\n')}`)
 
   console.log('[PASS] brain-ui smoke')
   console.log(JSON.stringify(snapshot, null, 2))
 } finally {
+  if (errors.length) console.error(`[brain-ui smoke diagnostics]\n${errors.join('\n')}`)
   await browser.close()
   server.closeAllSse()
   await new Promise(resolve => server.close(resolve))

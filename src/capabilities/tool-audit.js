@@ -6,7 +6,7 @@ import { previewValue, safeJsonStringify } from './tool-utils.js'
 function getExecutionSource(context = {}) {
   return context.source || context.trigger || (context.autonomous ? 'autonomous' : 'llm')
 }
-function summarizeToolExecution(name, args = {}) {
+export function summarizeToolExecution(name, args = {}) {
   switch (name) {
     case 'read_file':
       return `read_file(${args.path || args.filename || args.file_path || '?'})`
@@ -22,11 +22,24 @@ function summarizeToolExecution(name, args = {}) {
       return `exec_command(${String(args.command || args.cmd || '?').slice(0, 100)})`
     case 'install_software':
       return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 100)})`
+    case 'web_read':
     case 'fetch_url':
     case 'browser_read':
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
     case 'web_search':
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
+    case 'browser_open':
+      return `browser_open(${String(args.url || 'about:blank').slice(0, 120)})`
+    case 'browser_navigate':
+      return `browser_navigate(session=${String(args.session_id || '?').slice(0, 80)}, url=${String(args.url || '?').slice(0, 120)})`
+    case 'browser_sessions':
+      return 'browser_sessions()'
+    case 'browser_inspect':
+    case 'browser_tabs':
+    case 'browser_close':
+      return `${name}(session=${String(args.session_id || '?').slice(0, 80)})`
+    case 'browser_act':
+      return `browser_act(session=${String(args.session_id || '?').slice(0, 80)}, action=${String(args.action || '?').slice(0, 30)})`
     case 'send_message':
     case 'express':
       return `${name} -> ${args.target_id || '(unknown)'}`
@@ -53,6 +66,50 @@ function redactAuditValue(value) {
   return out
 }
 
+function sanitizeBrowserAuditUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''))
+    parsed.username = ''
+    parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.href.slice(0, 240)
+  } catch {
+    return '[redacted-invalid-url]'
+  }
+}
+
+export function sanitizeToolAuditArgs(name, args = {}) {
+  const redacted = redactAuditValue(args)
+  if (!redacted || typeof redacted !== 'object') return redacted
+  if (['browser_open', 'browser_navigate', 'browser_tabs', 'browser_close'].includes(name) && Object.prototype.hasOwnProperty.call(redacted, 'url')) {
+    redacted.url = sanitizeBrowserAuditUrl(redacted.url)
+  }
+  if (name !== 'browser_act') return redacted
+  const safe = { ...redacted }
+  // Form text can be a password, token, personal data, or arbitrary prose. It
+  // must never reach args_json/detail even when the key is merely "value".
+  if (Object.prototype.hasOwnProperty.call(safe, 'value')) safe.value = '[redacted]'
+  if (Object.prototype.hasOwnProperty.call(safe, 'values')) safe.values = '[redacted]'
+  return safe
+}
+
+function safeResultPreview(name, result, error) {
+  if (name !== 'browser_act') return previewValue(result || error, 220)
+  try {
+    const parsed = JSON.parse(String(result || '{}'))
+    return previewValue({
+      ok: parsed.ok,
+      code: parsed.code,
+      session_id: parsed.session_id,
+      page_id: parsed.page_id,
+      action: parsed.action,
+    }, 220)
+  } catch {
+    return error ? 'browser action failed' : ''
+  }
+}
+
 export function inferToolStatus(result) {
   const text = String(result ?? '').trim()
   if (!text) return 'ok'
@@ -64,29 +121,10 @@ export function inferToolStatus(result) {
 }
 
 export function writeToolAuditLog({ name, args, context, policy, status, result = '', error = '', startedAt }) {
-  const durationMs = Date.now() - startedAt
-  const detailParts = []
-  if (policy?.reason) detailParts.push(`policy=${policy.reason}`)
-  const auditArgs = redactAuditValue(args)
-  const argPreview = previewValue(auditArgs, 160)
-  if (argPreview && argPreview !== '{}') detailParts.push(`args=${argPreview}`)
-  const resultPreview = previewValue(result || error, 220)
-  if (resultPreview) detailParts.push(`result=${resultPreview}`)
+  const record = buildToolAuditRecord({ name, args, context, policy, status, result, error, startedAt })
 
   try {
-    insertActionLog({
-      timestamp: new Date(startedAt).toISOString(),
-      tool: name,
-      summary: summarizeToolExecution(name, auditArgs),
-      detail: detailParts.join(' | '),
-      status,
-      risk: policy?.risk || classifyTool(name),
-      argsJson: safeJsonStringify(auditArgs),
-      resultPreview,
-      error,
-      durationMs,
-      source: getExecutionSource(context),
-    })
+    insertActionLog(record)
   } catch (err) {
     console.warn(`[audit] failed to persist tool audit log: ${err.message}`)
   }
@@ -95,8 +133,33 @@ export function writeToolAuditLog({ name, args, context, policy, status, result 
     tool: name,
     status,
     risk: policy?.risk || classifyTool(name),
-    summary: summarizeToolExecution(name, auditArgs),
-    duration_ms: durationMs,
-    source: getExecutionSource(context),
+    summary: record.summary,
+    duration_ms: record.durationMs,
+    source: record.source,
   })
+}
+
+export function buildToolAuditRecord({ name, args, context, policy, status, result = '', error = '', startedAt }) {
+  const durationMs = Date.now() - startedAt
+  const detailParts = []
+  if (policy?.reason) detailParts.push(`policy=${policy.reason}`)
+  const auditArgs = sanitizeToolAuditArgs(name, args)
+  const argPreview = previewValue(auditArgs, 160)
+  if (argPreview && argPreview !== '{}') detailParts.push(`args=${argPreview}`)
+  const resultPreview = safeResultPreview(name, result, error)
+  if (resultPreview) detailParts.push(`result=${resultPreview}`)
+
+  return {
+      timestamp: new Date(startedAt).toISOString(),
+      tool: name,
+      summary: summarizeToolExecution(name, auditArgs),
+      detail: detailParts.join(' | '),
+      status,
+      risk: policy?.risk || classifyTool(name),
+      argsJson: safeJsonStringify(auditArgs),
+      resultPreview,
+      error: name === 'browser_act' && error ? 'browser action failed' : error,
+      durationMs,
+      source: getExecutionSource(context),
+  }
 }

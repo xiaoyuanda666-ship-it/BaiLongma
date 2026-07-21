@@ -1,10 +1,10 @@
-// Focused tests for helpers extracted from index.js.
+// Focused tests for stateful managers extracted from index.js.
 //
 // Run: node src/test-index-refactor-modules.js
 
 import assert from 'node:assert/strict'
 import { createAwakeningManager, STARTUP_SELF_CHECK_VERSION } from './awakening.js'
-import { createTaskManager, TASK_IDLE_TICK_LIMIT } from './task-manager.js'
+import { createTaskManager } from './task-manager.js'
 
 function makeConfigStore(initial = {}) {
   const store = new Map(Object.entries(initial))
@@ -17,13 +17,23 @@ function makeConfigStore(initial = {}) {
 
 function testAwakeningManager() {
   const cfg = makeConfigStore()
+  const state = { startupSelfCheck: null }
+  const events = []
+  const memories = []
+  const clearedStickyEvents = []
   const manager = createAwakeningManager({
+    state,
     getConfig: cfg.getConfig,
     setConfig: cfg.setConfig,
     nowTimestamp: () => '2026-06-21T00:00:00.000Z',
     buildDelegationAskDirections: () => 'delegate permissions?',
+    insertMemory: (memory) => memories.push(memory),
+    clearStickyEvent: (name) => clearedStickyEvents.push(name),
+    emitEvent: (type, data) => events.push({ type, data }),
   })
 
+  assert.equal(manager.version, STARTUP_SELF_CHECK_VERSION)
+  assert.equal(STARTUP_SELF_CHECK_VERSION, 'v3')
   assert.equal(manager.getAwakeningTicks(), 10)
   manager.decrementAwakeningTick()
   assert.equal(cfg.store.get('awakening_ticks_remaining'), '9')
@@ -32,23 +42,28 @@ function testAwakeningManager() {
   cfg.setConfig('awakening_exploration_index', '2')
   assert.equal(manager.buildAwakeningExplorationDirections(), 'delegate permissions?')
 
-  const state = {}
-  const first = manager.ensureStartupSelfCheckState(state)
+  const first = manager.ensureStartupSelfCheckState()
   assert.equal(first.version, STARTUP_SELF_CHECK_VERSION)
   assert.equal(first.status, 'running')
   assert.equal(first.active, true)
   assert.equal(first.attempts, 1)
   assert.equal(state.startupSelfCheck, first)
-  assert.match(manager.buildStartupSelfCheckDirections(first), /complete_startup_self_check/)
+  assert.match(manager.buildStartupSelfCheckDirections(first), /ui_set/)
 
-  manager.writeStartupSelfCheckState({
-    version: STARTUP_SELF_CHECK_VERSION,
-    status: 'completed',
-    summary: 'ok',
+  const completed = manager.completeStartupSelfCheck({
+    summary: 'all checks passed',
+    results: { filesystem: 'ok' },
   })
-  const completed = manager.ensureStartupSelfCheckState(state)
-  assert.equal(completed.active, false)
   assert.equal(completed.status, 'completed')
+  assert.equal(state.startupSelfCheck.active, false)
+  assert.equal(JSON.parse(cfg.store.get('l2_startup_self_check')).version, STARTUP_SELF_CHECK_VERSION)
+  assert.equal(memories.at(-1).mem_id, `system_l2_startup_self_check_${STARTUP_SELF_CHECK_VERSION}`)
+  assert.equal(clearedStickyEvents.at(-1), 'startup_self_check_started')
+  assert.equal(events.at(-1).type, 'startup_self_check_completed')
+
+  const restored = manager.ensureStartupSelfCheckState()
+  assert.equal(restored.active, false)
+  assert.equal(restored.status, 'completed')
 }
 
 function testTaskManager() {
@@ -56,7 +71,6 @@ function testTaskManager() {
   const state = {
     task: null,
     taskSteps: [],
-    taskIdleTickCount: 0,
     lastTaskRefreshTick: 99,
     tickCounter: 7,
     threadState: { threads: [], foregroundId: null, commitments: [] },
@@ -65,7 +79,6 @@ function testTaskManager() {
   const memories = []
   let saveCount = 0
   let closeArgs = null
-
   const manager = createTaskManager({
     state,
     getConfig: cfg.getConfig,
@@ -84,33 +97,35 @@ function testTaskManager() {
   assert.deepEqual(state.taskSteps.map(s => s.status), ['pending', 'pending'])
   assert.equal(cfg.store.get('current_task'), 'Refactor index.js')
   assert.equal(cfg.store.get('current_task_commitment_id'), 'commit-7')
-  assert.equal(state.taskCommitmentId, 'commit-7')
   assert.equal(saveCount, 1)
   assert.equal(events.at(-1).type, 'task_set')
 
-  const progress = manager.updateTaskStep(0, 'done', 'moved')
-  assert.equal(progress.progress, '1/2')
-  assert.equal(progress.allTerminal, false)
-  assert.equal(progress.nextIndex, 1)
-  assert.equal(state.task, 'Refactor index.js')
+  const firstStep = manager.updateTaskStep(0, 'done', 'moved')
+  assert.equal(firstStep.progress, '1/2')
+  assert.equal(firstStep.allTerminal, false)
+  assert.equal(firstStep.nextIndex, 1)
 
-  const complete = manager.updateTaskStep(1, 'done', 'moved')
-  assert.equal(complete.allTerminal, true)
+  const finalStep = manager.updateTaskStep(1, 'done', 'moved')
+  assert.equal(finalStep.allTerminal, true)
+  assert.equal(state.task, 'Refactor index.js', 'terminal steps must not implicitly complete the task')
+  assert.equal(state.taskSteps.length, 2)
+
+  manager.completeTask('manager extraction complete')
   assert.equal(state.task, null)
   assert.equal(state.taskSteps.length, 0)
-  assert.equal(state.taskIdleTickCount, 0)
   assert.equal(cfg.store.get('current_task'), '')
   assert.equal(cfg.store.get('current_task_steps'), '[]')
   assert.deepEqual(closeArgs, { commitmentId: 'commit-7', status: 'done' })
   assert.equal(memories.at(-1).event_type, 'task_complete')
-  assert.match(events.at(-1).data.summary, /Auto-cleared/)
+  assert.equal(events.at(-1).type, 'task_cleared')
 
   manager.setTaskFromMarker(' marker task ')
   assert.equal(state.task, 'marker task')
+  assert.deepEqual(state.taskSteps, [])
   manager.clearTaskFromMarker()
   assert.equal(state.task, null)
+  assert.deepEqual(state.taskSteps, [])
   assert.equal(closeArgs.status, 'done')
-  assert.equal(TASK_IDLE_TICK_LIMIT, 5)
 }
 
 testAwakeningManager()

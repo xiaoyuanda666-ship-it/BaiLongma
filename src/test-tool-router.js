@@ -6,6 +6,8 @@
 
 import { selectTools } from './memory/tool-router.js'
 
+const WEB_TOOL_NAMES = ['web_search', 'web_read']
+
 let failed = 0
 function assert(cond, label) {
   if (!cond) {
@@ -37,7 +39,7 @@ function hasNone(tools, names) {
   assert(hasAll(tools, ['read_file', 'write_file', 'list_dir']),
     `1) filesystem keywords → fs group injected (got: ${tools.join(',')})`)
   assert(has(tools, 'send_message'), '1) core send_message present')
-  assert(has(tools, 'search_memory'), '1) senderId present → search_memory in')
+  assert(!has(tools, 'search_memory'), '1) ordinary filesystem request does not expose memory diagnostics')
 }
 
 // ====== 2) Web 触发 ======
@@ -47,8 +49,8 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
   })
-  assert(hasAll(tools, ['web_search', 'fetch_url', 'browser_read']),
-    `2) web keywords → web group injected (got: ${tools.join(',')})`)
+  assert(hasAll(tools, ['web_search', 'web_read']) && hasNone(tools, ['fetch_url', 'browser_read']),
+    `2) stateless search → search + read injected (got: ${tools.join(',')})`)
   assert(hasNone(tools, ['exec_command', 'kill_process']),
     '2) exec group not over-triggered')
 }
@@ -64,17 +66,19 @@ function hasNone(tools, names) {
     `3) reminder keyword → manage_reminder injected (got: ${tools.join(',')})`)
 }
 
-// ====== 4) 短闲聊 → Fallback 安全网 ======
+// ====== 4) 短闲聊 → 真正精简基线 ======
 {
   const tools = selectTools({
     messageBody: '闲聊两句',
     isTick: false,
     senderId: 'ID:000001',
   })
-  // 没有强意图关键词，fallback 应该补 web + filesystem
-  assert(hasAll(tools, ['web_search', 'read_file']),
-    `4) sparse msg → fallback adds web + fs (got: ${tools.join(',')})`)
+  // 没有强意图关键词时，不应补 web/filesystem；Agent 可经 find_tool 按需发现。
+  assert(hasNone(tools, ['web_search', 'read_file', 'write_file', 'delete_file', 'make_dir']),
+    `4) sparse msg stays sparse (got: ${tools.join(',')})`)
   assert(has(tools, 'send_message'), '4) core still present')
+  assert(hasNone(tools, ['set_task', 'search_memory', 'probe_memory', 'voice_retire']),
+    '4) sparse msg excludes task, memory diagnostics, and voice-only tool')
 }
 
 // ====== 5) TICK 精简基线 + 按需发现 ======
@@ -89,7 +93,7 @@ function hasNone(tools, names) {
   assert(has(tools, 'find_tool'), '5) TICK has capability discovery')
   assert(has(tools, 'search_memory'), '5) TICK has search_memory')
   assert(has(tools, 'set_tick_interval'), '5) TICK has set_tick_interval')
-  assert(tools.length === 9, `5) clean TICK baseline stays compact at 9 tools (got ${tools.length}: ${tools.join(',')})`)
+  assert(tools.length === 7, `5) clean TICK baseline stays compact at 7 tools (got ${tools.length}: ${tools.join(',')})`)
   assert(hasNone(tools, [
     'web_search', 'read_file', 'manage_reminder', 'manage_prefetch_task',
     'hotspot_mode', 'exec_command', 'install_tool', 'media_mode',
@@ -125,7 +129,7 @@ function hasNone(tools, names) {
     '6) hasTask also unlocks focus_banner')
 }
 
-// ====== 6b) hasTask=false → 只 set_task（opener） ======
+// ====== 6b) 无任务闲聊不暴露 set_task；明确任务意图才给 ======
 {
   const tools = selectTools({
     messageBody: '正常闲聊',
@@ -133,9 +137,37 @@ function hasNone(tools, names) {
     senderId: 'ID:000001',
     hasTask: false,
   })
-  assert(has(tools, 'set_task'), '6b) no task → set_task still available (opener)')
+  assert(!has(tools, 'set_task'), '6b) no task + no task intent → set_task omitted')
   assert(hasNone(tools, ['complete_task', 'update_task_step']),
     '6b) no task → no complete_task / update_task_step')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '帮我创建一个多步任务，分阶段完成这个项目',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(has(tools, 'set_task'), '6c) explicit task intent → set_task injected')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '你还记得我们之前说过的部署方案吗？',
+    isTick: false,
+    senderId: 'ID:000001',
+  })
+  assert(hasAll(tools, ['search_memory', 'probe_memory']), '6d) explicit memory intent → memory tools injected')
+}
+
+{
+  const tools = selectTools({
+    messageBody: '先这样，再见',
+    isTick: false,
+    senderId: 'ID:000001',
+    isVoiceTurn: true,
+  })
+  assert(has(tools, 'voice_retire'), '6e) voice turn → voice_retire injected')
 }
 
 // ====== 7) Installed 工具：用户轮直给，Tick 按需发现 ======
@@ -178,12 +210,20 @@ function hasNone(tools, names) {
     isTick: false,
     senderId: 'ID:000001',
     recentActionLog: [
-      { tool: 'fetch_url', timestamp: '2026-05-19T10:00:00Z' },
-      { tool: 'browser_read', timestamp: '2026-05-19T10:01:00Z' },
+      { tool: 'web_search', timestamp: '2026-05-19T10:00:00Z' },
+      { tool: 'web_read', timestamp: '2026-05-19T10:01:00Z' },
     ],
   })
-  assert(hasAll(tools, ['fetch_url', 'browser_read']),
-    `9) actionLog保活：上轮用过的工具被强制注入 (got: ${tools.join(',')})`)
+  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
+    `9) actionLog保活：最近一次读取保持 web_read (got: ${tools.join(',')})`)
+}
+{
+  const tools = selectTools({
+    messageBody: '继续', isTick: false,
+    recentActionLog: [{ tool: 'web_search' }, { tool: 'web_read' }],
+  })
+  assert(has(tools, 'web_read') && !has(tools, 'web_search'),
+    `9b) ActionLog 无时间戳时最后一项优先 (got: ${tools.join(',')})`)
 }
 
 // ====== 10) 多模态生成 gate：mmCaps 没配 → 不注入 ======
@@ -229,6 +269,26 @@ function hasNone(tools, names) {
     'speak', 'complete_startup_self_check', 'read_file', 'write_file',
     'web_search', 'media_mode', 'hotspot_mode',
   ]), '11) startupSelfCheckActive → fixed self-check tool set injected')
+  assert(hasNone(tools, ['web_read', 'fetch_url', 'browser_read']),
+    '11) startup self-check only injects the search fallback it actually uses')
+}
+
+// ====== 11a) deterministic web routes expose the tools needed by the workflow ======
+for (const [messageBody, expected] of [
+  ['search current news online', ['web_search', 'web_read']],
+  ['总结这个网页正文 https://example.com/article', ['web_read']],
+  ['读取这个 JavaScript 动态网页正文', ['web_read']],
+  ['搜索一下深圳最新天气', ['web_read']],
+]) {
+  const tools = selectTools({ messageBody, isTick: false })
+  assert(hasAll(tools, expected) && WEB_TOOL_NAMES.filter(name => !expected.includes(name)).every(name => !has(tools, name)),
+    `11a) ${messageBody} → ${expected.join(' + ')} (got: ${tools.join(',')})`)
+}
+
+{
+  const tools = selectTools({ messageBody: 'search online then open website and click the first link', isTick: false })
+  assert(hasAll(tools, ['web_search', 'web_read', 'browser_open', 'browser_navigate', 'browser_act']),
+    `11a2) combined search + interaction keeps both capability sets (got: ${tools.join(',')})`)
 }
 
 // ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======

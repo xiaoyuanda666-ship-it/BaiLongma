@@ -15,13 +15,16 @@ import {
   searchMemories,
 } from '../db.js'
 import { getInstalledToolNames } from '../capabilities/marketplace/index.js'
-import { PRIMARY_USER_ID, isExternalChannel } from '../identity.js'
+import { BROWSER_TOOLS, isStatefulBrowserIntent } from '../capabilities/capability-registry.js'
+import { formatBrowserRuntimeContext, getBrowserRuntimeState } from '../capabilities/tools/browser-tools.js'
+import { PRIMARY_USER_ID, isExternalChannel, isVoiceChannel } from '../identity.js'
 import { extractKeywords } from './keywords.js'
 import { stripTemporalWords } from './temporal-parser.js'
 import { selectTools } from './tool-router.js'
 import { computeSelfPerception, computeSelfSnapshot } from './self-perception.js'
 import { selectActivePolicies } from './active-policies.js'
 import { formatSelfEvolutionForPrompt } from './self-evolution.js'
+import { getContextWindowConfig } from '../config.js'
 
 // runInjector 内部用到的检索/选择/解析原语（已拆到 ./injector-retrieval.js）
 import {
@@ -88,16 +91,17 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   let userProfile = null
   let conversationWindow = []
   let senderMemories = []
+  const contextWindow = getContextWindowConfig()
 
   if (senderId) {
     personMemory = getPersonMemory(senderId)
     userProfile = getUserProfile(senderId)
-    conversationWindow = getRecentConversation(senderId, 20, 24)
+    conversationWindow = getRecentConversation(senderId, contextWindow.conversationMessageLimit, 24)
     senderMemories = getMemoriesByEntity(senderId, 10)
   } else if (message && /^TICK\s/i.test(message.trim())) {
     personMemory = getPersonMemory(PRIMARY_USER_ID)
     userProfile = getUserProfile(PRIMARY_USER_ID)
-    conversationWindow = getRecentConversationTimeline(40, L2_CONTEXT_HOURS)
+    conversationWindow = getRecentConversationTimeline(contextWindow.tickMessageLimit, L2_CONTEXT_HOURS)
     senderMemories = getMemoriesByEntity(PRIMARY_USER_ID, 10)
   }
 
@@ -192,6 +196,14 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
   // 不再用 rerankByImportance 按 salience 整体重排（详见 selectContextMemories 注释）。
   const memories = selectContextMemories(merged, { cap: mergeCap, anchorLane: 2 })
   const actionLog = getRecentActionLogs(10)
+  const browserRuntimeState = getBrowserRuntimeState()
+  const activeBrowserSessionCount = Number(browserRuntimeState?.count || 0)
+  const recentPlaywrightAction = actionLog.some(entry => BROWSER_TOOLS.includes(String(entry?.tool || '')))
+  const browserFollowup = isStatefulBrowserIntent(messageBody)
+  const browserRuntimeContext = formatBrowserRuntimeContext(browserRuntimeState, {
+    includeEmpty: activeBrowserSessionCount === 0 && (browserFollowup || recentPlaywrightAction),
+  })
+  if (browserRuntimeContext) directions.push(browserRuntimeContext)
   const activePolicies = focusText
     ? selectActivePolicies({
         focusText,
@@ -228,11 +240,14 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     senderId,
     hasTask,
     hasRecall: !!state?.prev_recall,
+    isVoiceTurn: isVoiceChannel(currentChannel),
     mmCaps,
     recentActionLog: actionLog,
     installedToolNames: installedNames,
     startupSelfCheckActive: !!state?.startupSelfCheck?.active,
     localVisualTurn: !currentChannel || !isExternalChannel(currentChannel),
+    activeBrowserSessionCount,
+    recentPlaywrightAction,
     // fastUserPath 留作未来扩展——目前从 state 上拿不到，selectTools 接受未传即 false
   })
 
@@ -302,5 +317,6 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
     selfPerception,
     selfSnapshot,
     selfEvolution,
+    browserRuntimeState,
   }
 }

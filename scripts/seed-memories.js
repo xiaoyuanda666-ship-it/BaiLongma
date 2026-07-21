@@ -72,7 +72,7 @@ const SEED_MEMORIES = [
     id: 'injector',
     type: 'knowledge',
     title: '注入器：记忆被动浮现',
-    content: '注入器在每次处理开始前自动运行，将相关记忆注入当前上下文。这不是你去"找"，而是记忆自己"来"。当你想到"天气"时，wttr.in URL 和 fetch_url 使用方式自动出现；想到某个人时，关于他的记忆自动浮现。注入的内容包括：相关记忆片段、与发送者的对话记录、任务知识库、方向提示。',
+    content: '注入器在每次处理开始前自动运行，将相关记忆注入当前上下文。这不是你去"找"，而是记忆自己"来"。当你想到"天气"时，wttr.in URL 和 web_read 使用方式自动出现；想到某个人时，关于他的记忆自动浮现。注入的内容包括：相关记忆片段、与发送者的对话记录、任务知识库、方向提示。',
     parent_id: 'system_architecture',
     children_ids: [],
     links: [
@@ -93,14 +93,14 @@ const SEED_MEMORIES = [
     content: '系统提供多个内置工具用于与外部世界交互：消息发送、网页获取、文件操作、命令执行、记忆搜索、语音合成等。每种工具有固定参数和使用约束，不应超范围使用。',
     parent_id: null,
     children_ids: [
-      'tool_send_message', 'tool_fetch_url', 'tool_write_read_file',
+      'tool_send_message', 'tool_web_read', 'tool_write_read_file',
       'tool_exec_command', 'tool_list_dir', 'tool_delete_file',
       'tool_make_dir', 'tool_kill_process', 'tool_list_processes',
       'tool_search_memory', 'tool_speak',
     ],
     links: [
       { target_id: 'tool_send_message',    relation: 'parent_of' },
-      { target_id: 'tool_fetch_url',       relation: 'parent_of' },
+      { target_id: 'tool_web_read',        relation: 'parent_of' },
       { target_id: 'tool_write_read_file', relation: 'parent_of' },
       { target_id: 'tool_exec_command',    relation: 'parent_of' },
       { target_id: 'tool_search_memory',   relation: 'parent_of' },
@@ -123,12 +123,12 @@ const SEED_MEMORIES = [
     tags: ['system', 'tool', 'kind:tool_usage'],
   },
 
-  // ── fetch_url ─────────────────────────────────────────────────
+  // ── web_read ──────────────────────────────────────────────────
   {
-    id: 'tool_fetch_url',
+    id: 'tool_web_read',
     type: 'knowledge',
-    title: 'fetch_url：获取网页',
-    content: '获取网页内容，内置缓存（天气 24h、新闻 30min、其他 1h），每次 TICK 最多主动发起 2 次新请求。参数：url（完整 URL）。返回剥离 HTML 标签后的纯文本，最多 3000 字符。已访问过的 URL 在缓存有效期内直接返回缓存，不消耗配额。可用入口：天气 https://wttr.in/Beijing?format=3、百科 https://zh.wikipedia.org/wiki/Special:Random、Google新闻 https://news.google.com/rss?hl=zh-CN。',
+    title: 'web_read：读取网页',
+    content: '读取一个已知 URL，不保留浏览器会话。默认自动先走受保护的 HTTP 读取，内容不足或需要渲染时升级到本地 Playwright，二者失败后才可选择 Jina Reader 远程兜底。静态还是动态由工具内部判断。参数：url、render（auto/http/browser）、fresh、remote_fallback。长文自动保存到 sandbox/articles/ 并返回 body_path。实时天气应使用 fresh=true 和 render=http。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [
@@ -294,7 +294,7 @@ const SEED_MEMORIES = [
     id: 'rule_no_repeat',
     type: 'self_constraint',
     title: '不重复上轮行为',
-    content: '刚做过的事不重复——TICK 到来时先检查是否有未完成任务或新消息，再决定行动。每次 TICK 前看 recentActions，避免重复上一轮的行为。探索外部信息、写日记、fetch_url 等都应轮换，不应连续多轮做同一件事。',
+    content: '刚做过的事不重复——TICK 到来时先检查是否有未完成任务或新消息，再决定行动。每次 TICK 前看 recentActions，避免重复上一轮的行为。探索外部信息、写日记、web_read 等都应轮换，不应连续多轮做同一件事。',
     parent_id: 'behavior_rules',
     children_ids: [],
     links: [
@@ -340,12 +340,12 @@ const SEED_MEMORIES = [
     id: 'skill_weather_card',
     type: 'knowledge',
     title: 'WeatherCard：天气卡片',
-    content: '当用户问到天气、温度、预报，且你已通过 fetch_url 拿到数据时，可调用 ui_show("WeatherCard", { city, temp, condition, forecast }) 把信息可视化。参数：city（城市名，字符串）、temp（当前温度数字，例如 18）、condition（天气状况，如 "晴" "多云"）、forecast（可选，未来几天数组，每项 { day, low, high, condition }）。注意：若用户只是闲聊提到天气，不要弹卡片；若你已用文字回答完且足够清晰，也不要重复弹卡片。',
+    content: '当用户问到天气、温度、预报，且你已通过 web_read 拿到数据时，可调用 ui_show("WeatherCard", { city, temp, condition, forecast }) 把信息可视化。参数：city（城市名，字符串）、temp（当前温度数字，例如 18）、condition（天气状况，如 "晴" "多云"）、forecast（可选，未来几天数组，每项 { day, low, high, condition }）。注意：若用户只是闲聊提到天气，不要弹卡片；若你已用文字回答完且足够清晰，也不要重复弹卡片。',
     parent_id: 'ui_skills',
     children_ids: [],
     links: [
       { target_id: 'ui_skills',     relation: 'child_of'   },
-      { target_id: 'tool_fetch_url', relation: 'depends_on' },
+      { target_id: 'tool_web_read', relation: 'depends_on' },
     ],
     tags: ['system', 'skill', 'skill.ui', '天气', 'weather', 'WeatherCard'],
   },
@@ -359,12 +359,12 @@ const SEED_MEMORIES = [
     id: 'tool_web_search',
     type: 'knowledge',
     title: 'web_search：联网搜索',
-    content: '搜索互联网获取当前或未知信息。参数：query（搜索词，尽量具体，含关键词/版本/时间）、limit（最多返回条数，默认 5，上限 8）。返回结构化 JSON，含标题、URL、摘要。\n\n【web_search vs fetch_url 区分】\n- 不知道确切 URL 时，先用 web_search 找到可信链接，再用 fetch_url 读取全文。\n- 已知可靠 URL（如 wttr.in、wikipedia、已收藏的 API）时，直接用 fetch_url，不要先搜索。\n- 禁止把 web_search 当搜索引擎搜到一个链接后直接播放或执行，先用 fetch_url 验证内容。\n- 每次 TICK 主动发起的新请求（搜索+获取合计）不超过 2 次，避免过度消耗。',
+    content: '搜索互联网获取当前或未知信息。参数：query（搜索词，尽量具体，含关键词/版本/时间）、limit（最多返回条数，默认 5，上限 8）。返回结构化 JSON，含标题、URL、摘要。\n\n【web_search 与 web_read】\n- 不知道确切 URL 时，先用 web_search 找到可信链接，再用 web_read 读取全文。\n- 已知可靠 URL（如 wttr.in、wikipedia、已收藏的 API）时，直接用 web_read，不要先搜索。\n- 搜索与读取可在同一轮组合；如果用户还要求点击、登录或填写，则同时使用状态化 browser_* 工具。\n- 每次 TICK 主动发起的新请求（搜索+获取合计）不超过 2 次，避免过度消耗。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [
       { target_id: 'tools_system',  relation: 'child_of'   },
-      { target_id: 'tool_fetch_url', relation: 'related_to' },
+      { target_id: 'tool_web_read', relation: 'related_to' },
     ],
     tags: ['system', 'tool', 'kind:tool_usage', 'search', 'web'],
   },
@@ -383,21 +383,6 @@ const SEED_MEMORIES = [
       { target_id: 'recognizer',   relation: 'related_to' },
     ],
     tags: ['system', 'tool', 'kind:tool_usage', 'memory', 'recall'],
-  },
-
-  // ── browser_read ──────────────────────────────────────────────
-  {
-    id: 'tool_browser_read',
-    type: 'knowledge',
-    title: 'browser_read：浏览器渲染读取',
-    content: '用真实浏览器渲染网页后读取内容，处理 JavaScript 动态加载的页面。参数：url（目标 URL）。\n\n【与 fetch_url 的区别和升级时机】\n- 先尝试 fetch_url：速度快、轻量、无副作用。\n- 如果 fetch_url 返回内容为空、被反爬拦截、或明显是 JS 渲染的单页应用，升级到 browser_read。\n- 典型需要 browser_read 的场景：微博、知乎、抖音、需要登录的页面、复杂 SPA 应用。\n- browser_read 比 fetch_url 慢 5-10 倍，会消耗更多资源，只在 fetch_url 失败时使用。',
-    parent_id: 'tools_system',
-    children_ids: [],
-    links: [
-      { target_id: 'tools_system',   relation: 'child_of'   },
-      { target_id: 'tool_fetch_url', relation: 'related_to' },
-    ],
-    tags: ['system', 'tool', 'kind:tool_usage', 'browser', 'web'],
   },
 
   // ── upsert_memory ─────────────────────────────────────────────

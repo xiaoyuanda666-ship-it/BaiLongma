@@ -49,7 +49,16 @@ const EXPERTISE_RULES = [
 ]
 
 const STYLE_RULES = [
-  { label: 'prefers Chinese conversation', patterns: [/[\u4e00-\u9fff]/] },
+  // Language preference must be explicit and durable. Merely seeing Chinese in
+  // a message does not mean the user wants every future reply in Chinese.
+  { label: 'explicitly prefers Chinese replies', patterns: [
+    /(?:以后|今后|从现在起|默认|一直|始终|总是).{0,16}(?:用中文|说中文|中文回复|中文回答)/i,
+    /(?:from now on|going forward|always|by default).{0,24}(?:reply|respond|answer|speak).{0,12}(?:in )?(?:chinese|mandarin)/i,
+  ] },
+  { label: 'explicitly prefers English replies', patterns: [
+    /(?:以后|今后|从现在起|默认|一直|始终|总是).{0,16}(?:用英文|说英文|英语回复|英文回复|英语回答|英文回答)/i,
+    /(?:from now on|going forward|always|by default).{0,24}(?:reply|respond|answer|speak).{0,12}(?:in )?english/i,
+  ] },
   { label: 'likes direct architectural analysis before implementation', patterns: [/分析一下|应该怎么做|逻辑|架构|实现一下/i] },
   { label: 'values adaptive and personalized assistance', patterns: [/用户画像|理解用户|更好地为用户服务|不断矫正|第一印象/i] },
 ]
@@ -201,6 +210,12 @@ function mergeWithPrevious(next, previous) {
 
 export function buildProfileFromSignals({ userId = PRIMARY_USER_ID, apps = [], personMemory = null, memories = [], conversation = [], actionLog = [], previous = null } = {}) {
   const appNames = apps.map(app => String(app.name || app).trim()).filter(Boolean)
+  // Communication preferences describe what the user asked for, so infer them
+  // only from user-authored conversation rows. Internal memories, assistant
+  // replies, and action logs often contain Chinese and must not set language.
+  // Rows without a role are treated as user input for backward compatibility
+  // with older callers and tests.
+  const userConversationText = textOf(conversation.filter(row => !row?.role || row.role === 'user'))
   const combinedText = [
     personMemory?.content,
     personMemory?.detail,
@@ -227,7 +242,7 @@ export function buildProfileFromSignals({ userId = PRIMARY_USER_ID, apps = [], p
   }
 
   const expertise = inferLabels(EXPERTISE_RULES, combinedText)
-  const communication_style = inferLabels(STYLE_RULES, combinedText)
+  const communication_style = inferLabels(STYLE_RULES, userConversationText)
   const projects = inferProjects(combinedText)
   const sortedRoles = applyCorrections(roles.sort((a, b) => b.confidence - a.confidence).slice(0, 5), combinedText)
   const topRole = sortedRoles[0]
@@ -268,7 +283,17 @@ export function refreshUserProfile(userId = PRIMARY_USER_ID) {
       actionLog,
       previous,
     })
-    if (profile.confidence <= 0 && previous) return previous
+    // A weak role/profile refresh used to return the previous row wholesale.
+    // That preserved the legacy false "prefers Chinese conversation" label
+    // forever. Preserve unrelated profile fields, but always replace the
+    // communication style with the freshly user-only inference.
+    if (profile.confidence <= 0 && previous) {
+      return upsertUserProfile({
+        ...previous,
+        communication_style: profile.communication_style,
+        updated_at: new Date().toISOString(),
+      })
+    }
     return upsertUserProfile(profile)
   } catch (err) {
     console.warn('[user-profile] refresh failed:', err?.message || err)

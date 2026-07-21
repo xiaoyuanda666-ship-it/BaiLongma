@@ -58,7 +58,7 @@ function unwrapDuckDuckGoUrl(url) {
 }
 
 // Bing 搜索结果常用 bing.com/ck/a?...&u=a1<base64url> 中转链接；
-// 不解包的话下游 fetch_url 会拿到跳转壳页而不是真正的目标页
+// 不解包的话下游 web_read 会拿到跳转壳页而不是真正的目标页
 function unwrapBingUrl(url) {
   try {
     if (!url || !/bing\.com\/ck\/a/i.test(url)) return url
@@ -399,7 +399,7 @@ function buildSearchPayload(query, result) {
     ok: true, tool: 'web_search', query,
     source: result.source,
     results: result.results,
-    hint: 'Open 1-3 reliable result URLs with fetch_url, then answer the user.',
+    hint: 'Open 1-3 reliable result URLs with web_read, then answer the user.',
   }
 }
 
@@ -502,6 +502,6 @@ export async function execWebSearch(args, context = {}) {
     ok: false, tool: 'web_search', query,
     error: `all search engines failed (${summary})`,
     failures,
-    hint: 'All search engines failed. Try fetch_url with a known URL, or configure SERPER_API_KEY / BRAVE_API_KEY for reliable search.',
+    hint: 'All search engines failed. Try web_read with a known URL, or configure SERPER_API_KEY / BRAVE_API_KEY for reliable search.',
   })
 }

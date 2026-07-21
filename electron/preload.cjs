@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld('bailongma', {
   },
   getZoomFactor: () => webFrame.getZoomFactor(),
   setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
+  isFullScreen: () => ipcRenderer.invoke('window:is-full-screen'),
+  onFullScreenChange: (handler) => {
+    if (typeof handler !== 'function') return () => {}
+    const listener = (_event, fullscreen) => handler(Boolean(fullscreen))
+    ipcRenderer.on('window:fullscreen-changed', listener)
+    return () => ipcRenderer.removeListener('window:fullscreen-changed', listener)
+  },
+  setTitleBarTheme: (theme) => ipcRenderer.invoke('window:set-title-bar-theme', theme),
   onUpdaterStatus: (handler) => {
     if (typeof handler !== 'function') return () => {}
     const listener = (_event, payload) => handler(payload)

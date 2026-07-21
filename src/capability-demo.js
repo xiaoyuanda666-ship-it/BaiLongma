@@ -22,18 +22,38 @@ let activeCmdWindowTitle = null
 let activeCmdPid = null
 let demoHotspotOpened = false
 
-export function runCapabilityDemo({ to = '', channel = 'TUI', speak = true, message = true } = {}) {
+export function runCapabilityDemo({
+  to = '',
+  channel = 'TUI',
+  speak = true,
+  message = true,
+  clientId = '',
+} = {}) {
   const currentRun = ++runId
   resetDemoSurfaces()
-  const sentIntro = message && deliverIntroMessage({ to, channel, text: CAPABILITY_DEMO_INTRO, speak })
-  if (!sentIntro && speak) emitEvent('tts_reply', { text: CAPABILITY_DEMO_INTRO })
+  const sentIntro = message && deliverIntroMessage({
+    to,
+    channel,
+    text: CAPABILITY_DEMO_INTRO,
+    speak,
+    clientId,
+  })
+  if (!sentIntro && speak) {
+    emitEvent('tts_reply', { text: CAPABILITY_DEMO_INTRO, target_client_id: clientId })
+  }
   void playDemo(currentRun).catch(err => {
     console.warn('[capability-demo] sequence failed:', err?.message || err)
   })
   return CAPABILITY_DEMO_INTRO
 }
 
-function deliverIntroMessage({ to = '', channel = 'TUI', text = '', speak = true } = {}) {
+function deliverIntroMessage({
+  to = '',
+  channel = 'TUI',
+  text = '',
+  speak = true,
+  clientId = '',
+} = {}) {
   if (!to || !text) return false
   const timestamp = nowTimestamp()
   const insertedId = insertConversation({
@@ -52,6 +72,7 @@ function deliverIntroMessage({ to = '', channel = 'TUI', text = '', speak = true
     conversation_id: insertedId,
     channel: channel || 'TUI',
     speak: speak === true,
+    target_client_id: clientId,
   })
   return true
 }

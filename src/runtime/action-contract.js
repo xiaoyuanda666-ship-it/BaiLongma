@@ -34,7 +34,7 @@ const CONTRACTS = [
   {
     id: 'web',
     label: '联网查询',
-    tools: ['web_search', 'fetch_url', 'browser_read'],
+    tools: ['web_search', 'web_read'],
     pattern: /(?:帮我|请|给我).{0,12}(?:上网|联网|搜索|查一下|查一查|检索|找一下|浏览).{0,40}|(?:搜索|查询|查找).{0,30}(?:网页|网站|新闻|资料|链接|网址)|\b(?:search|browse|look\s+up|fetch)\b/i,
   },
   {

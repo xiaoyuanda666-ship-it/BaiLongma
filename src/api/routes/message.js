@@ -21,6 +21,11 @@ function normalizeClientMessageId(value = '') {
   return /^[a-zA-Z0-9._:-]{8,128}$/.test(text) ? text : ''
 }
 
+function normalizeUiClientId(value = '') {
+  const text = String(value || '').trim()
+  return /^[a-zA-Z0-9._:-]{8,160}$/.test(text) ? text : ''
+}
+
 function claimInboundMessage({ fromId, channel, content, clientMessageId }) {
   const now = Date.now()
   pruneRecentInboundMessages(now)
@@ -50,6 +55,12 @@ export async function handleMessageRoutes(req, res, url) {
       return true
     }
     const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
+    const clientId = normalizeUiClientId(
+      body.client_id
+        ?? body.clientId
+        ?? req.headers['x-bailongma-client-id']
+        ?? '',
+    )
     claim = claimInboundMessage({ fromId: from_id, channel, content: queuedContent, clientMessageId })
     if (!claim.claimed) {
       jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
@@ -62,10 +73,35 @@ export async function handleMessageRoutes(req, res, url) {
     if (strictEvaluation !== undefined) meta.strictEvaluation = strictEvaluation
     if (Array.isArray(forbiddenTools)) meta.forbiddenTools = forbiddenTools
     if (enhanced.media.length) meta.attachments = enhanced.media
+    if (clientId) meta.clientId = clientId
+    if (clientMessageId) meta.clientMessageId = normalizeClientMessageId(clientMessageId)
     const queued = pushMessage(from_id, queuedContent, channel, meta)
     const conversationId = queued?.conversationId || 0
-    emitEvent('message_in', { from_id, content: queuedContent, channel, timestamp: new Date().toISOString(), conversation_id: conversationId, attachments: enhanced.media })
-    jsonResponse(res, 200, { ok: true, agent_name: getAgentName(), conversation_id: conversationId, attachments: enhanced.media })
+    if (String(channel || '').toLowerCase() === 'voice' || channel === '语音识别') {
+      console.log(
+        `[voice-route] inbound client=${clientId || 'missing'}`
+        + ` client_message=${normalizeClientMessageId(clientMessageId) || 'missing'}`
+        + ` conversation=${conversationId || 0} channel=${channel}`,
+      )
+    }
+    emitEvent('message_in', {
+      from_id,
+      content: queuedContent,
+      channel,
+      timestamp: new Date().toISOString(),
+      conversation_id: conversationId,
+      client_id: clientId,
+      client_message_id: normalizeClientMessageId(clientMessageId),
+      attachments: enhanced.media,
+    })
+    jsonResponse(res, 200, {
+      ok: true,
+      agent_name: getAgentName(),
+      conversation_id: conversationId,
+      client_id: clientId,
+      client_message_id: normalizeClientMessageId(clientMessageId),
+      attachments: enhanced.media,
+    })
   } catch (e) {
     if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
     jsonResponse(res, 400, { error: e.message })

@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.515",
+  "version": "2.1.561",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -14,12 +14,12 @@
     "start:backend": "chcp 65001 >nul && node --env-file=.env src/index.js",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "chcp 65001 >nul && node --env-file=.env --watch src/index.js",
-    "build": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
-    "build:win": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
+    "build": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
+    "build:win": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs --platform=win32 --arch=x64 && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
     "build:mac": "node scripts/build-mac.mjs",
     "build:mac:x64": "node scripts/build-mac.mjs x64",
     "build:mac:arm64": "node scripts/build-mac.mjs arm64",
-    "publish": "node scripts/prebuild-clean.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
+    "publish": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
     "test:complex-task": "electron ./src/test-complex-task.js",
@@ -28,6 +28,9 @@
     "test:tick-policy": "node ./src/test-tick-policy.js",
     "test:failed-outbound-dedupe": "node ./src/test-failed-outbound-dedupe.js",
     "test:consciousness-loop": "node ./src/test-consciousness-loop.js",
+    "test:reminder-runs": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-reminder-runs.js\"",
+    "test:scheduled-tasks": "node ./src/test-scheduled-tasks.js",
+    "test:runtime-managers": "node ./src/test-index-refactor-modules.js",
     "test:agent-skills": "node ./src/test-agent-skills.js",
     "test:tool-factory": "node ./src/test-tool-factory.js",
     "test:api-message-utf8": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-api-message-utf8.js\"",
@@ -37,7 +40,16 @@
     "test:media-modules": "node ./src/test-media-modules.js",
     "test:db-schema-module": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-db-schema-module.js\"",
     "test:voice-continuous": "node ./src/test-voice-continuous.js",
+    "test:voice-ptt": "node ./src/test-voice-ptt.js",
+    "test:voice-reply-routing": "node ./src/test-voice-reply-routing.js",
     "test:websocket-security": "node ./src/test-websocket-security.js",
+    "test:lan-api-client": "node ./src/test-lan-api-client.js",
+    "test:lan-access": "node ./src/test-lan-access.js",
+    "test:multi-client-chat": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-multi-client-chat.js\"",
+    "test:web-read": "node ./src/test-web-read.js",
+    "test:playwright-packaging": "node ./scripts/test-playwright-packaging.mjs",
+    "test:browser-core": "node ./src/test-browser-session-manager.js && node ./src/test-browser-session-integration.js",
+    "smoke:packaged-playwright": "node ./scripts/smoke-packaged-playwright.mjs",
     "repair:memories:dry": "electron ./scripts/repair-memory-quality.js",
     "repair:memories": "electron ./scripts/repair-memory-quality.js --apply",
     "probe:config-upgrade": "node ./scripts/probe-config-upgrade.mjs",
@@ -53,7 +65,11 @@
     "better-sqlite3": "^12.8.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
+    "node-forge": "^1.4.0",
     "openai": "^6.34.0",
+    "playwright": "1.59.1",
+    "playwright-core": "1.59.1",
+    "qrcode": "^1.5.4",
     "sherpa-onnx-node": "^1.13.3",
     "undici": "^6.25.0",
     "wechat-ilink-client": "^0.1.0",
@@ -62,8 +78,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "electron": "^33.2.0",
-    "electron-builder": "^25.1.8",
-    "playwright": "^1.59.1"
+    "electron-builder": "^25.1.8"
   },
   "build": {
     "appId": "com.xiaoyuanda.bailongma",
@@ -85,6 +100,15 @@
       "**/node_modules/sherpa-onnx-darwin-arm64/**",
       "build/native-speech-recognizer",
       "src/voice/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/playwright-browsers/${os}-${arch}",
+        "to": "playwright-browsers",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "files": [
       "electron/**/*",

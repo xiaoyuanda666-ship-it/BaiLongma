@@ -3,6 +3,7 @@ import { commsSchemas } from './schemas/comms.js'
 import { filesystemSchemas } from './schemas/filesystem.js'
 import { shellSchemas } from './schemas/shell.js'
 import { webSchemas } from './schemas/web.js'
+import { browserSchemas } from './schemas/browser.js'
 import { mediaSchemas } from './schemas/media.js'
 import { memorySchemas } from './schemas/memory.js'
 import { uiSchemas } from './schemas/ui.js'
@@ -21,6 +22,7 @@ export const TOOL_SCHEMAS = {
   ...filesystemSchemas,
   ...shellSchemas,
   ...webSchemas,
+  ...browserSchemas,
   ...mediaSchemas,
   ...memorySchemas,
   ...uiSchemas,

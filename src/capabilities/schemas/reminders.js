@@ -60,7 +60,7 @@ export const remindersSchemas = {
     type: 'function',
     function: {
       name: 'manage_prefetch_task',
-      description: 'Manage prefetch tasks. The system automatically fetches these URLs before each startup and injects them into context, so fetch_url is not needed again. Suitable for recurring information such as weather, news, and prices.',
+      description: 'Manage prefetch tasks. The system automatically fetches these URLs before each startup and injects them into context, so web_read is not needed again. Suitable for recurring information such as weather, news, and prices.',
       parameters: {
         type: 'object',
         properties: {

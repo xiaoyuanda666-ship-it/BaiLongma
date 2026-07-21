@@ -22,6 +22,10 @@ export function initializeSchema(db) {
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   // 迁移：conversations 加 external_party_id 列（保留外部渠道原始 ID，供回送投递）
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
+  // Persist the actual delivery outcome. Conversation rows are written before
+  // external dispatch so they can be rendered immediately; therefore their
+  // existence alone is not proof that the recipient received the message.
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
 
   // 迁移：FTS5 tokenizer 从默认 unicode61 升级到 trigram。
   // 默认 tokenizer 把中文整段当成一个 token（"咖啡偏好"被存为一个整体），
@@ -69,6 +73,7 @@ export function initializeSchema(db) {
       to_id       TEXT,              -- 接收者 ID（jarvis 发出时有值）
       content     TEXT    NOT NULL,
       channel     TEXT    NOT NULL DEFAULT '',
+      delivery_status TEXT NOT NULL DEFAULT '',
       timestamp   TEXT    NOT NULL,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
@@ -78,6 +83,21 @@ export function initializeSchema(db) {
   `)
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_delivery_status ON conversations(delivery_status)`) } catch {}
+  // A local TUI row is created and broadcast as one synchronous operation, so
+  // historical local assistant rows are safe to backfill as delivered. Do not
+  // infer this for external channels: older rows were also retained on failed
+  // external dispatches and therefore are not authoritative receipts.
+  try {
+    db.exec(`
+      UPDATE conversations
+      SET delivery_status = 'delivered'
+      WHERE role = 'jarvis'
+        AND channel = 'TUI'
+        AND delivery_status = ''
+    `)
+  } catch {}
   // 迁移：focus_absorbed 标记（动态上下文记忆池 3.5 「主线深化时剔除残留噪声」）。
   //   focus_absorbed=1 表示这条对话所属的专注帧已被压缩回填吸收（focus_conclusion 已写入仓库），
   //   下一轮主线注入对话窗口时默认 WHERE focus_absorbed=0 把它隐去。
@@ -233,6 +253,25 @@ export function initializeSchema(db) {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_status ON action_logs(status)`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_action_logs_risk ON action_logs(risk)`) } catch {}
 
+  // Brain UI 观测历史：只保存经过裁剪/脱敏的 L2 展示事件，让动态端口或应用重启后
+  // 仍能恢复心跳、最近思考与工具轨迹。事件表有界，累计心跳数单独保存在 state 表。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS brain_ui_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp    TEXT    NOT NULL,
+      path         TEXT    NOT NULL DEFAULT 'l2',
+      event_type   TEXT    NOT NULL,
+      payload_json TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_brain_ui_events_path_id ON brain_ui_events(path, id);
+
+    CREATE TABLE IF NOT EXISTS brain_ui_state (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS reminders (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -253,6 +292,29 @@ export function initializeSchema(db) {
   // 迁移：老库补上周期提醒字段
   try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_type TEXT`) } catch {}
   try { db.exec(`ALTER TABLE reminders ADD COLUMN recurrence_config TEXT`) } catch {}
+
+  // L3 scheduled-task executions are persisted separately from reminder
+  // definitions. A reminder occurrence is materialized here before it enters
+  // the in-memory queue, so a process crash cannot lose an already-fired job.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reminder_runs (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      reminder_id  INTEGER NOT NULL REFERENCES reminders(id),
+      user_id      TEXT    NOT NULL,
+      task         TEXT    NOT NULL,
+      due_at       TEXT    NOT NULL,
+      status       TEXT    NOT NULL DEFAULT 'pending',
+      attempts     INTEGER NOT NULL DEFAULT 0,
+      available_at TEXT    NOT NULL,
+      claimed_at   TEXT,
+      finished_at  TEXT,
+      last_error   TEXT    NOT NULL DEFAULT '',
+      created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(reminder_id, due_at)
+    );
+    CREATE INDEX IF NOT EXISTS idx_reminder_runs_runnable
+      ON reminder_runs(status, available_at, id);
+  `)
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS prefetch_tasks (

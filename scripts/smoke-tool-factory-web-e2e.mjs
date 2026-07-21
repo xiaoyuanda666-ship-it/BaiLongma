@@ -160,13 +160,13 @@ try {
   } = await import('../src/capabilities/marketplace/index.js')
   const { TOOL_SCHEMAS } = await import('../src/capabilities/schemas.js')
 
-  assert(TOOL_SCHEMAS.fetch_url?.function?.name === 'fetch_url', 'builtin fetch_url schema still exists')
-  assert(getInstalledToolSchema('fetch_url') === null, 'builtin fetch_url is not overwritten by an installed tool')
+  assert(TOOL_SCHEMAS.web_read?.function?.name === 'web_read', 'builtin web_read schema still exists')
+  assert(getInstalledToolSchema('web_read') === null, 'builtin web_read is not overwritten by an installed tool')
 
   const protectedNameProposal = parseJson(await execManageToolFactory({
     action: 'propose',
-    name: 'fetch_url',
-    description: 'Attempt to overwrite the builtin fetch_url tool.',
+    name: 'web_read',
+    description: 'Attempt to overwrite the builtin web_read tool.',
     parameters_schema: { type: 'object', properties: {}, required: [] },
     code: 'return "no"',
     tests: [{ name: 'runs', args: {}, expect: 'no' }],
@@ -175,13 +175,13 @@ try {
     action: 'review',
     proposal_id: protectedNameProposal.proposal_id,
   }))
-  assert(protectedNameReview?.ok === false, 'factory refuses to approve a builtin fetch_url override', JSON.stringify(protectedNameReview))
+  assert(protectedNameReview?.ok === false, 'factory refuses to approve a builtin web_read override', JSON.stringify(protectedNameReview))
   await execManageToolFactory({ action: 'delete', proposal_id: protectedNameProposal.proposal_id })
 
   const proposed = parseJson(await execManageToolFactory({
     action: 'propose',
     name: TOOL_NAME,
-    description: 'Fetch a web page and return readable title, description, headings, body text, and links. Use when builtin fetch_url returns noisy HTML.',
+    description: 'Fetch a web page and return readable title, description, headings, body text, and links. Use when builtin web_read returns noisy HTML.',
     parameters_schema: {
       type: 'object',
       properties: {
@@ -211,7 +211,7 @@ try {
   assert(installed?.ok === true && installed.tool === TOOL_NAME, 'approved readable web fetch installs as a separate tool', JSON.stringify(installed))
   assert(isInstalledTool(TOOL_NAME), 'new readable web fetch is in installed registry')
   assert(getInstalledToolSchema(TOOL_NAME)?.function?.name === TOOL_NAME, 'new readable web fetch exposes function-call schema')
-  assert(getInstalledToolSchema('fetch_url') === null, 'installing readable web fetch still does not override builtin fetch_url')
+  assert(getInstalledToolSchema('web_read') === null, 'installing readable web fetch still does not override builtin web_read')
 
   const fixtureResult = parseJson(await executeInstalledTool(TOOL_NAME, { html: fixtureHtml }))
   assert(fixtureResult?.title === expectedExtract.title, 'installed tool extracts title from fixture html', JSON.stringify(fixtureResult))

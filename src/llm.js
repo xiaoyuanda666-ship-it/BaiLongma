@@ -454,6 +454,7 @@ const PARAM_ALIASES = {
   delete_file: { file: 'path', filename: 'path' },
   exec_command: { cmd: 'command', shell: 'command', bg: 'background' },
   web_search: { q: 'query', keyword: 'query', keywords: 'query', search: 'query' },
+  web_read: { link: 'url', href: 'url', uri: 'url' },
   fetch_url: { link: 'url', href: 'url', uri: 'url' },
   browser_read: { link: 'url', href: 'url', uri: 'url' },
   search_memory: { q: 'keyword', query: 'keyword', term: 'keyword' },
@@ -510,6 +511,8 @@ function summarizeToolCall(name, args = {}) {
       return `list_dir(${args.path || args.dir || args.directory || '.'})`
     case 'web_search':
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 80)})`
+    case 'web_read':
+      return `web_read(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
     case 'fetch_url':
       return `fetch_url(${String(args.url || args.link || args.href || '?').slice(0, 80)})`
     case 'browser_read':
@@ -663,8 +666,10 @@ const HIGH_RISK_TOOLS = new Set([
   'exec_command',
   'kill_process',
   'web_search',
+  'web_read',
   'fetch_url',
   'browser_read',
+  'browser_act',
   'speak',
   'generate_lyrics',
   'generate_music',
@@ -690,7 +695,9 @@ function isHighRiskTool(name) {
 const PARALLEL_SAFE_TOOLS = new Set([
   'read_file',
   'list_dir',
+  'browser_sessions',
   'web_search',
+  'web_read',
   'fetch_url',
   'browser_read',
   'search_memory',
@@ -738,7 +745,7 @@ const REPORT_CHANNEL_TOOLS = new Set(['send_message', 'express'])
 // ackSent）。只覆盖真正会让人等的工具；秒回的普通问答不在此列，避免把简单对话变啰嗦。
 const SLOW_ACK_TOOLS = new Set([
   'generate_image', 'generate_music', 'generate_lyrics',
-  'web_search', 'fetch_url', 'browser_read', 'deep_research', 'exec_command',
+  'web_search', 'web_read', 'fetch_url', 'browser_read', 'deep_research', 'exec_command',
 ])
 function isSlowAckTool(name, args) {
   if (name === 'music') return String(args?.action || '').trim() === 'download'  // 仅下载慢；search/list 秒回
@@ -751,7 +758,7 @@ function slowAckText(name, args) {
   }
   if (name === 'generate_image') return '在画了，稍等一下～'
   if (name === 'generate_music' || name === 'generate_lyrics') return '在创作了，稍等一下～'
-  if (name === 'web_search' || name === 'fetch_url' || name === 'browser_read' || name === 'deep_research') {
+  if (name === 'web_search' || name === 'web_read' || name === 'fetch_url' || name === 'browser_read' || name === 'deep_research') {
     const q = String(args?.query || args?.q || args?.url || '').trim()
     return q ? `我查一下「${q.length > 30 ? q.slice(0, 30) + '…' : q}」～` : '我查一下～'
   }

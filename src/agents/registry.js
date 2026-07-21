@@ -147,7 +147,7 @@ export function buildAgentContextBlock() {
   const lines = agents.map(a => {
     const invoke = a.invoke_type === 'cli'
       ? `exec_command("${a.invoke_cmd} ...")`
-      : `fetch_url("${a.invoke_cmd}/...")`
+      : `web_read({ url: "${a.invoke_cmd}/..." })`
     return `- **${a.name}** (${a.id}): ${a.description}. Invoke: ${invoke}`
   })
 

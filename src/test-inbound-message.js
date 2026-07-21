@@ -63,6 +63,21 @@ try {
   assert.equal(db.prepare('SELECT COUNT(*) AS c FROM conversations').get().c, beforePersistFalse)
   assert.equal(popMessage(), transient)
 
+  const scheduled = pushMessage('SYSTEM', '提醒用户喝水', 'REMINDER', {
+    queue: 'background',
+    persist: false,
+    runtimeLane: 'l3',
+    reminderRunId: 9,
+    reminderTargetId: 'ID:000001',
+    reminderTask: '提醒用户喝水',
+  })
+  assert.equal(scheduled.conversationId, 0)
+  assert.equal(scheduled.queueName, 'background')
+  assert.equal(scheduled.runtimeLane, 'l3')
+  assert.equal(scheduled.reminderRunId, 9)
+  assert.equal(db.prepare('SELECT COUNT(*) AS c FROM conversations').get().c, beforePersistFalse)
+  assert.equal(popMessage(), scheduled)
+
   const first = pushMessage('ID:123456', 'first pending', 'TUI')
   const second = pushMessage('ID:123456', 'second pending', 'TUI')
   assert(first.conversationId > 0)

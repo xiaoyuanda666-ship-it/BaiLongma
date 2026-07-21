@@ -41,12 +41,12 @@ async function loadFresh(json) {
 
 // ── 场景 A：provider 是新版不认识的名字（模拟改名/删除的旧 provider）──
 {
-  const { config, getVoiceConfig } = await loadFresh({
+  const { config, getSecurity, getVoiceConfig, setSecurity } = await loadFresh({
     provider: 'some-removed-provider',
     apiKey: 'sk-whatever-old-key-1234567890',
     model: 'old-model',
     temperature: 1.3,
-    security: { fileSandbox: false, execSandbox: false, blockedTools: ['exec_command'] },
+    security: { fileSandbox: false, execSandbox: false, browserPrivateNetwork: true, blockedTools: ['exec_command', 'fetch_url', 'browser_read'] },
     voice: { voiceProvider: 'aliyun', aliyunApiKey: 'sk-aliyunkeyplaceholder1234567890' },
   })
   assert(config.needsActivation === true, 'A: 未知 provider → LLM 标记为待激活')
@@ -55,7 +55,12 @@ async function loadFresh(json) {
   assert(config.temperature === 1.3, 'A: temperature 在 LLM 不可用时仍被保留')
   assert(config.security.execSandbox === false, 'A: execSandbox=false 被保留（不会悄悄重新开启沙盒）')
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
-  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command']), 'A: blockedTools 被保留')
+  assert(JSON.stringify(config.security.blockedTools) === JSON.stringify(['exec_command', 'web_read']), 'A: legacy web read blocks migrate and deduplicate')
+  assert(getSecurity().browserPrivateNetwork === true, 'A: 独立 browserPrivateNetwork 权限被读取')
+  setSecurity({ browserPrivateNetwork: false })
+  assert(getSecurity().browserPrivateNetwork === false, 'A: setSecurity 可独立撤销 browserPrivateNetwork')
+  assert(JSON.parse(fs.readFileSync(configFile, 'utf-8')).security.browserPrivateNetwork === false,
+    'A: browserPrivateNetwork 变更持久化到 config.json')
   const after = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
   assert(after.voice === undefined, 'A: voice 块已从 config.json 拆出')
   assert(getVoiceConfig().aliyunApiKey.configured === true, 'A: 拆分后 Aliyun ASR key 仍可被读取')
@@ -75,6 +80,7 @@ async function loadFresh(json) {
   assert(config.provider === 'deepseek', 'B: provider 正确')
   assert(config.model === 'deepseek-some-retired-model', 'B: official provider preserves unknown model names for manual entry')
   assert(config.security.execSandbox === false, 'B: 激活路径下 security 同样保留')
+  assert(config.security.browserPrivateNetwork === false, 'B: 旧配置缺字段时 browserPrivateNetwork 默认 false')
 }
 
 // ── 场景 C：custom provider（baseURL + model 齐全）正常激活 ──
@@ -96,6 +102,58 @@ async function loadFresh(json) {
   v += 1
   const { config } = await import(`./config.js?v=${v}`)
   assert(config.needsActivation === true, 'D: 损坏文件 → 未激活且不崩溃')
+}
+
+// ── 场景 HB：心跳开关和默认间隔可持久化，并同步运行时默认节奏 ──
+{
+  const { config, getHeartbeatConfig, setHeartbeatConfig } = await loadFresh({
+    heartbeat: { enabled: false, defaultIntervalMinutes: 45 },
+  })
+  const loaded = getHeartbeatConfig()
+  assert(loaded.enabled === false, 'HB: 已保存的心跳关闭状态被加载')
+  assert(loaded.defaultIntervalMinutes === 45, 'HB: 已保存的默认心跳间隔被加载')
+  assert(config.tickInterval === 45 * 60 * 1000, 'HB: 默认心跳间隔同步到运行时毫秒值')
+
+  const updated = setHeartbeatConfig({ enabled: true, defaultIntervalMinutes: 90 })
+  assert(updated.enabled === true && updated.defaultIntervalMinutes === 90, 'HB: 心跳设置可即时更新')
+  const stored = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(stored.heartbeat.enabled === true, 'HB: 心跳开关写入 config.json')
+  assert(stored.heartbeat.defaultIntervalMinutes === 90, 'HB: 默认心跳间隔写入 config.json')
+  let invalidRejected = false
+  try { setHeartbeatConfig({ enabled: false, defaultIntervalMinutes: 0 }) } catch { invalidRejected = true }
+  assert(invalidRejected, 'HB: 拒绝超出范围的默认心跳间隔')
+  assert(getHeartbeatConfig().enabled === true, 'HB: 非法请求不会部分修改运行时心跳状态')
+}
+
+// Context-window message limits default to 10, persist independently, and reject invalid updates atomically.
+{
+  const defaults = await loadFresh({})
+  assert(defaults.getContextWindowConfig().conversationMessageLimit === 10,
+    'CTX: normal conversation context defaults to 10 messages')
+  assert(defaults.getContextWindowConfig().tickMessageLimit === 10,
+    'CTX: Tick context defaults to 10 messages')
+
+  const mod = await loadFresh({
+    contextWindow: { conversationMessageLimit: 12, tickMessageLimit: 34 },
+  })
+  assert(mod.getContextWindowConfig().conversationMessageLimit === 12,
+    'CTX: saved normal conversation limit loads')
+  assert(mod.getContextWindowConfig().tickMessageLimit === 34,
+    'CTX: saved Tick limit loads')
+
+  const updated = mod.setContextWindowConfig({ conversationMessageLimit: 7, tickMessageLimit: 31 })
+  assert(updated.conversationMessageLimit === 7 && updated.tickMessageLimit === 31,
+    'CTX: both context limits update immediately')
+  const stored = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(stored.contextWindow.conversationMessageLimit === 7 && stored.contextWindow.tickMessageLimit === 31,
+    'CTX: context limits persist to config.json')
+
+  let invalidRejected = false
+  try { mod.setContextWindowConfig({ conversationMessageLimit: 8, tickMessageLimit: 41 }) } catch { invalidRejected = true }
+  assert(invalidRejected, 'CTX: limits outside 1 to 40 are rejected')
+  assert(mod.getContextWindowConfig().conversationMessageLimit === 7
+    && mod.getContextWindowConfig().tickMessageLimit === 31,
+    'CTX: invalid updates do not partially change settings')
 }
 
 // ── 场景 E：schema 迁移 v0 → v3，旧版 seedance、LLM 和 voice 块拆到独立文件 ──

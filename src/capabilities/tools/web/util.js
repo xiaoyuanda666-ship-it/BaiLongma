@@ -97,7 +97,7 @@ export function saveLongArticle({ url, finalUrl, title, body, source }) {
     `title: ${JSON.stringify(title || '')}`,
     `source_url: ${url || ''}`,
     finalUrl && finalUrl !== url ? `final_url: ${finalUrl}` : null,
-    `source_tool: ${source || 'fetch_url'}`,
+    `source_tool: ${source || 'web_read'}`,
     `fetched_at: ${now.toISOString()}`,
     '---',
     '',

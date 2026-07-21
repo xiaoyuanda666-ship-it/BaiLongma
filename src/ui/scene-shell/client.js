@@ -13,8 +13,9 @@
 export class SceneClient {
   // url:ws 地址;onScene(scene):每次得到对齐后的完整 scene 时调用;
   // onStatus(state):连接状态变化('connecting'|'open'|'closed')。
-  constructor(url, { onScene, onStatus, caps } = {}) {
+  constructor(url, { onScene, onStatus, caps } = {}, protocols = []) {
     this.url = url
+    this.protocols = protocols
     this.onScene = onScene || (() => {})
     this.onStatus = onStatus || (() => {})
     this.caps = caps || ['scene', 'patch']
@@ -37,7 +38,7 @@ export class SceneClient {
     this.onStatus('connecting')
     let ws
     try {
-      ws = new WebSocket(this.url)
+      ws = new WebSocket(this.url, this.protocols)
     } catch {
       this._scheduleReconnect()
       return

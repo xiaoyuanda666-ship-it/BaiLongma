@@ -63,6 +63,7 @@ export async function buildHeartbeatSystemPromptPreview({
     currentTaskText: workingState.task || '',
     recentActionsSummary: (workingState.recentActions || []).map(a => a?.summary || '').join(' | '),
     currentTools: injection.tools || [],
+    isTick: true,
   })
 
   const contextBlock = buildContextBlock({

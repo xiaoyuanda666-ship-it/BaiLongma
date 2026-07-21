@@ -33,6 +33,11 @@ function run(command, args) {
 }
 
 run('node', ['scripts/prebuild-clean.mjs']);
+run('node', [
+  'scripts/prepare-playwright-browsers.mjs',
+  '--platform=darwin',
+  ...archs.map((arch) => `--arch=${arch}`),
+]);
 
 for (const arch of archs) {
   console.log(`[build:mac] building native macOS speech helper for ${arch}`);

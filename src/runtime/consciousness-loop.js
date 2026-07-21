@@ -1,3 +1,5 @@
+const MAX_TIMER_DELAY_MS = 2_147_000_000
+
 export function createConsciousnessLoop({
   runTurn,
   runTurnWatchdogMs,
@@ -14,6 +16,7 @@ export function createConsciousnessLoop({
   consumeTickerTick,
   decrementAwakeningTick,
   isStartupSelfCheckActive,
+  isHeartbeatEnabled,
   isRunning,
   setScheduler,
   setInterruptCallback,
@@ -91,9 +94,14 @@ export function createConsciousnessLoop({
       enqueueDueReminders()
       if (hasMessages()) {
         const msg = popMessage()
-        const lane = msg.queueName === 'background' ? 'BG' : 'L1'
+        const lane = msg.runtimeLane === 'l3'
+          ? 'L3'
+          : (msg.queueName === 'background' ? 'BG' : 'L1')
         await runTurnWithWatchdog(msg.raw, `${lane} message from ${msg.fromId}`, msg)
       } else {
+        // 防御性边界：即使某个旧 timer、测试入口或外部调用直接触发 onTick，
+        // 关闭心跳后也不能漏跑一轮自主 L2。首次启动自检是唯一例外。
+        if (!isHeartbeatEnabled() && !isStartupSelfCheckActive()) return
         autoTick = true
         tickerRevisionAtStart = getTickerStatus()?.revision ?? null
         const tick = formatTick()
@@ -150,8 +158,9 @@ export function createConsciousnessLoop({
     const taskActive = isTaskActive()
     const nextReminder = getNextPendingReminder()
     const baseTickInterval = getBaseTickInterval()
+    const heartbeatEnabled = isHeartbeatEnabled()
 
-    let interval
+    let interval = null
     let label
     if (hasPendingUser) {
       interval = 0
@@ -159,6 +168,8 @@ export function createConsciousnessLoop({
     } else if (hasPending) {
       interval = 0
       label = 'immediate (background message pending)'
+    } else if (!heartbeatEnabled) {
+      label = 'heartbeat disabled'
     } else if (rateLimited) {
       interval = getTickInterval(baseTickInterval)
       label = `rate-limited (${interval / 1000}s)`
@@ -180,15 +191,20 @@ export function createConsciousnessLoop({
 
     if (nextReminder) {
       const dueInMs = Math.max(0, new Date(nextReminder.due_at).getTime() - Date.now())
-      if (dueInMs < interval) {
-        interval = dueInMs
-        label = `reminder fires in ${Math.ceil(dueInMs / 1000)}s`
+      if (interval === null || dueInMs < interval) {
+        // Node 的 setTimeout 超过约 24.8 天会溢出并几乎立即触发。心跳关闭时，
+        // 下一个提醒可能是唯一计时源，因此分段睡眠并在醒来后重新计算。
+        interval = Math.min(dueInMs, MAX_TIMER_DELAY_MS)
+        label = dueInMs > MAX_TIMER_DELAY_MS
+          ? `heartbeat disabled; reminder rescan in ${Math.ceil(interval / 1000)}s`
+          : `reminder fires in ${Math.ceil(dueInMs / 1000)}s`
       }
     }
 
     const quota = getQuotaStatus()
     console.log(`[quota] ${quota.rpmUsed} RPM | ${quota.tpmUsed} TPM | ratio ${quota.ratio} | queue U:${queueSnapshot.user} B:${queueSnapshot.background} | next tick ${label}`)
-    emitEvent('quota', { ...quota, nextTickMs: interval, ticker: getTickerStatus(), queue: queueSnapshot })
+    emitEvent('quota', { ...quota, nextTickMs: interval, heartbeatEnabled, ticker: getTickerStatus(), queue: queueSnapshot })
+    if (interval === null) return
     currentTimer = setTimeout(async () => {
       currentTimer = null
       // try/finally 兜底：即使 onTick 抛错（理论上 onTick 自己已 catch，watchdog 也吞了
@@ -256,7 +272,7 @@ export function createConsciousnessLoop({
     }
 
     // Whether to fire an immediate L2 TICK is up to the caller; initial activation uses it to trigger self-check.
-    if (runImmediateTick) {
+    if (runImmediateTick && (isHeartbeatEnabled() || isStartupSelfCheckActive() || hasMessages())) {
       await onTick()
     }
     scheduleNextTick()

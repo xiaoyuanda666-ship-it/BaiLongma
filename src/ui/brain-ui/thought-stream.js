@@ -14,6 +14,7 @@ const TOOL_ZH = {
   kill_process: "终止进程",
   list_processes: "列出进程",
   web_search: "搜索网页",
+  web_read: "读取网页",
   fetch_url: "抓取网页",
   browser_read: "浏览器读取网页",
   search_memory: "检索记忆",
@@ -68,6 +69,7 @@ const TOOL_ICON = {
   kill_process: "🛑",
   list_processes: "📋",
   web_search: "🔎",
+  web_read: "🌐",
   fetch_url: "🌐",
   browser_read: "🧭",
   search_memory: "🔍",
@@ -165,7 +167,9 @@ export class ThoughtStream {
     this.curLine = document.createElement("div");
     this.curLine.className = "stream-line";
 
-    const color = this.readCSSVar(`--${this.color}`);
+    // 保留对主题变量的引用，不把当前主题的解析色值固化到内联样式。
+    // 否则从浅色切回暗色后，历史记录仍会残留浅色主题的深色文字。
+    const color = `var(--${this.color})`;
     const timeLabel = options.time || this.tStamp();
 
     const header = document.createElement("div");
@@ -264,7 +268,7 @@ export class ThoughtStream {
     if (this.thinkingEl) return;
     const el = document.createElement("div");
     el.className = "line-thinking";
-    el.style.color = this.readCSSVar(`--${this.color}`);
+    el.style.color = `var(--${this.color})`;
     el.innerHTML = `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`;
     this.curLine.appendChild(el);
     this.thinkingEl = el;
@@ -386,6 +390,7 @@ export class ThoughtStream {
         return a.pid ? `pid ${a.pid}` : "";
       case "web_search":
         return this.compactText(a.query || parsed?.query || "", 60);
+      case "web_read":
       case "fetch_url":
       case "browser_read":
         return this.hostFromUrl(a.url || parsed?.url) || this.compactText(a.url || "", 60);
@@ -526,6 +531,7 @@ export class ThoughtStream {
 
     // Web tools 保留原有人类化格式器
     if (parsed?.tool === "web_search" || name === "web_search") return this.formatWebSearchDetail(parsed || {});
+    if (parsed?.tool === "web_read" || name === "web_read") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "fetch_url" || name === "fetch_url") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "browser_read" || name === "browser_read") return this.formatBrowserReadDetail(parsed || {});
 
@@ -608,7 +614,7 @@ export class ThoughtStream {
 
     const toolEl = document.createElement("div");
     toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = this.readCSSVar(`--${this.color}`);
+    toolEl.style.color = `var(--${this.color})`;
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "tool-icon";
@@ -675,7 +681,7 @@ export class ThoughtStream {
     const toolEl = document.createElement("div");
     const statusCls = this.toolFailed ? "failed" : "ended";
     toolEl.className = `line-tool done tool-${statusCls}`;
-    toolEl.style.color = this.readCSSVar(`--${this.color}`);
+    toolEl.style.color = `var(--${this.color})`;
 
     const iconSpan = document.createElement("span");
     iconSpan.className = "tool-icon";

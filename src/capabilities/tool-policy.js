@@ -46,8 +46,16 @@ const TOOL_RISK = {
   download_file: 'high',
   kill_process: 'high',
   web_search: 'high',
+  web_read: 'high',
   fetch_url: 'high',
   browser_read: 'high',
+  browser_sessions: 'low',
+  browser_open: 'medium',
+  browser_navigate: 'medium',
+  browser_inspect: 'low',
+  browser_act: 'high',
+  browser_tabs: 'medium',
+  browser_close: 'low',
   speak: 'high',
   generate_lyrics: 'high',
   generate_music: 'high',
@@ -86,6 +94,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_capability',
   'run_api_capability',
   'analyze_image',
+  'browser_act',
 ])
 export function classifyTool(name) {
   return TOOL_RISK[name] || 'medium'
@@ -108,9 +117,10 @@ export function isDangerousShellCommand(command) {
 }
 
 export function evaluateToolPolicy(name, args = {}, context = {}) {
-  const risk = classifyTool(name)
+  const risk = name === 'browser_close' && args.clear_profile === true ? 'high' : classifyTool(name)
   const blockedTools = config.security?.blockedTools || []
-  if (blockedTools.includes(name)) {
+  const canonicalName = ['fetch_url', 'browser_read'].includes(name) ? 'web_read' : name
+  if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
   }
   if (['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'].includes(name)) {
@@ -124,6 +134,22 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
     && !context.allowHighRiskAutonomy
   ) {
     return { allowed: false, risk, reason: 'autonomous Tick may inspect rules, but changing persistent rules requires an explicit user-driven context' }
+  }
+  if (
+    context.autonomous
+    && name === 'browser_open'
+    && (
+      args.visible !== false
+      // HTTP(S) browser opens are persistent by default. Autonomous work must
+      // opt out explicitly in addition to requesting a headless window.
+      || args.persistent !== false
+    )
+    && !context.allowHighRiskAutonomy
+  ) {
+    return { allowed: false, risk, reason: 'an autonomous Tick cannot open a visible or persistent browser profile without explicit user authority' }
+  }
+  if (context.autonomous && name === 'browser_close' && args.clear_profile === true && !context.allowHighRiskAutonomy) {
+    return { allowed: false, risk, reason: 'an autonomous Tick cannot delete saved browser login state without explicit user authority' }
   }
   if (context.autonomous && AUTONOMOUS_USER_AUTH_REQUIRED.has(name) && !context.allowHighRiskAutonomy) {
     return { allowed: false, risk, reason: 'this authority-changing, destructive, or unbudgeted tool requires an explicit user-driven context' }

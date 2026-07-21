@@ -55,6 +55,17 @@ try {
   assert.equal(JSON.parse(fs.readFileSync(path.join(voiceDir, 'aliyun.json'), 'utf-8')).aliyunApiKey, 'sk-aliyunkeyplaceholder1234567890', 'Aliyun ASR key survives provider switch')
   assert.equal(JSON.parse(fs.readFileSync(path.join(voiceDir, 'tencent.json'), 'utf-8')).tencentSecretId, 'sid-123', 'Tencent ASR key is stored in its own file')
 
+  setVoiceConfig({
+    voiceProvider: 'volcengine',
+    volcAsrApiKey: '12345678-1234-1234-1234-123456789abc',
+    volcAsrResourceId: 'volc.seedasr.sauc.duration',
+  })
+  const volcRuntime = getVoiceRuntimeConfig('volcengine')
+  assert.equal(volcRuntime.provider, 'volcengine', 'Volcengine ASR can be activated')
+  assert.equal(volcRuntime.volcAsrApiKey, '12345678-1234-1234-1234-123456789abc', 'Volcengine runtime config includes the raw API key')
+  assert.equal(volcRuntime.volcAsrResourceId, 'volc.seedasr.sauc.duration', 'Volcengine runtime config preserves the ASR 2.0 resource ID')
+  assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf-8')).voice, undefined, 'Volcengine runtime config does not depend on the removed config.json voice block')
+
   console.log('PASS voice provider aliases and legacy provider field')
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })

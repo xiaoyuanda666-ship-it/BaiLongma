@@ -20,14 +20,32 @@ const path = require('path')
 const fs = require('fs')
 const net = require('net')
 const http = require('http')
+const https = require('https')
 const { EventEmitter } = require('events')
 const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
+const { configurePackagedPlaywright } = require('./playwright-runtime.cjs')
 
 const IS_DEV = !app.isPackaged
+configurePackagedPlaywright({ isPackaged: !IS_DEV })
 const WINDOWS_APP_USER_MODEL_ID = 'com.xiaoyuanda.bailongma'
+const WINDOWS_TITLE_BAR_HEIGHT = 38
+const WINDOWS_TITLE_BAR_THEMES = Object.freeze({
+  startup: { color: '#0b0d10', symbolColor: '#e7edf3' },
+  midnight: { color: '#111821', symbolColor: '#f3f5fb' },
+  phosphor: { color: '#050806', symbolColor: '#c8f0c8' },
+  violet: { color: '#0d0a1a', symbolColor: '#e4deff' },
+  rose: { color: '#1a0f16', symbolColor: '#f4e0e4' },
+  arctic: { color: '#f5f7f9', symbolColor: '#1a2330' },
+  sand: { color: '#f2ede3', symbolColor: '#2a231a' },
+})
+
+function windowsTitleBarOverlay(theme = 'startup') {
+  const colors = WINDOWS_TITLE_BAR_THEMES[theme] || WINDOWS_TITLE_BAR_THEMES.midnight
+  return { ...colors, height: WINDOWS_TITLE_BAR_HEIGHT }
+}
 
 function resolvePortableRoot() {
   if (IS_DEV) return null
@@ -51,6 +69,29 @@ const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 const STARTUP_PAGE = path.join(__dirname, 'startup.html')
+
+function isTlsBackend() {
+  return Boolean(
+    process.env.BAILONGMA_TLS_PFX
+    || (process.env.BAILONGMA_TLS_CERT && process.env.BAILONGMA_TLS_KEY)
+  )
+}
+
+function backendUrl(port, pathname = '/') {
+  return `${isTlsBackend() ? 'https' : 'http'}://127.0.0.1:${port}${pathname}`
+}
+
+app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
+  try {
+    const parsed = new URL(url)
+    if (isTlsBackend() && ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)) {
+      event.preventDefault()
+      callback(true)
+      return
+    }
+  } catch {}
+  callback(false)
+})
 
 const STARTUP_STEPS = [
   { id: 'port', label: '准备本地端口', detail: '锁定 3721 或备用端口' },
@@ -133,6 +174,17 @@ function getAppIconPath({ trayIcon = false } = {}) {
   if (IS_MAC) return path.join(RESOURCE_ROOT, 'build', 'icon.png')
   if (IS_LINUX) return path.join(RESOURCE_ROOT, 'build', 'icon.png')
   return path.join(RESOURCE_ROOT, 'build', trayIcon ? 'icon.png' : 'icon.png')
+}
+
+function createTrayImage() {
+  const trayImage = nativeImage.createFromPath(getAppIconPath({ trayIcon: true }))
+  if (!IS_MAC) return trayImage
+
+  // macOS does not scale an oversized status item for us. Passing the 512px app
+  // icon directly makes the tray item (and its menu) hundreds of pixels wide.
+  // Keep the full-colour icon instead of treating its opaque background as a
+  // template mask, and constrain only the macOS tray copy to the menu-bar size.
+  return trayImage.resize({ width: 16, height: 16, quality: 'best' })
 }
 
 const SCREENSHOT_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'])
@@ -415,13 +467,24 @@ if (!gotLock) {
   process.exit(0)
 }
 
-async function findFreePort(preferred = 3721) {
+function isLanAccessConfigured() {
+  if (/^(1|true|yes|on)$/i.test(String(process.env.BAILONGMA_ALLOW_LAN || '').trim())) return true
+  const userDir = process.env.BAILONGMA_USER_DIR?.trim() || USER_DIR
+  try {
+    const stored = JSON.parse(fs.readFileSync(path.join(userDir, 'config.json'), 'utf8'))
+    return stored?.network?.allowLanAccess === true
+  } catch {
+    return false
+  }
+}
+
+async function findFreePort(preferred = 3721, host = '127.0.0.1') {
   for (const port of [preferred, 0]) {
     try {
       const actual = await new Promise((resolve, reject) => {
         const server = net.createServer()
         server.once('error', reject)
-        server.listen(port, '127.0.0.1', () => {
+        server.listen(port, host, () => {
           const address = server.address()
           server.close(() => resolve(address.port))
         })
@@ -434,7 +497,7 @@ async function findFreePort(preferred = 3721) {
 
 function waitForBackend(port, timeoutMs = 30000) {
   const startedAt = Date.now()
-  const url = `http://127.0.0.1:${port}/activation-status`
+  const url = backendUrl(port, '/activation-status')
   let lastProbe = 'no probe completed'
 
   return new Promise((resolve, reject) => {
@@ -444,7 +507,9 @@ function waitForBackend(port, timeoutMs = 30000) {
         return
       }
 
-      const req = http.get(url, res => {
+      const client = isTlsBackend() ? https : http
+      const options = isTlsBackend() ? { rejectUnauthorized: false } : undefined
+      const req = client.get(url, options, res => {
         res.resume()
         lastProbe = `HTTP ${res.statusCode || 'unknown'} from ${url}`
         resolve()
@@ -464,30 +529,34 @@ function waitForBackend(port, timeoutMs = 30000) {
   })
 }
 
-async function loadStartupPage() {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+async function loadStartupPage(targetWindow = mainWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return
   emitStartupProgress({ id: 'window', status: 'running', message: '正在打开桌面窗口' })
-  await mainWindow.loadFile(STARTUP_PAGE)
+  await targetWindow.loadFile(STARTUP_PAGE)
   emitStartupProgress({ id: 'window', status: 'done', message: '桌面窗口已打开' })
 }
 
-async function loadMainApp() {
-  if (!mainWindow || mainWindow.isDestroyed()) return
+async function loadMainApp(targetWindow = mainWindow) {
+  if (!targetWindow || targetWindow.isDestroyed()) return
   if (!backendPort) throw new Error('Backend port is not ready')
   emitStartupProgress({ id: 'interface', status: 'running', message: '正在进入界面' })
-  await mainWindow.loadURL(`http://127.0.0.1:${backendPort}/`)
+  await targetWindow.loadURL(backendUrl(backendPort, '/'))
   emitStartupProgress({ id: 'interface', status: 'done', completed: true, message: '启动完成' })
 }
 
-async function createWindow({ loadStartup = true } = {}) {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    minWidth: 900,
-    minHeight: 600,
+async function createWindow({ loadStartup = true, show = true, assignAsMain = true, bounds = null } = {}) {
+  const window = new BrowserWindow({
+    ...(bounds || { width: 1280, height: 840 }),
+    minWidth: 320,
+    minHeight: 480,
+    show,
     backgroundColor: '#0b0b0e',
     title: 'Bailongma',
     icon: getAppIconPath(),
+    ...(IS_WIN ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: windowsTitleBarOverlay(),
+    } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -503,11 +572,13 @@ async function createWindow({ loadStartup = true } = {}) {
   })
 
   // 授予麦克风权限（语音输入需要）
-  mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+  if (assignAsMain) mainWindow = window
+
+  window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media') return callback(true)
     callback(false)
   })
-  mainWindow.webContents.session.setPermissionCheckHandler((webContents, permission) => {
+  window.webContents.session.setPermissionCheckHandler((webContents, permission) => {
     if (permission === 'media') return true
     return false
   })
@@ -516,26 +587,33 @@ async function createWindow({ loadStartup = true } = {}) {
   //   F12      → 切换 DevTools
   //   F11      → 切换全屏
   //   Ctrl+R   → reload（仅 dev）
-  mainWindow.webContents.on('before-input-event', (event, input) => {
+  window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     if (input.key === 'F12') {
-      mainWindow.webContents.toggleDevTools()
+      window.webContents.toggleDevTools()
       event.preventDefault()
       return
     }
     if (input.key === 'F11') {
-      mainWindow.setFullScreen(!mainWindow.isFullScreen())
+      window.setFullScreen(!window.isFullScreen())
       event.preventDefault()
       return
     }
     if (IS_DEV && (input.control || input.meta) && input.key.toLowerCase() === 'r') {
-      mainWindow.webContents.reload()
+      window.webContents.reload()
       event.preventDefault()
       return
     }
   })
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  const sendFullScreenState = (fullscreen) => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    window.webContents.send('window:fullscreen-changed', Boolean(fullscreen))
+  }
+  window.on('enter-full-screen', () => sendFullScreenState(true))
+  window.on('leave-full-screen', () => sendFullScreenState(false))
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) {
       shell.openExternal(url)
       return { action: 'deny' }
@@ -543,22 +621,64 @@ async function createWindow({ loadStartup = true } = {}) {
     return { action: 'allow' }
   })
 
-  if (loadStartup) {
-    await loadStartupPage()
-  } else if (backendPort) {
-    await loadMainApp()
+  try {
+    if (loadStartup) {
+      await loadStartupPage(window)
+    } else if (backendPort) {
+      await loadMainApp(window)
+    }
+  } catch (err) {
+    if (window === mainWindow) mainWindow = null
+    if (!window.isDestroyed()) window.destroy()
+    throw err
   }
   // Windows/Linux 关闭主窗口时最小化到托盘；macOS 允许销毁窗口，Dock/托盘可重建。
-  mainWindow.on('close', (e) => {
-    if (!app.isQuiting && !IS_MAC) {
+  window.on('close', (e) => {
+    if (window === mainWindow && !app.isQuiting && !IS_MAC) {
       e.preventDefault()
-      mainWindow.hide()
+      window.hide()
     }
   })
 
-  mainWindow.on('closed', () => {
-    mainWindow = null
+  window.on('closed', () => {
+    if (window === mainWindow) mainWindow = null
   })
+
+  return window
+}
+
+async function replaceStartupWithMainApp() {
+  const startupWindow = mainWindow
+  const hasStartupWindow = startupWindow && !startupWindow.isDestroyed()
+  const bounds = hasStartupWindow ? startupWindow.getBounds() : null
+  const wasMaximized = Boolean(hasStartupWindow && startupWindow.isMaximized())
+  const wasFullScreen = Boolean(hasStartupWindow && startupWindow.isFullScreen())
+  let readyWindow = null
+
+  try {
+    // Keep the startup renderer visible while the main renderer navigates and
+    // paints off-screen. This prevents Chromium from exposing a partial white
+    // surface during the file:// -> http:// renderer swap on Windows.
+    readyWindow = await createWindow({ loadStartup: false, show: false, assignAsMain: false, bounds })
+    await readyWindow.webContents.executeJavaScript(
+      'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+      true,
+    )
+
+    const shouldShow = !hasStartupWindow || startupWindow.isVisible()
+    mainWindow = readyWindow
+    if (wasFullScreen) readyWindow.setFullScreen(true)
+    else if (wasMaximized) readyWindow.maximize()
+    if (shouldShow) {
+      readyWindow.show()
+      readyWindow.focus()
+    }
+
+    if (hasStartupWindow && !startupWindow.isDestroyed()) startupWindow.destroy()
+  } catch (err) {
+    if (readyWindow && !readyWindow.isDestroyed()) readyWindow.destroy()
+    throw err
+  }
 }
 
 async function showMainWindow() {
@@ -571,8 +691,7 @@ async function showMainWindow() {
 }
 
 function setupTray() {
-  const trayImage = nativeImage.createFromPath(getAppIconPath({ trayIcon: true }))
-  if (IS_MAC) trayImage.setTemplateImage(true)
+  const trayImage = createTrayImage()
   tray = new Tray(trayImage)
   tray.setToolTip('Bailongma')
 
@@ -640,7 +759,7 @@ function createFocusBannerWindow({ task = '', current_step = '', tasks = [] } = 
   focusBannerWindow.webContents.once('did-finish-load', () => {
     if (!focusBannerWindow || focusBannerWindow.isDestroyed()) return
     // 先发端口配置，让语音识别结果能发回后端
-    focusBannerWindow.webContents.send('focus-banner:config', { port: backendPort })
+    focusBannerWindow.webContents.send('focus-banner:config', { port: backendPort, secure: isTlsBackend() })
     focusBannerWindow.webContents.send('focus-banner:update', { task, current_step, tasks })
     autoResizeBannerWindow()
   })
@@ -1041,7 +1160,7 @@ function createTerminalStreamWindow(payload = {}) {
   const { title = 'Bailongma Terminal Stream', stream_id = 'default' } = payload
   const cleanTitle = String(title || 'Bailongma Terminal Stream').slice(0, 120)
   const streamId = normalizeTerminalStreamId(stream_id)
-  const url = `http://127.0.0.1:${backendPort}/terminal-stream?stream_id=${encodeURIComponent(streamId)}`
+  const url = backendUrl(backendPort, `/terminal-stream?stream_id=${encodeURIComponent(streamId)}`)
   const focusWindow = payload.focus !== false
 
   if (terminalStreamWindow && !terminalStreamWindow.isDestroyed()) {
@@ -1163,7 +1282,7 @@ function createVoiceOrbWindow() {
     },
   })
   // 复用 brain-ui 的静态路由(/src/ui/brain-ui/*),voice-orb.html 的 import './voice-core.js' 才能解析
-  voiceOrbWindow.loadURL(`http://127.0.0.1:${backendPort}/src/ui/brain-ui/voice-orb.html`)
+  voiceOrbWindow.loadURL(backendUrl(backendPort, '/src/ui/brain-ui/voice-orb.html'))
   voiceOrbWindow.on('closed', () => { voiceOrbWindow = null })
 }
 
@@ -1258,6 +1377,18 @@ function setupAutoUpdater() {
 
 ipcMain.handle('app:get-version', () => app.getVersion())
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
+ipcMain.handle('window:is-full-screen', (event) => {
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  return Boolean(targetWindow && !targetWindow.isDestroyed() && targetWindow.isFullScreen())
+})
+ipcMain.handle('window:set-title-bar-theme', (event, theme) => {
+  if (!IS_WIN) return false
+  const targetWindow = BrowserWindow.fromWebContents(event.sender)
+  if (!targetWindow || targetWindow.isDestroyed()) return false
+  const normalizedTheme = typeof theme === 'string' ? theme.trim().toLowerCase() : 'midnight'
+  targetWindow.setTitleBarOverlay(windowsTitleBarOverlay(normalizedTheme))
+  return true
+})
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)
@@ -1362,8 +1493,29 @@ app.on('window-all-closed', () => {
   // 只有托盘菜单「退出」才真正退出
 })
 
-app.on('before-quit', () => {
+let browserShutdownBeforeQuit = null
+let browserShutdownComplete = false
+app.on('before-quit', (event) => {
   app.isQuiting = true
+  if (browserShutdownComplete) return
+  const shutdown = globalThis.shutdownBailongmaBrowserTools
+  if (typeof shutdown !== 'function') {
+    browserShutdownComplete = true
+    return
+  }
+  event.preventDefault()
+  if (browserShutdownBeforeQuit) return
+  // The backend runs in this process. Wait for Playwright cleanup, with a hard
+  // upper bound so a broken browser connection cannot trap the quit loop.
+  let browserShutdownTimer
+  browserShutdownBeforeQuit = Promise.race([
+    Promise.resolve().then(() => shutdown()).catch(() => {}),
+    new Promise(resolve => { browserShutdownTimer = setTimeout(resolve, 5_000) }),
+  ]).finally(() => {
+    clearTimeout(browserShutdownTimer)
+    browserShutdownComplete = true
+    app.quit() // second before-quit observes browserShutdownComplete and proceeds
+  })
 })
 
 app.whenReady().then(async () => {
@@ -1372,7 +1524,10 @@ app.whenReady().then(async () => {
 
   try {
     emitStartupProgress({ id: 'port', status: 'running', message: '正在准备本地端口' })
-    backendPort = await findFreePort(3721)
+    backendPort = await findFreePort(
+      3721,
+      isLanAccessConfigured() ? '0.0.0.0' : '127.0.0.1',
+    )
     emitStartupProgress({ id: 'port', status: 'done', detail: `本地端口 ${backendPort} 已准备` })
 
     emitStartupProgress({ id: 'core', status: 'running', message: '正在启动本地核心' })
@@ -1391,7 +1546,7 @@ app.whenReady().then(async () => {
   }
 
   try {
-    await loadMainApp()
+    await replaceStartupWithMainApp()
   } catch (err) {
     console.error('[main] Failed to load Bailongma UI', err?.stack || err?.message || err)
     emitStartupProgress({ id: 'interface', status: 'error', error: true, message: `进入界面失败: ${err.message}` })
