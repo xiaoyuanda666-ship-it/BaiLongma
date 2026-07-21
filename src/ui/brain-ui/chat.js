@@ -16,6 +16,17 @@ export function shouldAttachSystemScreenshot() {
   return false;
 }
 
+// 中文、日文等输入法确认候选时也会产生 Enter keydown。macOS 上 Chromium
+// 通常通过 isComposing 标记它，部分输入法/版本则只暴露 keyCode 229。
+export function isImeComposing(event, compositionActive = false) {
+  return Boolean(
+    compositionActive
+    || event?.isComposing
+    || event?.keyCode === 229
+    || event?.which === 229
+  );
+}
+
 export function initChat({
   apiBase,
   maxHistory,
@@ -38,6 +49,7 @@ export function initChat({
   let closeTimer = null;
   let hasPendingJarvisMessage = false;
   let pendingMessageDismissed = false;
+  let compositionActive = false;
   let liveEl = null;  // 正在流式输出的 jarvis 气泡（边收 token 边重渲染），message 事件到达后定稿
   let audioCtx = null;
   let audioUnlocked = false;
@@ -585,6 +597,7 @@ export function initChat({
     if (!inputLocked) msgInput.placeholder = defaultInputPlaceholder();
   });
   msgInput.addEventListener("blur", () => {
+    compositionActive = false;
     if (!inputLocked) msgInput.placeholder = PUSH_TO_TALK_PLACEHOLDER;
     if (!isTyping()) scheduleClose();
     // 延迟关闭，让命令项的 mousedown 先触发
@@ -603,7 +616,15 @@ export function initChat({
       openChat();
     }
   });
+  msgInput.addEventListener("compositionstart", () => {
+    compositionActive = true;
+  });
+  msgInput.addEventListener("compositionend", () => {
+    compositionActive = false;
+  });
   msgInput.addEventListener("keydown", event => {
+    // 输入法中的 Enter/方向键用于确认或选择候选，不能触发发送或斜杠菜单。
+    if (isImeComposing(event, compositionActive)) return;
     if (handleSlashKeydown(event)) return;
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();

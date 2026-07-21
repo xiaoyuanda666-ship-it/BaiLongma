@@ -176,6 +176,17 @@ function getAppIconPath({ trayIcon = false } = {}) {
   return path.join(RESOURCE_ROOT, 'build', trayIcon ? 'icon.png' : 'icon.png')
 }
 
+function createTrayImage() {
+  const trayImage = nativeImage.createFromPath(getAppIconPath({ trayIcon: true }))
+  if (!IS_MAC) return trayImage
+
+  // macOS does not scale an oversized status item for us. Passing the 512px app
+  // icon directly makes the tray item (and its menu) hundreds of pixels wide.
+  // Keep the full-colour icon instead of treating its opaque background as a
+  // template mask, and constrain only the macOS tray copy to the menu-bar size.
+  return trayImage.resize({ width: 16, height: 16, quality: 'best' })
+}
+
 const SCREENSHOT_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'])
 
 function imageMimeForPath(filePath = '') {
@@ -680,8 +691,7 @@ async function showMainWindow() {
 }
 
 function setupTray() {
-  const trayImage = nativeImage.createFromPath(getAppIconPath({ trayIcon: true }))
-  if (IS_MAC) trayImage.setTemplateImage(true)
+  const trayImage = createTrayImage()
   tray = new Tray(trayImage)
   tray.setToolTip('Bailongma')
 
