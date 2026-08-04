@@ -48,6 +48,13 @@ function assertFile(filePath, label) {
   }
 }
 
+function assertPlistString(plistPath, key, expectedPattern, label) {
+  const value = run('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plistPath])
+  if (!expectedPattern.test(value)) {
+    throw new Error(`${label} has invalid ${key}: ${value || '(empty)'}`)
+  }
+}
+
 function assertSingleArch(filePath, expectedArch, label) {
   assertFile(filePath, label)
   const archs = run('lipo', ['-archs', filePath]).split(/\s+/).filter(Boolean)
@@ -122,6 +129,12 @@ function smokeTarget(target) {
 
     const plistPath = path.join(appPath, 'Contents', 'Info.plist')
     assertFile(plistPath, `${target.label} Info.plist`)
+    assertPlistString(
+      plistPath,
+      'NSAppleEventsUsageDescription',
+      /Music\.app/i,
+      `${target.label} Info.plist`,
+    )
 
     const executablePath = path.join(appPath, 'Contents', 'MacOS', productName)
     const unpackedPath = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked')
@@ -143,7 +156,9 @@ function smokeTarget(target) {
     assertDeveloperTeam(appPath, `${target.label} app`)
     assertDeveloperTeam(speechHelperPath, `${target.label} native speech helper`)
     assertEntitlement(appPath, 'com.apple.security.device.audio-input', `${target.label} app`)
+    assertEntitlement(appPath, 'com.apple.security.automation.apple-events', `${target.label} app`)
     assertEntitlement(rendererHelperPath, 'com.apple.security.device.audio-input', `${target.label} renderer helper`)
+    assertEntitlement(speechHelperPath, 'com.apple.security.device.audio-input', `${target.label} native speech helper`)
 
     if (fs.existsSync(sqliteTestExtensionPath)) {
       throw new Error(`${target.label} package still includes better-sqlite3 test_extension.node`)

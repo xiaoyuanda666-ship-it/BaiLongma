@@ -46,7 +46,8 @@ const TOOL_RISK = {
   complete_startup_self_check: 'low',
   delete_file: 'high',
   install_software: 'high',
-  exec_command: 'high',
+  run_command: 'high',
+  exec_command: 'high', // legacy executor alias
   exec_quick_command: 'medium',
   exec_task_command: 'high',
   exec_background_command: 'high',
@@ -79,6 +80,7 @@ const TOOL_RISK = {
   browser_clear_data: 'high',
   browser_set_display_mode: 'low',
   system_browser_open: 'medium',
+  system_music: 'medium',
   speak: 'high',
   generate_lyrics: 'high',
   generate_music: 'high',
@@ -116,6 +118,7 @@ const STARTUP_SELF_CHECK_BROWSER_TOOLS = new Set([
   'browser_snapshot',
   'browser_close',
 ])
+const SYSTEM_MUSIC_ACTION_INTENT_RE = /(?:apple\s*music|music\.app|系统音乐|音乐播放器|当前歌曲|这首歌|播放|暂停|继续|恢复|停止|上一首|下一首|切歌|换一首|play|pause|resume|stop|next|previous)/i
 
 // Audit risk and autonomous authority are related but not identical. Several
 // read-only or reversible capabilities (for example web reads and speech) are
@@ -134,6 +137,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'grant_agent_delegation',
   'manage_api_capability',
   'kill_process',
+  'run_command',
   'exec_command',
   'exec_quick_command',
   'exec_task_command',
@@ -145,6 +149,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_api_capability',
   'analyze_image',
   'system_browser_open',
+  'system_music',
   'browser_clear_data',
   ...BROWSER_MUTATING_TOOLS,
 ])
@@ -175,7 +180,11 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
   const risk = classifyTool(name)
   const currentUserMessage = context.currentUserMessage || ''
   const blockedTools = config.security?.blockedTools || []
-  const canonicalName = ['fetch_url', 'browser_read'].includes(name) ? 'web_read' : name
+  const canonicalName = ['fetch_url', 'browser_read'].includes(name)
+    ? 'web_read'
+    : ['run_command', 'exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'].includes(name)
+      ? 'run_command'
+      : name
   if (blockedTools.includes(canonicalName)) {
     return { allowed: false, risk, reason: `工具 "${name}" 已被安全策略禁用` }
   }
@@ -184,6 +193,17 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
       allowed: false,
       risk,
       reason: 'opening the computer default browser requires an explicit current user request for the system/default browser',
+    }
+  }
+  if (
+    name === 'system_music'
+    && String(args.action || 'status').toLowerCase() !== 'status'
+    && !SYSTEM_MUSIC_ACTION_INTENT_RE.test(currentUserMessage)
+  ) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'changing Music.app playback requires an explicit current user music-control request',
     }
   }
   if (name === 'browser_close' && explicitlyKeepsBrowserOpen(currentUserMessage)) {
@@ -228,7 +248,7 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
       }
     }
   }
-  if (['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'].includes(name)) {
+  if (['run_command', 'exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'].includes(name)) {
     const reasons = isDangerousShellCommand(args.command || args.cmd || '')
     if (reasons.length) return { allowed: false, risk, reason: reasons.join('; ') }
   }

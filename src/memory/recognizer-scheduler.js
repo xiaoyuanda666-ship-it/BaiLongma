@@ -22,7 +22,7 @@ const MAX_WAIT_MS = 180_000       // 最早一轮等待的硬上限（连续来�
 
 // 仅用于决定"是否立即 flush"的时机优化——产出耐久外部信息的工具，结论值得尽快落库、
 // 也防快速退出丢失。这是结构信号（工具名），不读消息正文，不改变 recognizer 是否运行。
-const DURABLE_INFO_TOOLS = new Set(['web_search', 'web_read', 'fetch_url', 'browser_read', 'read_file', 'exec_command'])
+const DURABLE_INFO_TOOLS = new Set(['web_search', 'web_read', 'fetch_url', 'browser_read', 'read_file', 'run_command', 'exec_command'])
 
 const EXPLICIT_MEMORY_RE = /(?:记住|记一下|记得|别忘了|以后(?:你)?(?:要|记得|别|不要)?|保存(?:一下|到记忆)?|remember|keep in mind|note that|don't forget|do not forget)/i
 

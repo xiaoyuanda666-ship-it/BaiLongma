@@ -20,6 +20,7 @@ import { handleEventRoutes } from './api/routes/events.js'
 import { handleMediaRoutes } from './api/routes/media.js'
 import { handleMapRoutes } from './api/routes/map.js'
 import { handleMemoryRoutes } from './api/routes/memory.js'
+import { handleKnowledgeRoutes } from './api/routes/knowledge.js'
 import { handleMessageRoutes } from './api/routes/message.js'
 import { handlePanelRoutes } from './api/routes/panels.js'
 import { handleSettingsRoutes } from './api/routes/settings.js'
@@ -139,6 +140,7 @@ function isSensitivePath(pathname) {
     || pathname.startsWith('/settings/')
     || pathname.startsWith('/admin/')
     || pathname.startsWith('/memories/')
+    || pathname.startsWith('/knowledge/')
 }
 
 function setCorsHeaders(req, res, origin) {
@@ -154,6 +156,7 @@ async function dispatchHttpRoutes(req, res, url, context) {
   if (await handleEventRoutes(req, res, url)) return true
   if (await handleBrowserPreviewRoutes(req, res, url, context)) return true
   if (await handleMemoryRoutes(req, res, url)) return true
+  if (await handleKnowledgeRoutes(req, res, url)) return true
   if (await handlePanelRoutes(req, res, url, context)) return true
   if (await handleMediaRoutes(req, res, url)) return true
   if (await handleMapRoutes(req, res, url, context)) return true
@@ -408,6 +411,8 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     console.log('[API]   POST /message  - send message to agent')
     console.log('[API]   GET  /events   - SSE real-time stream (receive agent messages)')
     console.log('[API]   GET  /memories - query memories')
+    console.log('[API]   GET  /knowledge/regions, /knowledge/search - query source-backed knowledge')
+    console.log('[API]   POST /knowledge/documents - ingest already-extracted source text')
     console.log('[API]   GET  /audit/recall, /audit/extract, /audit/stats - memory observability (Phase 0)')
     console.log('[API]   GET  /status   - status')
     console.log('[API]   WS   /scene    - Scene declarative UI channel')

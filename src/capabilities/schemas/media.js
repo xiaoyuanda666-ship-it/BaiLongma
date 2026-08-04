@@ -110,6 +110,25 @@ Music mode rules:
     }
   },
 
+  system_music: {
+    type: 'function',
+    function: {
+      name: 'system_music',
+      description: 'Read and control the macOS Music.app player. Every mutating action returns a freshly verified playback state and current-track metadata. Use status to inspect; use pause/play/toggle/next/previous/open for real system playback changes. Never claim that playback changed unless this tool returns ok=true with the expected playback_state.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['status', 'open', 'play', 'pause', 'toggle', 'next', 'previous'],
+            description: 'Playback action. status is read-only; pause/play and track navigation control Music.app and verify the resulting state.'
+          }
+        },
+        required: ['action']
+      }
+    }
+  },
+
   music: {
     type: 'function',
     function: {
@@ -142,4 +161,16 @@ To play music, use media_mode with mode=music and src=file_path to show the reco
       }
     }
   },
+}
+
+// macOS delegates music playback to the system Music.app. Keep Bailongma's
+// local library/player available on Windows and Linux, but make it impossible
+// for a macOS model turn to select or discover that competing implementation.
+if (process.platform === 'darwin') {
+  delete mediaSchemas.music
+  mediaSchemas.media_mode.function.description = `Control the brain-ui video, camera, and image stages. On macOS, music playback is owned by Music.app and must use system_music; Bailongma's local music player is unavailable.`
+  mediaSchemas.media_mode.function.parameters.properties.mode.enum = ['video', 'camera', 'image']
+  mediaSchemas.media_mode.function.parameters.properties.mode.description = 'video=right-side video mode; camera=right-side camera video; image=left-side image mode. Use system_music for macOS Music.app.'
+} else {
+  delete mediaSchemas.system_music
 }

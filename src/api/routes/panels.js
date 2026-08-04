@@ -4,6 +4,7 @@ import { getWorldcup, getWorldcupPanelState, setWorldcupPanelState } from '../..
 import { getTyphoons, getTyphoonPanelState, setTyphoonPanelState } from '../../typhoon.js'
 import { DOC_TOPICS, getDocPanelState, setDocPanelState } from '../../docs.js'
 import { getPersonCard, getPersonCardPanelState, setPersonCardPanelState } from '../../person-cards.js'
+import { getKnowledgePanelState, setKnowledgePanelState } from '../../knowledge/panel-state.js'
 import { getGeoWeatherSnapshot } from '../../geo-weather.js'
 import { getAgentName } from '../agent.js'
 import { jsonResponse, parseBooleanish, readJsonBody } from '../utils.js'
@@ -157,6 +158,29 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
           source: body.source || 'brain-ui',
           card: body.card || null,
           name: body.name || '',
+        })
+        jsonResponse(res, 200, { ok: true, state })
+      } catch (err) {
+        jsonResponse(res, 400, { ok: false, error: err.message })
+      }
+      return true
+    }
+  }
+
+  if (url.pathname === '/knowledge-panel-state') {
+    if (req.method === 'GET') {
+      jsonResponse(res, 200, { ok: true, state: getKnowledgePanelState() })
+      return true
+    }
+    if (req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req)
+        const state = setKnowledgePanelState({
+          active: parseBooleanish(body.active),
+          source: body.source || 'brain-ui',
+          regionId: body.region_id ?? body.regionId,
+          query: body.query,
+          documentId: body.document_id ?? body.documentId,
         })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {

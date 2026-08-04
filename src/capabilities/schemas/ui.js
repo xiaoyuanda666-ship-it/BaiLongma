@@ -64,7 +64,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'browser_set_display_mode',
-      description: 'Switch the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. card embeds the live page in Brain UI; window moves the exact same page into a draggable native window with standard controls. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. You MUST call this tool whenever the user explicitly asks for the Bailongma large/big/small/compact browser or window, even if it already appears to be in that mode. Use window for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, and careful interaction. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
+      description: 'Explicitly choose the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. card embeds the live page in Brain UI; window moves the exact same page into a draggable native window with standard controls. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. Before the first browser_navigate, snapshot, or page interaction in EVERY user turn, you MUST call this tool and choose card or window; there is no default mode. If a browser tool returns BROWSER_DISPLAY_MODE_REQUIRED, call this tool, then retry the exact blocked action. Use window for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, and careful interaction. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
       parameters: {
         type: 'object',
         properties: {
@@ -188,6 +188,25 @@ export const uiSchemas = {
           aliases: { type: 'array', items: { type: 'string' }, description: 'Aliases, English names, or common nicknames.' },
           image: { type: 'string', description: 'Optional large image URL, preferred for the card hero image.' },
           avatar: { type: 'string', description: 'Optional avatar or person image URL.' },
+          reason: { type: 'string', description: 'Optional short reason for opening or closing.' },
+        },
+        required: ['action']
+      }
+    }
+  },
+
+  knowledge_cortex_mode: {
+    type: 'function',
+    function: {
+      name: 'knowledge_cortex_mode',
+      description: 'Intent-gated control for the local Knowledge Cortex browser. Call only when the user wants to browse, manage, inspect, or search their own knowledge regions, document collection, or source evidence, or explicitly asks to show or close this browser. Do not call merely because an ordinary question can be answered from an imported document. Do not call for feature discussions, implementation/code/bug reports about Knowledge Cortex, or normal document-grounded Q&A. If the intent is uncertain, answer normally without opening the browser.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['show', 'open', 'hide', 'close', 'update', 'toggle', 'status'], description: 'show/open opens the browser; hide/close closes it; update opens it with optional focus; toggle switches it; status only checks state.' },
+          region_id: { type: 'string', description: 'Optional knowledge region id to focus.' },
+          query: { type: 'string', description: 'Optional query to execute in the browser after opening.' },
+          document_id: { type: 'string', description: 'Optional document id to open in the detail pane.' },
           reason: { type: 'string', description: 'Optional short reason for opening or closing.' },
         },
         required: ['action']

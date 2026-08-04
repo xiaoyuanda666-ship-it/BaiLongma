@@ -86,7 +86,9 @@ export async function execBrowserClearData(args = {}, context = {}) {
       browser_page_closed: true,
       ...cleared,
       browser_preview: {
-        mode: context.browserDisplayState?.mode === 'window' ? 'window' : 'card',
+        mode: context.browserDisplayState?.mode === 'window'
+          ? 'window'
+          : (context.browserDisplayState?.mode === 'card' ? 'card' : ''),
         state: 'closed',
         action: 'browser_clear_data',
         renderer: 'webcontentsview',

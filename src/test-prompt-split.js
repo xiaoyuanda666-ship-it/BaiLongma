@@ -74,6 +74,7 @@ const ctx1 = buildContextBlock({
   hasActiveTask: true,
   task: 'do thing',
   taskKnowledge: 'know X',
+  knowledgeEvidence: '[K:demo:1] 设计规范要求保留来源页码。',
   extraContext: 'weather=22C',
   entities: [{ id: 'ID:000001', label: 'Yuanda' }],
   thoughtStack: [{ concept: 'mem-pool', line: 'first sketch' }],
@@ -88,6 +89,9 @@ assert(ctx1.includes('round1 dir'), 'context contains directions')
 assert(ctx1.includes('<task active="true">'), 'context has active task tag')
 assert(ctx1.includes('do thing'), 'context contains task body')
 assert(ctx1.includes('<task-knowledge>'), 'context has task-knowledge tag')
+assert(ctx1.includes('<knowledge-evidence>'), 'context has source-backed knowledge evidence tag')
+assert(ctx1.includes('[K:demo:1]'), 'context contains knowledge citation id')
+assert(ctx1.indexOf('<knowledge-evidence>') < ctx1.indexOf('<memories>'), 'knowledge evidence precedes autobiographical memories')
 assert(ctx1.includes('<extra>'), 'context has extra tag')
 assert(ctx1.includes('weather=22C'), 'context contains extra body')
 assert(ctx1.includes('<known-others>'), 'context has known-others tag')
@@ -188,11 +192,12 @@ assert(sysTick.includes('## Visual Surfaces'), 'tick turn: autonomous visual rul
 
 // 8.1 Music gate
 const sysMusic = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '放首周杰伦的歌' })
-assert(sysMusic.includes('Music Mode: Highest Priority'), 'music keyword: Music Mode injected')
+assert(sysMusic.includes('Music Mode: Highest Priority') === (process.platform !== 'darwin'), 'local Music Mode follows platform ownership')
+if (process.platform === 'darwin') assert(sysMusic.includes('macOS System Music'), 'macOS music request injects Music.app rules')
 const sysMusic2 = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: 'play a song please' })
-assert(sysMusic2.includes('Music Mode: Highest Priority'), 'english "song": Music Mode injected')
+assert(sysMusic2.includes('Music Mode: Highest Priority') === (process.platform !== 'darwin'), 'english music request follows platform ownership')
 const sysMusic3 = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '换一首' })
-assert(sysMusic3.includes('Music Mode: Highest Priority'), '"换一首": Music Mode injected')
+assert(sysMusic3.includes('Music Mode: Highest Priority') === (process.platform !== 'darwin'), 'track change follows platform ownership')
 
 // 8.2 Video gate
 const sysVideo = buildSystemPrompt({ agentName: 'Longma', persona: 'p', userMessage: '帮我在B站看视频' })

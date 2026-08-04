@@ -36,24 +36,26 @@ assert(readResult === testContent, 'read_file reads back exact content', readRes
 const outsideRead = await executeTool('read_file', { path: '../package.json' }, { source: 'smoke-test' })
 assert(/^执行失败：访问被拒绝/.test(String(outsideRead)), 'read_file rejects sandbox escape', outsideRead)
 
-const deniedCommandText = await executeTool('exec_command', {
+const deniedCommandText = await executeTool('run_command', {
   command: 'type ..\\package.json',
 }, { source: 'smoke-test' })
 const deniedCommand = parseJsonResult(deniedCommandText)
-assert(deniedCommand?.ok === false && deniedCommand?.error === 'permission denied', 'exec_command rejects parent directory access', deniedCommandText)
+assert(deniedCommand?.ok === false && deniedCommand?.error === 'permission denied', 'run_command rejects parent directory access', deniedCommandText)
 
-const quickCommandText = await executeTool('exec_quick_command', {
+const quickCommandText = await executeTool('run_command', {
   command: 'node -e "console.log(\'quick-ok\')"',
+  mode: 'quick',
 }, { source: 'smoke-test' })
 const quickCommand = parseJsonResult(quickCommandText)
-assert(quickCommand?.ok === true && quickCommand?.command_profile === 'quick' && /quick-ok/.test(quickCommand?.stdout || ''), 'exec_quick_command uses quick profile', quickCommandText)
+assert(quickCommand?.ok === true && quickCommand?.tool === 'run_command' && quickCommand?.command_profile === 'quick' && /quick-ok/.test(quickCommand?.stdout || ''), 'run_command uses quick mode', quickCommandText)
 
-const taskCommandText = await executeTool('exec_task_command', {
+const taskCommandText = await executeTool('run_command', {
   command: 'node -e "console.log(\'task-ok\')"',
+  mode: 'task',
   timeout: 5,
 }, { source: 'smoke-test' })
 const taskCommand = parseJsonResult(taskCommandText)
-assert(taskCommand?.ok === true && taskCommand?.command_profile === 'task' && /task-ok/.test(taskCommand?.stdout || ''), 'exec_task_command uses task profile', taskCommandText)
+assert(taskCommand?.ok === true && taskCommand?.tool === 'run_command' && taskCommand?.command_profile === 'task' && /task-ok/.test(taskCommand?.stdout || ''), 'run_command uses task mode', taskCommandText)
 
 const badDownloadText = await executeTool('download_file', {
   url: 'file:///not-allowed',

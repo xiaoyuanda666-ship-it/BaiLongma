@@ -30,7 +30,7 @@ const { BROWSER_EMBED_PARTITION, createBrowserEmbedHost } = require('./browser-e
 const { createBrowserDataStore } = require('./browser-data.cjs')
 const { createSafeStorageNotice } = require('./safe-storage-notice.cjs')
 const { createBaiLongmaChromeManager } = require('./bailongma-chrome.cjs')
-const { bundledBrowserRoot, resolveBundledNodeExecutable } = require('./playwright-runtime.cjs')
+const { bundledBrowserRoot, configureBundledNodeRuntime } = require('./playwright-runtime.cjs')
 const { createTrustedWindowSenderGuard } = require('./trusted-window-senders.cjs')
 const { hasPackagedUpdaterConfig } = require('./updater-config.cjs')
 
@@ -81,12 +81,11 @@ const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
 const STARTUP_PAGE = path.join(__dirname, 'startup.html')
-const BUNDLED_NODE_EXECUTABLE = resolveBundledNodeExecutable({
+const BUNDLED_NODE_EXECUTABLE = configureBundledNodeRuntime({
   isPackaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
   projectRoot: CODE_ROOT,
 })
-if (BUNDLED_NODE_EXECUTABLE) process.env.BAILONGMA_MCP_NODE_PATH = BUNDLED_NODE_EXECUTABLE
 
 function isTlsBackend() {
   return Boolean(

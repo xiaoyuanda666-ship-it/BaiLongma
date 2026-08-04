@@ -33,6 +33,7 @@ export function initChat({
   activationWarmupKey,
   getAgentName,
   defaultInputPlaceholder,
+  isSpacePttEnabled = () => true,
   onUserMessage = null,
   openSettings = null,
 } = {}) {
@@ -122,7 +123,15 @@ export function initChat({
 
   // 聚焦输入框时提示发消息，未聚焦时提示语音输入
   function idlePlaceholder() {
-    return document.activeElement === msgInput ? defaultInputPlaceholder() : PUSH_TO_TALK_PLACEHOLDER;
+    return document.activeElement === msgInput || !isSpacePttEnabled()
+      ? defaultInputPlaceholder()
+      : PUSH_TO_TALK_PLACEHOLDER;
+  }
+
+  function formatMessageTime(timestamp) {
+    const date = timestamp ? new Date(timestamp) : new Date();
+    if (!Number.isFinite(date.getTime())) return "";
+    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
   }
 
   function setComposerLocked(locked, reason = "") {
@@ -275,9 +284,9 @@ export function initChat({
                 || /^(wechat|discord|feishu|wecom):/i.test(r.from_id || ""));
           if (isExternal) {
             const label = friendlyChannelLabel(r.channel) || r.from_id;
-            return { role: "external", text: r.content, label, messageId: r.id };
+            return { role: "external", text: r.content, label, messageId: r.id, timestamp: r.timestamp };
           }
-          return { role: r.role, text: r.content, messageId: r.id };
+          return { role: r.role, text: r.content, messageId: r.id, timestamp: r.timestamp };
         });
       return { messages, rowCount: rows.length };
     } catch { return null; }
@@ -311,6 +320,7 @@ export function initChat({
       dedupe = true,
       forceScroll = false,
       prepend = false,
+      timestamp = null,
     } = options;
     const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
     const labelText = label || defaultLabel;
@@ -325,10 +335,19 @@ export function initChat({
       div.dataset.clientMessageId = normalizedClientMessageId;
       pendingClientMessages.set(normalizedClientMessageId, div);
     }
+    const meta = document.createElement("span");
+    meta.className = "msg-meta";
     const labelSpan = document.createElement("span");
     labelSpan.className = "msg-label";
     labelSpan.textContent = labelText;
-    div.appendChild(labelSpan);
+    meta.appendChild(labelSpan);
+    const timeSpan = document.createElement("time");
+    timeSpan.className = "msg-time";
+    timeSpan.dateTime = timestamp || new Date().toISOString();
+    timeSpan.textContent = formatMessageTime(timestamp);
+    if (timestamp) timeSpan.title = new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
+    meta.appendChild(timeSpan);
+    div.appendChild(meta);
     div.appendChild(createMarkdownBody(text));
     if (prepend) chatMessages.insertBefore(div, chatMessages.firstChild);
     else chatMessages.appendChild(div);
@@ -377,6 +396,7 @@ export function initChat({
         label: i.label,
         messageId: i.messageId,
         source: "history",
+        timestamp: i.timestamp,
       }));
       if (!historyInitialized || !oldestHistoryId) {
         oldestHistoryId = normalizeMessageId(messages[0]?.messageId);
@@ -406,8 +426,10 @@ export function initChat({
         return [];
       }
 
-      const previousScrollHeight = chatMessages.scrollHeight;
       const previousScrollTop = chatMessages.scrollTop;
+      const previousScrollHeight = chatMessages.scrollHeight;
+      const anchor = chatMessages.firstElementChild;
+      const previousAnchorTop = anchor?.getBoundingClientRect().top ?? 0;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         const item = messages[index];
         addMsg(item.role, item.text, {
@@ -418,12 +440,17 @@ export function initChat({
           messageId: item.messageId,
           source: "history",
           prepend: true,
+          timestamp: item.timestamp,
         });
       }
       oldestHistoryId = normalizeMessageId(messages[0]?.messageId) || oldestHistoryId;
       hasOlderHistory = rowCount >= historyPageSize;
       const addedHeight = chatMessages.scrollHeight - previousScrollHeight;
       chatMessages.scrollTop = previousScrollTop + addedHeight;
+      if (anchor) {
+        const remainingShift = anchor.getBoundingClientRect().top - previousAnchorTop;
+        if (remainingShift) chatMessages.scrollTop += remainingShift;
+      }
       return messages;
     }).finally(() => {
       olderHistoryPromise = null;
@@ -695,7 +722,7 @@ export function initChat({
   });
   msgInput.addEventListener("blur", () => {
     compositionActive = false;
-    if (!inputLocked) msgInput.placeholder = PUSH_TO_TALK_PLACEHOLDER;
+    if (!inputLocked) msgInput.placeholder = idlePlaceholder();
     if (!isTyping()) scheduleClose();
     // 延迟关闭，让命令项的 mousedown 先触发
     setTimeout(hideSlashMenu, 120);
@@ -729,6 +756,9 @@ export function initChat({
     }
   });
   sendBtn.addEventListener("click", () => send());
+  window.addEventListener("bailongma:space-ptt-change", () => {
+    if (!inputLocked) msgInput.placeholder = idlePlaceholder();
+  });
 
   // 初始未聚焦：显示语音输入提示
   if (!inputLocked) msgInput.placeholder = idlePlaceholder();

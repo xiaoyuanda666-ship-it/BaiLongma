@@ -52,6 +52,7 @@ export async function runRuntimeInjector({
   const hotspotContextText = capPrefeed.byId.hotspot || ''
   const worldcupContextText = capPrefeed.byId.worldcup || ''
   const weatherContextText = capPrefeed.byId.weather || ''
+  const macosMusicContextText = capPrefeed.byId['macos-system-music'] || ''
 
   const taskExtraContextItems = taskExtraContextItemsRaw || []
   const taskExtraContextText = taskExtraContextItems.length
@@ -67,6 +68,7 @@ export async function runRuntimeInjector({
     personCardStateText,
     personCardContextText,
     weatherContextText,
+    macosMusicContextText,
     docStateText,
     docContextText,
     taskExtraContextText,
@@ -81,6 +83,7 @@ export async function runRuntimeInjector({
     personCardStateText,
     personCardContextText,
     weatherContextText,
+    macosMusicContextText,
     detectedDocTopic,
     docStateText,
     docContextText,

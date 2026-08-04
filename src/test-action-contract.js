@@ -14,6 +14,7 @@ try {
     actionContractCompletionIssue,
     actionContractToolSucceeded,
     classifyActionContract,
+    resolveActionContractForTurn,
     verifiedActionContractReply,
   } = await import('./runtime/action-contract.js')
   const { callLLM } = await import('./llm.js')
@@ -145,6 +146,60 @@ try {
     'person-card commands are left to model semantic intent instead of regex action contracts')
   assert.equal(classifyActionContract('人物卡片有点问题，经常错误触发'), null,
     'person-card feature discussions do not create a UI action contract')
+  if (process.platform === 'darwin') {
+    const explicitMusicPause = classifyActionContract('暂停 Apple Music')
+    assert.equal(explicitMusicPause?.id, 'macos_system_music')
+    assert.deepEqual(explicitMusicPause.requiredTools, ['system_music'])
+    const contextualMusicPause = classifyActionContract('暂停', {
+      runtimeContext: '[macOS System Music]\nMusic.app is open. Authoritative playback state: playing.',
+    })
+    assert.equal(contextualMusicPause?.id, 'macos_system_music', 'live Music.app state makes terse pause an evidenced action')
+    assert.equal(classifyActionContract('播放我的 mac 系统里的 Music')?.id, 'macos_system_music')
+    assert.equal(classifyActionContract('怎么暂停 Apple Music？'), null, 'music how-to remains ordinary explanation')
+
+    let musicRounds = 0
+    const musicCalls = []
+    const musicResult = await callLLM({
+      systemPrompt: 'system',
+      message: '暂停',
+      tools: ['system_music'],
+      mustReply: true,
+      localReply: true,
+      toolContext: {
+        currentTargetId: 'ID:000001',
+        currentUserMessage: '暂停',
+        actionContract: contextualMusicPause,
+      },
+      _streamOnceForTest: async ({ messages }) => {
+        musicRounds += 1
+        if (musicRounds === 1) return { content: '已经暂停了。', reasoningContent: '', aborted: false, toolCalls: [] }
+        if (musicRounds === 2) {
+          assert(messages.some(item => String(item.content || '').includes('No matching action has actually run')))
+          return {
+            content: '', reasoningContent: '', aborted: false,
+            toolCalls: [{ id: 'music-pause-1', name: 'system_music', arguments: JSON.stringify({ action: 'pause' }) }],
+          }
+        }
+        return { content: '已暂停《七里香》。', reasoningContent: '', aborted: false, toolCalls: [] }
+      },
+      _executeToolForTest: async (name, args) => {
+        musicCalls.push({ name, args })
+        return JSON.stringify({ ok: true, tool: 'system_music', action: 'pause', playback_state: 'paused', title: '七里香' })
+      },
+    })
+    assert.equal(musicRounds, 3, 'a text-only pause claim is replaced by a real Music.app action round')
+    assert.deepEqual(musicCalls.filter(call => call.name === 'system_music'), [
+      { name: 'system_music', args: { action: 'pause' } },
+    ])
+    assert.match(musicResult.content, /已暂停/)
+  }
+  assert.equal(
+    resolveActionContractForTurn('帮我在 sandbox 里创建一个 hello.txt 文件', {
+      strictEvaluation: { active: true, forbiddenTools: ['write_file'] },
+    }),
+    null,
+    'an action contract never requires a tool forbidden by strict evaluation',
+  )
 
   let rounds = 0
   const executed = []

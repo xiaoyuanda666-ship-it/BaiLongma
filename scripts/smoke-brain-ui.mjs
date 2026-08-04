@@ -31,6 +31,19 @@ function sendJson(res, body) {
   res.end(JSON.stringify(body))
 }
 
+function readJsonRequest(req) {
+  return new Promise((resolve, reject) => {
+    let raw = ''
+    req.setEncoding('utf8')
+    req.on('data', chunk => { raw += chunk })
+    req.on('end', () => {
+      try { resolve(raw ? JSON.parse(raw) : {}) }
+      catch (error) { reject(error) }
+    })
+    req.on('error', reject)
+  })
+}
+
 function isPathInside(parentDir, candidatePath) {
   const parent = path.resolve(parentDir)
   const candidate = path.resolve(candidatePath)
@@ -66,6 +79,7 @@ function createServer() {
   ])
   let brainUiPath = null
   let heartbeatCount = 0
+  const settingsRequests = []
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1')
 
@@ -246,6 +260,31 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/knowledge/regions') {
+      sendJson(res, { ok: true, regions: [{ id: 'smoke-docs', name: '发布资料', description: 'Smoke 知识脑区文档' }] })
+      return
+    }
+
+    if (url.pathname === '/knowledge/documents') {
+      sendJson(res, { ok: true, documents: [{ id: 1, title: '发布验证手册', version: 2, mime_type: 'text/markdown', region_id: 'smoke-docs' }] })
+      return
+    }
+
+    if (url.pathname === '/knowledge/documents/1') {
+      sendJson(res, { ok: true, document: { id: 1, title: '发布验证手册', version: 2, mime_type: 'text/markdown', region_id: 'smoke-docs', region_name: '发布资料', source_uri: 'file:///smoke/release.md' } })
+      return
+    }
+
+    if (url.pathname === '/knowledge/search') {
+      sendJson(res, { ok: true, count: 1, hits: [{ document_id: 1, document_title: '发布验证手册', text: '发布前需执行签名、安装和回归验证。', citation_id: 'K:1:1', retrieval_method: 'fts' }] })
+      return
+    }
+
+    if (url.pathname === '/knowledge-panel-state') {
+      sendJson(res, { ok: true, state: { active: true } })
+      return
+    }
+
     if (url.pathname === '/social/wechat-clawbot/qr') {
       sendJson(res, { ok: true, qr: null, status: 'unavailable' })
       return
@@ -253,6 +292,78 @@ function createServer() {
 
     if (url.pathname === '/events/history') {
       sendJson(res, { ok: true, events: brainUiEvents.slice(-160), heartbeatCount })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/settings') {
+      sendJson(res, {
+        agent_name: 'SmokeLongma',
+        llm: {
+          activated: true,
+          provider: 'deepseek',
+          model: 'deepseek-chat',
+          baseURL: 'https://api.deepseek.com',
+          models: [],
+          temperature: 0.5,
+          thinking: false,
+          contextWindow: { chatMessageLimit: 20, toolCallLimit: 5 },
+          apiKey: '',
+        },
+        providers: {
+          deepseek: {
+            label: 'DeepSeek',
+            defaultModel: 'deepseek-chat',
+            model: 'deepseek-chat',
+            models: [{ id: 'deepseek-chat', label: 'DeepSeek Chat' }],
+            apiKey: '',
+          },
+        },
+        minimax: { configured: false },
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/settings/temperature') {
+      readJsonRequest(req).then(body => {
+        const temperature = Number(body.temperature)
+        settingsRequests.push({ pathname: url.pathname, body: { temperature } })
+        sendJson(res, { ok: true, temperature })
+      }).catch(error => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/settings/voice') {
+      sendJson(res, { ok: true, voice: { voiceProvider: 'local' } })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/settings/tts') {
+      sendJson(res, { ok: true, tts: { ttsProvider: 'doubao' }, voices: {} })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/settings/map') {
+      sendJson(res, {
+        ok: true,
+        map: { configured: true, keyConfigured: true, securityConfigured: true },
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/settings/map') {
+      readJsonRequest(req).then(body => {
+        settingsRequests.push({ pathname: url.pathname, body })
+        sendJson(res, {
+          ok: true,
+          map: { configured: true, keyConfigured: true, securityConfigured: true },
+        })
+      }).catch(error => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
       return
     }
 
@@ -299,6 +410,7 @@ function createServer() {
   server.setConversations = (rows) => {
     conversations = Array.isArray(rows) ? rows : []
   }
+  server.settingsRequests = settingsRequests
   server.emitSse = (event) => {
     if (event?.type === 'message_received') brainUiPath = 'l1'
     if (event?.type === 'tick') {
@@ -363,6 +475,77 @@ try {
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
 
+  await page.click('#settings-btn')
+  await page.waitForSelector('#settings-overlay:not([hidden])')
+  await page.waitForFunction(() => document.querySelector('#settings-temperature')?.value === '0.5')
+  const manualSaveButtons = await page.$$eval('#settings-overlay button', buttons => buttons
+    .map(button => button.textContent.trim())
+    .filter(text => /^保存(?:$|所有|心跳|地图)/.test(text)))
+  if (manualSaveButtons.length > 0) {
+    throw new Error(`settings still expose manual save buttons: ${manualSaveButtons.join(', ')}`)
+  }
+  const autosaveHeader = await page.textContent('#settings-autosave-status-text')
+  if (autosaveHeader !== '所有更改自动保存') {
+    throw new Error(`settings autosave status missing: ${autosaveHeader}`)
+  }
+  await page.evaluate(() => {
+    const slider = document.querySelector('#settings-temperature')
+    slider.value = '0.65'
+    slider.dispatchEvent(new Event('input', { bubbles: true }))
+    slider.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await page.waitForFunction(() => (
+    document.querySelector('#settings-autosave-status')?.dataset.state === 'saved'
+    && document.querySelector('#settings-autosave-status-text')?.textContent === '已自动保存'
+  ))
+  const temperatureRequest = server.settingsRequests.find(request => (
+    request.pathname === '/settings/temperature'
+    && request.body.temperature === 0.65
+  ))
+  if (!temperatureRequest) throw new Error('temperature change was not auto-saved')
+
+  await page.click('.settings-nav-item[data-tab="advanced"]')
+  await page.fill('#settings-amap-key', 'smoke-amap-key')
+  await page.click('#settings-amap-key-toggle')
+  await page.waitForFunction(() => (
+    document.querySelector('#settings-autosave-status')?.dataset.state === 'saved'
+    && document.querySelector('#settings-amap-key')?.value === 'smoke-amap-key'
+  ))
+  const mapSecretState = await page.evaluate(() => {
+    const toggles = [...document.querySelectorAll('.settings-secret-toggle')]
+    const mapInput = document.querySelector('#settings-amap-key')
+    const mapToggle = document.querySelector('#settings-amap-key-toggle')
+    const iconStyle = getComputedStyle(mapToggle, '::before')
+    return {
+      allIconsAreTextless: toggles.every(toggle => toggle.textContent.trim() === ''),
+      mapValueRetained: mapInput?.value === 'smoke-amap-key',
+      mapValueVisible: mapInput?.type === 'text',
+      openEyeState: mapToggle?.dataset.visible === 'true',
+      monochromeMaskIcon: iconStyle.backgroundColor === getComputedStyle(mapToggle).color
+        && iconStyle.webkitMaskImage !== 'none',
+    }
+  })
+  const failedMapSecretChecks = Object.entries(mapSecretState)
+    .filter(([, passed]) => !passed)
+    .map(([name]) => name)
+  if (failedMapSecretChecks.length > 0) {
+    throw new Error(`map secret field failed (${failedMapSecretChecks.join(', ')}): ${JSON.stringify(mapSecretState)}`)
+  }
+  await page.click('#settings-amap-key-toggle')
+  const mapSecretClosedState = await page.evaluate(() => ({
+    inputType: document.querySelector('#settings-amap-key')?.type,
+    visible: document.querySelector('#settings-amap-key-toggle')?.dataset.visible,
+  }))
+  if (mapSecretClosedState.inputType !== 'password' || mapSecretClosedState.visible !== 'false') {
+    throw new Error(`map secret did not return to closed-eye password state: ${JSON.stringify(mapSecretClosedState)}`)
+  }
+  const mapRequest = server.settingsRequests.find(request => (
+    request.pathname === '/settings/map'
+    && request.body.jsKey === 'smoke-amap-key'
+  ))
+  if (!mapRequest) throw new Error('map key was not auto-saved')
+  await page.click('#settings-close')
+
   await page.evaluate(() => {
     window.__pttSmoke = { start: 0, end: 0 }
     window.bailongmaVoice.pttStart = () => { window.__pttSmoke.start += 1 }
@@ -396,6 +579,24 @@ try {
     throw new Error(`Space in a non-empty message input did not remain text: ${JSON.stringify(typedSpaceState)}`)
   }
   await page.fill('#msg-input', '')
+  await page.evaluate(() => {
+    localStorage.setItem('bailongma-voice-space-ptt-enabled', 'false')
+    window.dispatchEvent(new CustomEvent('bailongma:space-ptt-change', { detail: { enabled: false } }))
+  })
+  await page.keyboard.press('Space')
+  const disabledPttState = await page.evaluate(() => ({
+    ...window.__pttSmoke,
+    value: document.querySelector('#msg-input')?.value,
+    placeholder: document.querySelector('#msg-input')?.placeholder,
+  }))
+  if (disabledPttState.start !== 1 || disabledPttState.end !== 1 || disabledPttState.value !== ' ' || /空格键/.test(disabledPttState.placeholder)) {
+    throw new Error(`disabled Space PTT did not restore normal typing: ${JSON.stringify(disabledPttState)}`)
+  }
+  await page.evaluate(() => {
+    localStorage.setItem('bailongma-voice-space-ptt-enabled', 'true')
+    window.dispatchEvent(new CustomEvent('bailongma:space-ptt-change', { detail: { enabled: true } }))
+  })
+  await page.fill('#msg-input', '')
   await page.click('#chat-pin-button')
   await page.mouse.move(0, 0)
   await page.waitForTimeout(180)
@@ -425,11 +626,16 @@ try {
     role: index % 2 === 0 ? 'user' : 'jarvis',
     content: `滚动位置回归消息 ${index + 1}：用户阅读较早聊天记录时，后台历史同步不能把视图拉回底部。`,
     channel: 'TUI',
+    timestamp: `2026-07-30T${String(8 + Math.floor(index / 60)).padStart(2, '0')}:${String(index % 60).padStart(2, '0')}:00+08:00`,
   })))
   let historySyncResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/conversations')
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await historySyncResponse
   await page.waitForFunction(() => document.querySelectorAll('#chat-messages .msg').length === 60)
+  const visibleMessageTimes = await page.locator('#chat-messages .msg-time').allTextContents()
+  if (visibleMessageTimes.length !== 60 || visibleMessageTimes[0] !== '09:25' || visibleMessageTimes.at(-1) !== '10:24') {
+    throw new Error(`chat history timestamps were not rendered: ${JSON.stringify(visibleMessageTimes.slice(0, 2))}`)
+  }
   const historyScrollBeforeSync = await page.evaluate(async () => {
     const history = document.querySelector('#chat-history')
     const messages = document.querySelector('#chat-messages')
@@ -532,10 +738,19 @@ try {
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '45 分钟')
   const heartbeatChartHeight = await page.locator('#heartbeat-chart').evaluate(element => element.getBoundingClientRect().height)
   if (heartbeatChartHeight < 92) throw new Error(`heartbeat chart is too short: ${heartbeatChartHeight}px`)
+  await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
+  await page.evaluate(() => {
+    window.__memoryTwitchHeartbeatSeen = false
+    const monitor = document.querySelector('.heartbeat-monitor')
+    new MutationObserver(() => {
+      if (monitor?.dataset.beat === 'medium') window.__memoryTwitchHeartbeatSeen = true
+    }).observe(monitor, { attributes: true, attributeFilter: ['data-beat'] })
+  })
+  await page.waitForTimeout(10_000)
+  if (await page.evaluate(() => window.__memoryTwitchHeartbeatSeen)) {
+    throw new Error('memory graph twitch must not trigger the heartbeat chart')
+  }
   const idleHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
-  await page.waitForTimeout(4000)
-  const settledHeartbeatPath = await page.locator('#heartbeat-wave').getAttribute('d')
-  if (settledHeartbeatPath !== idleHeartbeatPath) throw new Error('heartbeat wave moved without real activity')
   server.emitSse({ type: 'tool_executing', data: { name: 'read_file' }, ts: new Date().toISOString() })
   await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]')
   await page.waitForFunction(() => {
@@ -543,6 +758,18 @@ try {
     const yValues = values.filter((_, index) => index % 2 === 1)
     return yValues.some(y => Math.abs(y - 36) > 19)
   })
+  const countBeforeLongToolPulse = await page.locator('#heartbeat-count').textContent()
+  await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
+  await page.waitForSelector('.heartbeat-monitor[data-beat="minor"]', { timeout: 3500 })
+  if (await page.locator('#heartbeat-count').textContent() !== countBeforeLongToolPulse) {
+    throw new Error('periodic tool pulse must not increment the L2 heartbeat count')
+  }
+  server.emitSse({ type: 'tool_call', data: { name: 'read_file', args: {}, result: 'done', ok: true }, ts: new Date().toISOString() })
+  await page.waitForSelector('.heartbeat-monitor:not([data-beat])')
+  await page.waitForTimeout(3200)
+  if (await page.locator('.heartbeat-monitor').getAttribute('data-beat') !== null) {
+    throw new Error('periodic tool pulse must stop after tool completion')
+  }
   server.emitSse({ type: 'tick', data: { label: 'TICK' }, ts: new Date().toISOString() })
   await page.waitForSelector('.heartbeat-monitor[data-beat="major"]')
   await page.waitForFunction(() => {
@@ -602,6 +829,46 @@ try {
     && document.querySelector('#si-l1')?.textContent.includes('请更新配置文件')
     && document.querySelector('#si-l1')?.textContent.includes('写入文件'))
 
+  server.emitSse({
+    type: 'command_run',
+    data: {
+      run_id: 'cmd_smoke_command_ui',
+      state: 'running',
+      pid: 43210,
+      command: 'node smoke-command.js',
+      started_at: new Date().toISOString(),
+    },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'command_output',
+    data: { run_id: 'cmd_smoke_command_ui', pid: 43210, sequence: 1, stream: 'stdout', text: 'smoke output\n' },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() => {
+    const card = document.querySelector('#command-runs .command-run[data-state="running"]')
+    return !document.querySelector('#command-runs')?.hidden
+      && card?.textContent.includes('node smoke-command.js')
+      && card?.textContent.includes('smoke output')
+      && card?.textContent.includes('运行中')
+  })
+  // Replayed output records must not be duplicated after an SSE reconnect.
+  server.emitSse({
+    type: 'command_output',
+    data: { run_id: 'cmd_smoke_command_ui', pid: 43210, sequence: 1, stream: 'stdout', text: 'smoke output\n' },
+    ts: new Date().toISOString(),
+  })
+  server.emitSse({
+    type: 'command_run',
+    data: { run_id: 'cmd_smoke_command_ui', state: 'completed', pid: 43210, exit_code: 0 },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() => {
+    const card = document.querySelector('#command-runs .command-run[data-state="completed"]')
+    return card?.textContent.includes('已完成')
+      && (card?.textContent.match(/smoke output/g) || []).length === 1
+  })
+
   // Electron uses a native WebContentsView rather than downloading the preview
   // screenshot. Keep this as a second page so the regular-browser fallback below
   // continues to exercise image loading independently.
@@ -638,6 +905,10 @@ try {
   })
   await nativePage.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
   await nativePage.waitForSelector('#heartbeat-state[data-state="alive"]')
+  await nativePage.waitForFunction(() => (
+    !document.querySelector('#music-btn')
+    && !document.querySelector('#music-panel')
+  ))
   await nativePage.waitForFunction(() => (
     window.__browserEmbedCalls?.some(call => call.method === 'hide')
     && window.__browserEmbedCalls?.some(call => call.method === 'getState')
@@ -1473,6 +1744,35 @@ try {
     Boolean(document.querySelector('#person-card-panel'))
     || document.querySelector('.cognition-module')?.dataset.personPhase === 'person')
   if (falsePersonCard) throw new Error('person card opened for a non-person introduction request')
+
+  // Knowledge Cortex follows the same model-intent event path as the person
+  // card. Raw text never opens it; an explicit agent event opens the browser
+  // with a region/query focus and it loads source-backed data from its API.
+  server.emitSse({
+    type: 'knowledge_cortex_mode',
+    data: { action: 'show', active: true, region_id: 'smoke-docs', query: '发布验证', document_id: '1' },
+    ts: new Date().toISOString(),
+  })
+  await page.waitForFunction(() => (
+    document.body.classList.contains('knowledge-cortex-mode')
+    && document.querySelector('#kc-region-list')?.textContent.includes('发布资料')
+    && document.querySelector('#kc-result-list')?.textContent.includes('签名、安装和回归验证')
+    && document.querySelector('#kc-detail')?.textContent.includes('file:///smoke/release.md')
+  ))
+  const knowledgeSurface = await page.evaluate(() => ({
+    visible: document.querySelector('#knowledge-cortex-panel')?.getAttribute('aria-hidden') === 'false',
+    regionCount: document.querySelector('#kc-region-count')?.textContent,
+    resultCount: document.querySelector('#kc-result-count')?.textContent,
+    documentTitle: document.querySelector('#kc-detail h2')?.textContent,
+    panelRight: document.querySelector('#knowledge-cortex-panel')?.getBoundingClientRect().right || 0,
+    consoleLeft: document.querySelector('.console')?.getBoundingClientRect().left || 0,
+    consoleVisible: getComputedStyle(document.querySelector('.console')).display !== 'none',
+  }))
+  if (!knowledgeSurface.visible || knowledgeSurface.regionCount !== '1' || knowledgeSurface.resultCount !== '1' || knowledgeSurface.documentTitle !== '发布验证手册' || !knowledgeSurface.consoleVisible || knowledgeSurface.consoleLeft <= knowledgeSurface.panelRight) {
+    throw new Error(`knowledge cortex surface did not render focused source data: ${JSON.stringify(knowledgeSurface)}`)
+  }
+  await page.click('#kc-close')
+  await page.waitForFunction(() => !document.body.classList.contains('knowledge-cortex-mode'))
 
   server.emitSse({ type: 'message_received', data: { input: 'action log limit smoke' }, ts: new Date().toISOString() })
   server.emitSse({

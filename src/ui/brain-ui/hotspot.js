@@ -43,6 +43,9 @@ const TICKER_ITEMS = [
   { time:'19:13', text:'研究显示：今夏北半球平均气温创历史新高' },
 ];
 
+// 收起到后台后保留一小段时间，方便快速切回；只有持续未展开才回收重型 WebGL 资源。
+const BACKGROUND_RELEASE_MS = 5 * 60 * 1000;
+
 // ── 热点上下文构建（中性系统上下文，不强制 Agent 回复）──────────────────────────
 
 let hotspotMeta = {
@@ -88,6 +91,8 @@ let earth         = null;
 let clockTimer    = null;
 let feedAutoTimer = null;
 let hotspotRefreshTimer = null;
+let hotspotRefreshController = null;
+let backgroundReleaseTimer = null;
 let feedIndex     = 0;
 
 // ── 语音球搬家：从 #panel-l1(有 transform)移走，让 fixed 定位/嵌入布局生效 ────
@@ -208,14 +213,20 @@ function updateHotspotMeta() {
 }
 
 async function refreshHotspots({ force = false } = {}) {
+  // 同一面板只保留一个请求；关闭时会由 stopHotspotRefresh 主动取消。
+  if (hotspotRefreshController) return;
+  const controller = new AbortController();
+  hotspotRefreshController = controller;
   try {
     const params = new URLSearchParams();
     if (force) params.set('refresh', '1');
     if (hotspotActive) params.set('viewed', '1');
     const query = params.toString();
-    const res = await fetch(apiUrl(`/hotspots${query ? `?${query}` : ''}`));
+    const res = await fetch(apiUrl(`/hotspots${query ? `?${query}` : ''}`), { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    // 请求返回前面板已关闭，无需再更新隐藏 DOM 或延长后端的 viewed 状态。
+    if (!hotspotActive) return;
     for (const platform of Object.keys(PLATFORM_CONFIG)) {
       const list = data?.platforms?.[platform] || [];
       hotspotLists[platform] = Array.isArray(list)
@@ -232,12 +243,15 @@ async function refreshHotspots({ force = false } = {}) {
     renderAllLists();
     updateHotspotMeta();
   } catch (err) {
+    if (err.name === 'AbortError') return;
     hotspotMeta = {
       ...hotspotMeta,
       stale: true,
     };
     updateHotspotMeta();
     console.warn('[Hotspot] 热榜刷新失败:', err.message);
+  } finally {
+    if (hotspotRefreshController === controller) hotspotRefreshController = null;
   }
 }
 
@@ -251,6 +265,8 @@ function startHotspotRefresh() {
 function stopHotspotRefresh() {
   if (hotspotRefreshTimer) clearInterval(hotspotRefreshTimer);
   hotspotRefreshTimer = null;
+  hotspotRefreshController?.abort();
+  hotspotRefreshController = null;
 }
 
 // ── 实时事件流 ───────────────────────────────────────────────────────────────
@@ -335,6 +351,29 @@ function stopClock() {
   clockTimer = null;
 }
 
+function cancelBackgroundRelease() {
+  if (backgroundReleaseTimer) clearTimeout(backgroundReleaseTimer);
+  backgroundReleaseTimer = null;
+}
+
+function scheduleBackgroundRelease() {
+  if (hotspotActive) return;
+  cancelBackgroundRelease();
+  backgroundReleaseTimer = setTimeout(() => {
+    backgroundReleaseTimer = null;
+    if (!hotspotActive) disposeEarth();
+  }, BACKGROUND_RELEASE_MS);
+}
+
+// 热点面板是唯一会创建 WebGL 上下文的大屏。暂停 rAF 只能止住 GPU 空转，
+// 并不会归还纹理、缓冲区和 canvas context；关闭时必须真正 dispose，下一次打开再懒加载。
+function disposeEarth() {
+  const instance = earth;
+  earth = null;
+  earthInitPromise = null;
+  try { instance?.dispose(); } catch (err) { console.warn('[HotspotEarth] 释放资源失败:', err); }
+}
+
 function replayHotspotBoot() {
   const panel = $('hotspot-panel');
   if (!panel) return;
@@ -380,8 +419,10 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
     stopFeedAuto();
     stopHotspotRefresh();
     earth?.pause();
+    scheduleBackgroundRelease();
     restoreVoicePanel();
   } else {
+    cancelBackgroundRelease();
     // 关闭其他媒体模式（互斥）
     if (document.body.classList.contains('video-mode'))
       document.body.classList.remove('video-mode');
@@ -421,7 +462,6 @@ export async function initHotspot() {
   updateHotspotMeta();
   renderFeed();
   renderTicker();
-  refreshHotspots().catch(() => {});
 
   // 绑定关闭按钮
   const exitBtn = $('hs-exit-btn');
@@ -452,13 +492,16 @@ function ensureEarth() {
   if (earthInitPromise) return earthInitPromise;
   const canvas = $('hs-earth-canvas');
   if (!canvas) return Promise.resolve(null);
-  earth = new HotspotEarth(canvas);
-  earthInitPromise = earth.init().then(() => earth).catch((err) => {
+  const instance = new HotspotEarth(canvas);
+  earth = instance;
+  earthInitPromise = instance.init().then((ready) => {
+    // 关闭期间的异步初始化会被 dispose；不得把旧实例重新挂回面板。
+    if (!ready || earth !== instance) return null;
+    return instance;
+  }).catch((err) => {
     console.warn('[HotspotEarth] 初始化失败，可能是网络问题:', err);
     // 初始化失败（多半是 three.js CDN 拉不下来）→ 复位，下次打开面板重试
-    try { earth?.dispose(); } catch {}
-    earth = null;
-    earthInitPromise = null;
+    if (earth === instance) disposeEarth();
     return null;
   });
   return earthInitPromise;

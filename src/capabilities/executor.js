@@ -11,12 +11,13 @@ import { setHotspotPanelState, getHotspotPanelState } from '../hotspots.js'
 import { setWorldcupPanelState, getWorldcupPanelState } from '../worldcup.js'
 import { setTyphoonPanelState, getTyphoonPanelState } from '../typhoon.js'
 import { setPersonCardPanelState, getPersonCardPanelState, getPersonCard } from '../person-cards.js'
+import { setKnowledgePanelState, getKnowledgePanelState } from '../knowledge/panel-state.js'
 import { setDocPanelState, getDocPanelState } from '../docs.js'
 import { setUserLocation } from '../weather.js'
 import { getAgentById, isDelegationAllowed } from '../agents/registry.js'
 import { installTool, uninstallTool, listInstalledTools, isInstalledTool, executeInstalledTool, getInstalledToolSchema } from './marketplace/index.js'
 import { execManageToolFactory } from './tool-factory.js'
-import { TOOL_SCHEMAS } from './schemas.js'
+import { TOOL_SCHEMAS, getToolSchema } from './schemas.js'
 import { TOOL_GROUPS } from '../memory/tool-router.js'
 import { findCapabilitiesByQuery } from './capability-registry.js'
 import { throwIfAborted } from './abort-utils.js'
@@ -27,9 +28,10 @@ import { sceneClientCount } from '../scene/scene-server.js'
 import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
 import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
-import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execTaskCommand } from './tools/shell.js'
+import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execRunCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
+import { execImportKnowledge, execInspectKnowledgeSource, execManageKnowledgeRegion, execSearchKnowledge } from './tools/knowledge.js'
 import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
@@ -37,6 +39,7 @@ import { execManageRule } from './tools/rules.js'
 import { execBrowserSetDisplayMode } from './tools/browser-display.js'
 import { execBrowserClearData } from './tools/browser-data.js'
 import { execSystemBrowserOpen } from './tools/system-browser.js'
+import { execSystemMusic } from './tools/macos-music.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
 import { runWorkReview } from '../review/reviewer.js'
 import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
@@ -241,6 +244,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execMakeDir(args, context)
       case 'install_software':
         return await execInstallSoftware(args, context)
+      case 'run_command':
+        return await execShellToolAndMaybeCloseWritePreview(execRunCommand, args, context)
       case 'exec_command':
         return await execShellToolAndMaybeCloseWritePreview(execCommand, args, context)
       case 'exec_quick_command':
@@ -269,6 +274,14 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execDowngradeMemory(args)
       case 'skip_consolidation':
         return await execSkipConsolidation(args)
+      case 'manage_knowledge_region':
+        return await execManageKnowledgeRegion(args)
+      case 'import_knowledge':
+        return await execImportKnowledge(args)
+      case 'search_knowledge':
+        return await execSearchKnowledge(args)
+      case 'inspect_knowledge_source':
+        return await execInspectKnowledgeSource(args)
       case 'speak':
         return await execSpeak(args, context)
       case 'generate_lyrics':
@@ -291,7 +304,16 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execOpenDocPanel(args)
       case 'person_card_mode':
         return execPersonCardMode(args)
+      case 'knowledge_cortex_mode':
+        return execKnowledgeCortexMode(args)
       case 'music':
+        if (process.platform === 'darwin') {
+          return JSON.stringify({
+            ok: false,
+            tool: 'music',
+            error: 'Bailongma local music is unavailable on macOS; use system_music for Music.app',
+          })
+        }
         // 注意：放歌/搜索等耗时工具的"在找…"即时回应已统一在 llm.js 工具循环（ackSent）里发，
         // 覆盖所有耗时工具且保证一个 turn 只应一声，这里不再单独发，避免重复两条。
         return await execMusic(args)
@@ -310,6 +332,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execBrowserClearData(args, context)
       case 'system_browser_open':
         return await execSystemBrowserOpen(args, context)
+      case 'system_music':
+        return await execSystemMusic(args, context)
       case 'capability_demo':
         return execCapabilityDemo(args, context)
       case 'focus_banner':
@@ -527,8 +551,16 @@ function execFindTool({ query } = {}, context = {}) {
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
   const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_set'])
   const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name))
+  // find_tool only returns eight schemas. Browser capability discovery contains
+  // more than eight actions, while display-mode selection is a mandatory
+  // precondition for navigation/page interaction. Defend that invariant at the
+  // truncation boundary as well as in the capability registry.
+  const browserCapabilityMatched = capHits.some(cap => cap.id === 'interactive-browser')
+  const prioritizedFound = browserCapabilityMatched && found.includes('browser_set_display_mode')
+    ? ['browser_set_display_mode', ...found.filter(name => name !== 'browser_set_display_mode')]
+    : found
 
-  if (found.length === 0) {
+  if (prioritizedFound.length === 0) {
     return toolJson({
       ok: true, tool: 'find_tool', query, loaded: [], matches: [],
       capabilities,
@@ -536,13 +568,29 @@ function execFindTool({ query } = {}, context = {}) {
     })
   }
 
+  // A discovery result is a promise that the next provider request will
+  // actually include the listed schema.  Filter unreachable catalog names
+  // here instead of silently dropping them later in getToolSchemas.
+  const unavailable = prioritizedFound.filter(name => !getToolSchema(name))
+  const loadable = prioritizedFound.filter(name => getToolSchema(name))
   const describe = (name) => {
-    const s = TOOL_SCHEMAS[name] || getInstalledToolSchema(name) || getMcpToolSchema(name)
+    const s = getToolSchema(name)
     const desc = s?.function?.description || ''
     const req = s?.function?.parameters?.required || []
     return { name, description: desc.slice(0, 200), required_params: req }
   }
-  const matches = found.slice(0, 8).map(describe)
+  const matches = loadable.slice(0, 8).map(describe)
+
+  if (matches.length === 0) {
+    return toolJson({
+      ok: false,
+      tool: 'find_tool',
+      query,
+      loaded: [],
+      unavailable,
+      error: '找到相关工具名称，但当前没有可调用的 schema。对应 MCP/扩展可能尚未连接或加载失败。',
+    })
+  }
 
   return toolJson({
     ok: true,
@@ -550,8 +598,10 @@ function execFindTool({ query } = {}, context = {}) {
     query,
     loaded: matches.map(m => m.name),
     matches,
+    unavailable,
     capabilities,
     note: '这些工具已为本轮装载——现在直接调用你需要的那个即可，不必再 find_tool。' +
+      (unavailable.length ? ` 未装载的工具：${unavailable.join(', ')}。它们当前没有可调用 schema。` : '') +
       (capabilities.length ? '相关能力的工作流见 capabilities 字段，按它行动。' : ''),
   })
 }
@@ -803,6 +853,42 @@ function execPersonCardMode(args = {}) {
   }
 
   return JSON.stringify({ ok: true, tool: 'person_card_mode', state })
+}
+
+function execKnowledgeCortexMode(args = {}) {
+  const action = String(args.action || 'status').trim().toLowerCase()
+  if (!['show', 'open', 'hide', 'close', 'update', 'toggle', 'status'].includes(action)) {
+    return JSON.stringify({ ok: false, tool: 'knowledge_cortex_mode', error: 'unsupported action' })
+  }
+  let nextActive = null
+  if (action === 'show' || action === 'open' || action === 'update') nextActive = true
+  if (action === 'hide' || action === 'close') nextActive = false
+  if (action === 'toggle') nextActive = !getKnowledgePanelState().active
+  const state = typeof nextActive === 'boolean'
+    ? setKnowledgePanelState({
+        active: nextActive,
+        source: 'agent_tool',
+        regionId: args.region_id ?? args.regionId,
+        query: args.query,
+        documentId: args.document_id ?? args.documentId,
+      })
+    : getKnowledgePanelState()
+  if (typeof nextActive === 'boolean') {
+    emitEvent('knowledge_cortex_mode', {
+      action: state.active ? 'show' : 'hide',
+      active: state.active,
+      region_id: state.regionId,
+      query: state.query,
+      document_id: state.documentId,
+      reason: typeof args.reason === 'string' ? args.reason : '',
+    })
+    emitEvent('action', {
+      tool: 'knowledge_cortex_mode',
+      summary: state.active ? '打开知识脑区' : '关闭知识脑区',
+      detail: args.reason || '',
+    })
+  }
+  return JSON.stringify({ ok: true, tool: 'knowledge_cortex_mode', state })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

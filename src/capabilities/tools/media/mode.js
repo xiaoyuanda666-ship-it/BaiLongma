@@ -4,8 +4,17 @@ import { getCountryCode } from '../../../geo-weather.js'
 export function execMediaMode(args = {}) {
   const mode = String(args.mode || args.kind || '').trim()
   const action = String(args.action || 'show').trim()
-  if (!['video', 'camera', 'image', 'music'].includes(mode)) {
-    return JSON.stringify({ ok: false, tool: 'media_mode', error: 'mode must be video, camera, image, or music' })
+  const modes = process.platform === 'darwin'
+    ? ['video', 'camera', 'image']
+    : ['video', 'camera', 'image', 'music']
+  if (!modes.includes(mode)) {
+    return JSON.stringify({
+      ok: false,
+      tool: 'media_mode',
+      error: process.platform === 'darwin'
+        ? 'mode must be video, camera, or image on macOS; use system_music for Music.app'
+        : 'mode must be video, camera, image, or music',
+    })
   }
   if (!['show', 'hide', 'close', 'play', 'pause', 'seek', 'set_volume', 'update'].includes(action)) {
     return JSON.stringify({ ok: false, tool: 'media_mode', error: 'unsupported action' })

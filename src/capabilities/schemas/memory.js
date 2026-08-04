@@ -21,7 +21,7 @@ export const memorySchemas = {
           type_filter: {
             type: 'string',
             enum: ['fact', 'person', 'object', 'knowledge', 'article'],
-            description: 'Optional memory type filter.'
+            description: 'Optional memory type filter. article and knowledge remain available for legacy lookup; source documents should be searched through search_knowledge instead.'
           }
         },
         required: ['keywords']
@@ -51,7 +51,7 @@ export const memorySchemas = {
     type: 'function',
     function: {
       name: 'upsert_memory',
-      description: 'Batch insert or update memory nodes. Deduplicates by mem_id: existing mem_id means PATCH while omitted fields are preserved; new mem_id means INSERT. Use search_memory first to decide mem_id. Naming rules: person_{ID}, object_{slug}, article_{url_hash8}, concept_{snake}, fact_{snake}, procedure_{domain}_{snake}, constraint_{domain}_{snake}, lesson_{domain}_{snake}. Procedures/constraints/lessons should use type=knowledge with tags such as kind:procedure, kind:constraint, kind:failure_lesson, domain:desktop_control, trigger:screenshot.',
+      description: 'Batch insert or update interaction memory nodes. Deduplicates by mem_id: existing mem_id means PATCH while omitted fields are preserved; new mem_id means INSERT. Use search_memory first to decide mem_id. Store people, shared decisions, preferences, and interaction-derived lessons here. Manuals, articles, specifications, policies, datasets, and their factual summaries belong to Knowledge Cortex via import_knowledge, never a new memory node. Naming rules: person_{ID}, object_{slug}, fact_{snake}, procedure_{domain}_{snake}, constraint_{domain}_{snake}, lesson_{domain}_{snake}. Procedures/constraints/lessons should use legacy type=knowledge with kind:procedure, kind:constraint, or kind:failure_lesson tags.',
       parameters: {
         type: 'object',
         properties: {
@@ -61,8 +61,8 @@ export const memorySchemas = {
               type: 'object',
               properties: {
                 mem_id:        { type: 'string', description: 'Stable ID following the naming rules.' },
-                type:          { type: 'string', enum: ['fact', 'person', 'object', 'knowledge', 'article'], description: 'Memory type. Required for new memories. Reusable procedures, hard constraints, and failure lessons should be stored as type=knowledge plus kind:* tags.' },
-                title:         { type: 'string', description: 'Title. For articles, use the article title. Required for new memories.' },
+                type:          { type: 'string', enum: ['fact', 'person', 'object', 'knowledge', 'article'], description: 'Memory type. Required for new memories. knowledge is reserved for interaction-derived procedures, constraints, and failure lessons; article is legacy read/update compatibility only, not for new source material.' },
+                title:         { type: 'string', description: 'Short human-readable title. Required for new memories.' },
                 content:       { type: 'string', description: 'Summary, <= 200 Chinese characters. Required for new memories.' },
                 detail:        { type: 'string', description: 'Optional detailed explanation.' },
                 entities:      { type: 'array', items: { type: 'string' }, description: 'Entity IDs this memory is about. For memories about the user, include their sender ID (e.g. "ID:000001"). For memories about other people, include their person ID. This enables entity-based memory retrieval.' },
@@ -85,7 +85,7 @@ export const memorySchemas = {
                   maximum: 5,
                   description: 'Importance score 1-5. 1=trivial detail, 2=ordinary fact, 3=default stable info, 4=meaningful pattern or recurring preference, 5=identity-level / load-bearing belief. Defaults to 3 if omitted.'
                 },
-                body_path:     { type: 'string', description: 'For article type: optional full-text file path when a source was saved locally.' }
+                body_path:     { type: 'string', description: 'Legacy article compatibility field. Do not use it for new source material; import source content into Knowledge Cortex instead.' }
               },
               required: ['mem_id']
             },

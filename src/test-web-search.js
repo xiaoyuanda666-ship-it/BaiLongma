@@ -51,15 +51,18 @@ for (const messageBody of [
     capabilityToolsFor(capabilityContext(messageBody)),
     `capability routing: ${messageBody}`,
   )
-  assertBrowserOnly(
-    selectTools({ messageBody, isTick: false, senderId: 'ID:test' }),
-    `turn routing: ${messageBody}`,
-  )
+  const turnTools = selectTools({ messageBody, isTick: false, senderId: 'ID:test' })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => turnTools.includes(name)),
+    `turn routing makes explicit web intent executable: ${messageBody}`)
+  assert.ok(LEGACY_WEB_TOOLS.every(name => !turnTools.includes(name)),
+    `turn routing keeps removed web tools absent: ${messageBody}`)
 }
 
 const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')
 assert.ok(discovered, 'find_tool discovery resolves web search to the interactive-browser capability')
-assert.deepEqual(discovered.tools, BROWSER_CAPABILITY_TOOLS,
+assert.equal(discovered.tools[0], 'browser_set_display_mode',
+  'discovery prioritizes the required model-selected display mode before page actions')
+assert.deepEqual([...discovered.tools].sort(), [...BROWSER_CAPABILITY_TOOLS].sort(),
   'discovery returns the fixed dedicated-Chrome allowlist plus display-mode switching')
 
 const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Chrome DevTools MCP'))

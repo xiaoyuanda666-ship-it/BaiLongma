@@ -29,6 +29,7 @@ import { buildHotspotRuntimeContext } from '../hotspots.js'
 import { buildWorldcupRuntimeContext } from '../worldcup.js'
 import { buildTyphoonRuntimeContext } from '../typhoon.js'
 import { buildWeatherRuntimeContext } from '../weather.js'
+import { buildMacOSMusicRuntimeContext } from './tools/macos-music.js'
 import { listApiSlotCapabilities } from './api-slots.js'
 import {
   isExplicitBrowserDisplayModeIntent,
@@ -73,6 +74,7 @@ export const HOTSPOT_TOOLS = ['hotspot_mode']
 export const WORLDCUP_TOOLS = ['worldcup_mode', ...BROWSER_CAPABILITY_TOOLS]
 export const TYPHOON_TOOLS = ['typhoon_mode']
 export const SOFTWARE_INSTALL_TOOLS = ['install_software', 'list_processes']
+export const MACOS_SYSTEM_MUSIC_TOOLS = ['system_music']
 
 // ---- 触发词 / 触发正则 ----
 // 工具半历史上用字面包含的字符串数组（tool-router），工作流半用正则（prompt）。两者各自
@@ -136,6 +138,7 @@ export function isTerseBrowserFollowup(text = '') {
 const BROWSER_CONTEXT_BLOCK = `## Web Access — BaiLongma Built-in Chromium
 - There are three clearly distinct surfaces: (1) "你的浏览器" / "小窗口浏览器" is the live managed WebContentsView embedded in Brain UI. (2) "我的浏览器" / "大窗口浏览器" moves that exact same live WebContentsView into a draggable native window with standard window controls; URL, history, title and webContents id remain continuous. (3) "电脑浏览器" / "系统/默认浏览器" is the user-owned default browser, opened only through system_browser_open and never controlled afterwards.
 - Every browser_* action operates the single BaiLongma-managed WebContentsView through loopback Chrome DevTools MCP, never the user's normal Chrome profile. Card and window are two presentations of the same page, not a screenshot handoff and not separate browser targets.
+- There is no default browser presentation. Before the first browser_navigate, browser_snapshot, or page interaction in EVERY user turn, you MUST call browser_set_display_mode and explicitly choose mode="card" or mode="window". If a browser action returns BROWSER_DISPLAY_MODE_REQUIRED, do that immediately and retry the exact action; do not guess a mode or claim the action ran.
 - The dedicated Chrome profile is isolated under BaiLongma application data. Never read, copy, import, attach to, or describe it as sharing cookies, passwords, extensions, history, or login state with the user's system/default browser.
 - Chrome DevTools MCP uses only a 127.0.0.1 debugging endpoint. It has telemetry, update checks, and CrUX lookups disabled for privacy. Do not use web_search, web_read, fetch_url, browser_read, curl, wget, Invoke-WebRequest, or shell HTTP clients.
 - For X, Google OAuth, any account login, password, MFA, CAPTCHA, verification code, or consent page: ensure the dedicated Chrome window is visible, tell the user to complete or cancel the flow personally, then use browser_snapshot to verify the resulting real page state. Never type credentials, MFA/CAPTCHA responses, or consent actions; never claim login succeeded before a post-login snapshot verifies it.
@@ -178,7 +181,7 @@ const SYSTEM_BROWSER_CONTEXT_BLOCK = `## Computer Browser — Explicit User-Owne
 - This is not BaiLongma dedicated Chrome. Never substitute browser_set_display_mode or browser_navigate for an explicit computer-browser request.
 - The computer browser has its own cookies, login data, tabs, and history. It shares no page/profile state with BaiLongma dedicated Chrome or its screenshot card.
 - After system_browser_open succeeds, Bailongma cannot inspect, click, read, or verify the external page. State only that the URL was handed to the computer's default browser; do not claim page content loaded or an interaction completed.
-- Without an explicit computer/system/default-browser phrase, use BaiLongma dedicated Chrome: screenshot card by default for lookup, visible Chrome window for user interaction.`
+- Without an explicit computer/system/default-browser phrase, use BaiLongma dedicated Chrome. Before any page navigation or interaction, call browser_set_display_mode and explicitly choose card or window for this user turn.`
 const HOTSPOT_TRIGGERS = [
   '热点', '热搜', '热门', '新闻', '今日', '趋势', '榜单', '头条', 'trending',
   'news', 'hot ', 'top ', '微博热搜', '热议',
@@ -196,6 +199,7 @@ const WEATHER_KEYWORD_RE = /天气|温度|气温|下雨|降雨|下雪|台风|雾
 const HOTSPOT_KEYWORD_RE = /热点|热搜|热门|新闻|今日|趋势|榜单|头条|热议|微博热搜|trending|headline/i
 const WORLDCUP_KEYWORD_RE = /世界杯|赛况|比分|赛程|对阵|积分榜|小组赛|淘汰赛|揭幕战|进球|几比几|world ?cup|worldcup|fifa/i
 const TYPHOON_KEYWORD_RE = /台风|热带气旋|台风路径|台风预警|风圈|登陆台风|typhoon|tropical cyclone/i
+const MACOS_SYSTEM_MUSIC_RE = /(?:apple\s*music|music\.app|系统(?:里的|的)?音乐|mac(?:os)?(?:系统)?(?:里的|的)?music|音乐播放器|正在播(?:什么|哪首|歌曲|音乐)|当前歌曲|当前曲目|放首|放歌|来首|听歌|换首|播放音乐|暂停音乐|继续播放(?:音乐|这首歌)?|恢复播放(?:音乐|这首歌)?|停止播放(?:音乐|这首歌)?|上一首|下一首|切歌|换一首|play\s+(?:music|a?\s*song)|pause\s+(?:music|the\s*(?:song|track))|resume\s+(?:music|the\s*(?:song|track))|next track|previous track|^(?:请|现在|先|再|直接|把它)?\s*(?:播放|暂停|继续|恢复|停止)\s*(?:一下|吧)?[。.!！?？]*$)/i
 
 // ---- 工作流块（prompt 注入用；从 prompt.js / index.js 搬来，文本逐字保留）----
 const WEATHER_CONTEXT_BLOCK = `### Weather Surface Rules
@@ -229,7 +233,14 @@ const TYPHOON_CONTEXT_BLOCK = `### Typhoon Monitoring Panel
 // 安装工作流：原先以 directions.unshift 注入在 index.js，现归位为能力 context，统一经
 // buildSystemPrompt 注入（同一份文本、同一道 isSoftwareInstallRequest 门）。
 const SOFTWARE_INSTALL_CONTEXT_BLOCK = `## Software Install Workflow
-- First use injected installed-software context to see whether the app is already installed. If installation is still needed, call install_software first. install_software starts a background job and normally returns immediately with status="started" and job_id; this only means the job began, not that the app is installed. After a started result, tell the user briefly that installation is running in the background and stop the round. Do not call install_software again for the same app, do not poll repeatedly, and do not claim success until a later background APP_SIGNAL/list_processes result says succeeded/already installed/current. Do not run raw winget commands with exec_command, do not browse vendor pages, and do not enumerate download URLs before install_software has returned a terminal structured failure. On Windows this tool owns the winget path, including candidate selection and stale-manifest fallback such as Tencent.QQ.NT before Tencent.QQ for QQ. Installs run silently by default (no installer-wizard clicks); pass silent=false only if the user wants to watch or click the installer UI. If the final job result reports all winget candidates failed or no candidates, explain that concrete result and only then use find_tool to load web/download tools for a targeted official fallback if the user still wants it.`
+- First use injected installed-software context to see whether the app is already installed. If installation is still needed, call install_software first. install_software starts a background job and normally returns immediately with status="started" and job_id; this only means the job began, not that the app is installed. After a started result, tell the user briefly that installation is running in the background and stop the round. Do not call install_software again for the same app, do not poll repeatedly, and do not claim success until a later background APP_SIGNAL/list_processes result says succeeded/already installed/current. Do not run raw winget commands with run_command, do not browse vendor pages, and do not enumerate download URLs before install_software has returned a terminal structured failure. On Windows this tool owns the winget path, including candidate selection and stale-manifest fallback such as Tencent.QQ.NT before Tencent.QQ for QQ. Installs run silently by default (no installer-wizard clicks); pass silent=false only if the user wants to watch or click the installer UI. If the final job result reports all winget candidates failed or no candidates, explain that concrete result and only then use find_tool to load web/download tools for a targeted official fallback if the user still wants it.`
+
+const MACOS_SYSTEM_MUSIC_CONTEXT_BLOCK = `## macOS System Music — Authoritative Control
+- Music playback on macOS belongs to the installed Music.app. Bailongma's own local music library/player is unavailable on this platform.
+- The [macOS System Music] runtime context is a fresh snapshot. Use it to know whether Music.app is open, whether it is playing/paused/stopped, the current track, and the paused position.
+- A request to play, pause, resume, toggle, skip, or go to the previous track is a real side effect. Call system_music for it. Never answer as if the action happened without a successful tool result.
+- system_music re-reads Music.app after every action. Only say it paused when ok=true and playback_state="paused"; only say it is playing when ok=true and playback_state="playing".
+- If the runtime context says Music.app is not open, say that plainly when relevant. pause/next/previous must not launch it; play/open may launch it because the user explicitly requested playback.`
 
 // 通用辅助：text 已小写，triggers 字面包含。
 function hits(text, triggers) {
@@ -300,6 +311,18 @@ export const CAPABILITIES = [
     context: BROWSER_CONTEXT_BLOCK,
     prefeed: null,
   },
+  ...(process.platform === 'darwin' ? [{
+    id: 'macos-system-music',
+    label: 'macOS 系统音乐',
+    summary: '读取并控制 Mac 的 Music.app，返回真实播放/暂停状态、当前歌曲和播放位置；macOS 不使用白龙马内置音乐播放器。',
+    triggers: ['mac music', 'apple music', 'music.app', '音乐播放器', '播放音乐', '暂停', '继续播放', '下一首', '上一首', '切歌'],
+    tools: MACOS_SYSTEM_MUSIC_TOOLS,
+    detect: (ctx) => MACOS_SYSTEM_MUSIC_RE.test(ctx.rawText || ''),
+    toolWhen: (ctx) => MACOS_SYSTEM_MUSIC_RE.test(ctx.rawText || ''),
+    context: MACOS_SYSTEM_MUSIC_CONTEXT_BLOCK,
+    // Always read state on macOS, even for a terse follow-up such as “暂停”.
+    prefeed: () => buildMacOSMusicRuntimeContext(),
+  }] : []),
   {
     id: 'weather',
     label: '天气',
@@ -439,7 +462,10 @@ export function findCapabilitiesByQuery(query = '') {
     const hitText = terms.some(t => t.length >= 2 && hay.includes(t))
     if (hitTrigger || hitText) {
       let tools = typeof c.discoverTools === 'function' ? c.discoverTools(q) : c.tools
-      if (c.id === 'interactive-browser' && isExplicitBrowserDisplayModeIntent(q)) {
+      // The browser display mode is a required, model-selected precondition for
+      // page work. Keep it first for every browser discovery result so the
+      // find_tool eight-item response cannot hide it behind page actions.
+      if (c.id === 'interactive-browser') {
         tools = [
           ...BROWSER_DISPLAY_TOOLS,
           ...(tools || []).filter(name => !BROWSER_DISPLAY_TOOLS.includes(name)),

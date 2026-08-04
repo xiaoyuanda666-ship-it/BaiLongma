@@ -46,6 +46,14 @@ const BROWSER_PREVIEW_ACTIONS = new Set([
   'browser_take_screenshot',
   'browser_resize',
 ])
+// Page inspection and manipulation are deliberately unavailable until the
+// model selects a presentation for this turn. browser_close is excluded: it
+// is a safe cleanup operation and must remain available even when no page was
+// shown in the current turn.
+const BROWSER_DISPLAY_MODE_REQUIRED_ACTIONS = new Set([
+  ...BROWSER_PREVIEW_ACTIONS,
+  'browser_console_messages',
+])
 const connections = new Map()
 const toolsByAlias = new Map()
 const pendingConnections = new Map()
@@ -539,8 +547,20 @@ async function bindEmbeddedBrowserPage(connection, bridge, context = {}) {
 }
 
 function browserDisplayModeForContext(context = {}) {
-  const liveMode = context.browserDisplayState?.mode
-  return isCardBrowserDisplayMode(liveMode ?? context.browserDisplayMode) ? 'card' : 'window'
+  const liveMode = context.browserDisplayState?.mode ?? context.browserDisplayMode
+  if (isCardBrowserDisplayMode(liveMode)) return 'card'
+  return String(liveMode || '').trim().toLowerCase() === 'window' ? 'window' : ''
+}
+
+function browserDisplayModeRequiredResult(remoteName) {
+  return JSON.stringify({
+    ok: false,
+    source: 'mcp',
+    server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+    remote_tool: remoteName,
+    code: 'BROWSER_DISPLAY_MODE_REQUIRED',
+    error: 'Choose a browser presentation first. Call browser_set_display_mode with mode "card" or "window", then retry this exact browser action.',
+  }, null, 2)
 }
 
 async function callMcpTool(tool, args = {}, context = {}) {
@@ -807,6 +827,9 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
   if (!isBuiltInBrowserToolAllowed(name)) {
     return JSON.stringify({ ok: false, source: 'mcp', server_id: BUILTIN_CHROME_DEVTOOLS_ID, remote_tool: name, error: `Chrome browser tool "${name}" is not allowed` }, null, 2)
   }
+  if (BROWSER_DISPLAY_MODE_REQUIRED_ACTIONS.has(name) && !browserDisplayModeForContext(context)) {
+    return browserDisplayModeRequiredResult(name)
+  }
   const validation = await validateBuiltInChromeArgs(name, args, context)
   if (!validation.ok) return validation.result
   const safeArgs = validation.args
@@ -1047,4 +1070,7 @@ export const __internal = {
   normalizeInputSchema,
   serverStatus,
   validateBuiltInChromeArgs,
+  browserDisplayModeForContext,
+  browserDisplayModeRequiredResult,
+  BROWSER_DISPLAY_MODE_REQUIRED_ACTIONS,
 }

@@ -18,8 +18,9 @@ export function summarizeToolExecution(name, args = {}) {
       return `delete_file(${args.path || args.filename || args.file_path || '?'})`
     case 'make_dir':
       return `make_dir(${args.path || args.dir || args.directory || '?'})`
+    case 'run_command':
     case 'exec_command':
-      return `exec_command(${String(args.command || args.cmd || '?').slice(0, 100)})`
+      return `${name}(${String(args.command || args.cmd || '?').slice(0, 100)})`
     case 'install_software':
       return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 100)})`
     case 'web_read':
@@ -49,6 +50,8 @@ export function summarizeToolExecution(name, args = {}) {
       return `browser_clear_data(${(Array.isArray(args.data_types) ? args.data_types : []).join('+') || '?'}, ${args.time_range || '?'})`
     case 'system_browser_open':
       return `system_browser_open(${String(args.url || '?').slice(0, 120)})`
+    case 'system_music':
+      return `system_music(${String(args.action || 'status').slice(0, 30)})`
     case 'send_message':
     case 'express':
       return `${name} -> ${args.target_id || '(unknown)'}`

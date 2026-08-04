@@ -21,7 +21,10 @@ assert(isLikelyLongRunningCommand('journalctl -u nginx -f'), 'detects journalctl
 assert(isLikelyLongRunningCommand('npm run dev'), 'detects dev server')
 assert(!isLikelyLongRunningCommand('ssh root@1.2.3.4 "uptime && pm2 list"'), 'does not mark normal ssh command')
 assert(!isLikelyLongRunningCommand('Get-ChildItem'), 'does not mark normal command')
-assert(classifyCommandProfile('Get-ChildItem').mode === 'quick', 'classifies quick inspection commands')
+assert(
+  classifyCommandProfile(process.platform === 'win32' ? 'Get-ChildItem' : 'ls').mode === (process.platform === 'win32' ? 'quick' : 'task'),
+  'classifies quick inspection commands according to the platform fast lane'
+)
 assert(classifyCommandProfile('npm install').mode === 'task', 'classifies finite task commands')
 assert(classifyCommandProfile('npm run dev').mode === 'background', 'classifies dev servers as background')
 assert(classifyCommandProfile('curl https://example.com/file.zip -o file.zip').mode === 'download', 'classifies shell downloads')

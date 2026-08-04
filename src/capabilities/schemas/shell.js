@@ -1,4 +1,4 @@
-// Shell / 进程工具 schema：exec_command / kill_process / list_processes
+// Shell / 进程工具 schema：run_command / kill_process / list_processes
 export const shellSchemas = {
   install_software: {
     type: 'function',
@@ -17,73 +17,26 @@ export const shellSchemas = {
     }
   },
 
-  exec_command: {
+  run_command: {
     type: 'function',
     function: {
-      name: 'exec_command',
-      description: 'Run a shell command. Returns structured JSON with ok, mode, exit_code, stdout, stderr, timed_out, pid. On Windows runs in PowerShell — use PowerShell syntax (e.g. Get-ChildItem, $env:USERPROFILE, Write-Output). Use background=true for long-running servers. Use cwd to run in a sandbox subdirectory instead of cd-chaining. Use promote_to_background=true so a foreground timeout converts the process to background instead of killing it. Do NOT use this tool for operations that have a dedicated tool — those are more reliable and handle encoding/sandbox/verification for you: write a file → write_file (never WriteAllText/Out-File/Set-Content/echo >/python -c with embedded text; the quoting of multi-line content breaks repeatedly); read a file → read_file; list a directory → list_dir; delete a file/dir → delete_file (never Remove-Item/rm); create a directory → make_dir. All web access must use BaiLongma dedicated Google Chrome through Chrome DevTools MCP; never use curl, wget, Invoke-WebRequest, or another shell HTTP client. exec_command is for running programs (node, npm, python script.py, git, opening apps) and for file operations that have no dedicated tool (move/copy/rename, search file contents with findstr/Select-String).',
+      name: 'run_command',
+      description: 'Control one observable shell command run. action="start" creates a run_id immediately; it returns state="running" when the process continues, so do not guess whether a command is long-running. Then use action="wait" to wait for exit, action="read_output" with cursor for incremental stdout/stderr, action="status" to inspect it, or action="cancel" to stop it. If action is omitted, this keeps legacy behavior: starts the command and waits up to the selected profile timeout. On Windows runs in PowerShell. Use cwd instead of cd-chaining. Do not use this for dedicated file/download/web operations.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Command to run, such as "node server.js", "npm install", or "python main.py".' },
-          background: { type: 'boolean', description: 'Run in the background, default false. Set true when starting a server.' },
-          timeout: { type: 'number', description: 'Foreground execution timeout in seconds, default 30, max 120.' },
+          action: { type: 'string', enum: ['start', 'status', 'wait', 'read_output', 'cancel'], description: 'start creates a new command run; status, wait, read_output, and cancel require run_id. Omit only for legacy start-and-wait behavior.' },
+          run_id: { type: 'string', description: 'The run_id returned by action="start".' },
+          mode: { type: 'string', enum: ['auto', 'quick', 'task', 'background', 'strict'], description: 'auto detects a profile; quick is short read-only inspection; task is finite work; background starts a server/watcher; strict is for sensitive command families.' },
+          timeout: { type: 'number', description: 'For legacy start or action="wait": maximum seconds to wait for an exit. Every wait result includes timed_out=true|false. Reaching the timeout does not kill the command; it remains running and can be waited on again.' },
           cwd: { type: 'string', description: 'Subdirectory within the sandbox to run the command in, e.g. "myproject". Avoids cd-chaining. Must be a relative path.' },
-          promote_to_background: { type: 'boolean', description: 'When foreground execution times out, promote to background instead of killing the process. Returns the new pid.' },
-          profile: { type: 'string', enum: ['quick', 'task', 'background', 'download', 'strict'], description: 'Optional execution profile. Prefer the dedicated exec_quick_command / exec_task_command / exec_background_command / download_file tools when possible.' }
+          wait_for_exit: { type: 'boolean', description: 'With explicit action="start", set true to wait for exit up to timeout. Otherwise start returns immediately with run_id/state.' },
+          cursor: { type: 'number', description: 'For read_output or wait: last output_cursor already consumed. Only newer output is returned.' },
+          promote_to_background: { type: 'boolean', description: 'Legacy compatibility field; no longer needed because every command has a run_id and remains observable.' },
+          background: { type: 'boolean', description: 'Legacy compatibility field. Prefer action="start" and observe the returned run_id.' }
         },
-        required: ['command']
-      }
-    }
-  },
-
-  exec_quick_command: {
-    type: 'function',
-    function: {
-      name: 'exec_quick_command',
-      description: 'Run an instant, non-interactive command such as pwd, whoami, rg, dir, Get-ChildItem, or a short read-only inspection. Uses the quick profile with short timeout and fast-lane optimization when safe. Do not use for installs, builds, tests, downloads, servers, prompts, pagers, or commands that may wait for user input.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Short read-only command to run.' },
-          timeout: { type: 'number', description: 'Timeout in seconds, default 10, max 30.' },
-          cwd: { type: 'string', description: 'Subdirectory within the sandbox to run the command in. Must be relative while the exec sandbox is enabled.' }
-        },
-        required: ['command']
-      }
-    }
-  },
-
-  exec_task_command: {
-    type: 'function',
-    function: {
-      name: 'exec_task_command',
-      description: 'Run a finite but potentially slower command such as npm install, npm test, build, git clone, pip install, or a script that should eventually exit. Uses a longer timeout than quick commands and does not use the persistent-shell fast lane.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Finite command that may take some time but should exit.' },
-          timeout: { type: 'number', description: 'Timeout in seconds, default 60, max 120.' },
-          cwd: { type: 'string', description: 'Subdirectory within the sandbox to run the command in. Must be relative while the exec sandbox is enabled.' },
-          promote_to_background: { type: 'boolean', description: 'When timeout is reached, promote to background instead of killing the process.' }
-        },
-        required: ['command']
-      }
-    }
-  },
-
-  exec_background_command: {
-    type: 'function',
-    function: {
-      name: 'exec_background_command',
-      description: 'Start a long-running command such as a dev server, watcher, tail -f, or service. Immediately returns a pid. Use list_processes to inspect output and kill_process to stop it.',
-      parameters: {
-        type: 'object',
-        properties: {
-          command: { type: 'string', description: 'Long-running command to start in the background.' },
-          cwd: { type: 'string', description: 'Subdirectory within the sandbox to run the command in. Must be relative while the exec sandbox is enabled.' }
-        },
-        required: ['command']
+        required: []
       }
     }
   },

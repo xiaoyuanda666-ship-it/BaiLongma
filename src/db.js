@@ -9,6 +9,7 @@ export * from './db/repositories/media-library.js'
 export * from './db/repositories/audits.js'
 export * from './db/repositories/brain-ui-events.js'
 export * from './db/repositories/thread-state.js'
+export * from './db/repositories/knowledge.js'
 
 const CANONICAL_AGENT_ENTITY = 'agent:jarvis'
 const CANONICAL_USER_ROOT_MEM_ID = 'person_000001'

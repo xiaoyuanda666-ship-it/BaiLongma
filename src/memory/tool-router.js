@@ -1,17 +1,13 @@
 // 按需注入工具选择器（动态上下文记忆池第 4 步）。
 //
-// 之前 injector.js 把约 35-40 个工具 schema 全量塞进每轮 LLM 调用的 tools
-// 字段，单这一项就占 6-9K token。这里按"领域 + 意图"分组，只注入这轮真正
-// 用得上的组——其它组省掉。
+// 工具选择有两层：能力注册表中已经声明为当前意图可直接执行的能力，会在首轮
+// 注入其工具；其余通用能力仍通过 find_tool 按需发现。这样不会把全部工具塞进
+// 每轮上下文，也不会让“搜索网页 / 安装软件”这类明确请求先白白消耗一轮发现工具。
 //
 // 规则要点：
-//   1) 按"动作意图"匹配（动词为主），不复用 keywords.js 的话题抽取
-//   2) ActionLog 保活：最近 10 次工具调用强制注入，保证跨轮连贯
-//   3) TICK 心跳保持精简：给自主判断、记忆和节奏控制；其它能力由 find_tool 按判断加载
-//   4) 不做通用 web/filesystem fallback：普通闲聊保持真正精简；漏掉的能力由
-//      常驻 find_tool 按需发现并装载。
-//   5) 用户轮保留已安装工具；Tick 通过 find_tool 按判断发现，避免安装等同于永久自治授权
-//   6) 多模态生成工具：mmCaps 已配置 AND 关键词命中才注入，避免太激进
+//   1) 能力注册表是自动注入的唯一来源；其 toolWhen 声明了首轮可用性。
+//   2) TICK 和启动自检保留其运行时必需的控制工具。
+//   3) 已安装的用户工具及本地视觉工具可见，但是否调用始终由主模型决定。
 //
 // 输入 ctx：
 //   - messageBody          已剥离 envelope 的消息正文
@@ -28,21 +24,8 @@
 //
 // 输出：去重后的 tools: string[]
 
-// 已迁能力的工具名 + 工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
-import {
-  BROWSER_CAPABILITY_TOOLS,
-  BROWSER_DISPLAY_TOOLS,
-  BROWSER_TOOLS,
-  capabilityToolsFor,
-  isDynamicWebReadIntent,
-  isStatelessWebReadIntent,
-  isStatelessWebSearchIntent,
-  isStatefulBrowserIntent,
-  isTerseBrowserFollowup,
-} from '../capabilities/capability-registry.js'
-import { isSystemBrowserIntent } from '../mcp/browser-display.js'
-import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
-import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
+// 已迁能力的工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
+import { capabilityToolsFor } from '../capabilities/capability-registry.js'
 
 // ---- 工具分组 ----
 //
@@ -50,8 +33,7 @@ import { shouldInjectCapabilityDemo } from '../capability-demo-intent.js'
 const CORE_TOOLS = [
   'send_message',
   'recall_memory',
-  // find_tool：工具发现入口。每轮只注入约 35 个工具里命中意图的子集，模型若需要一个本轮没注入的
-  // 工具（比如关键词没命中导致 generate_image / exec_command 没进来），可调 find_tool 搜出来并当场装载。
+  // find_tool：通用/低置信能力的发现入口。模型可在同一回合把查到的 schema 当场装载。
   'find_tool',
   'ui_set',
 ]
@@ -63,12 +45,12 @@ const TASK_CTRL_OPENER  = ['set_task']  // 没任务时只暴露 set_task
 // 无任务的临时成果，靠下面这组触发词 / find_tool 主动拉进来。
 const REVIEW_TOOLS      = ['review_work']
 
-// 网页搜索、读取和交互统一由能力注册表中的 BROWSER_TOOLS（官方
-// Chrome DevTools MCP 驱动的白龙马专用 Chrome）提供。WORLDCUP_TOOLS / SOFTWARE_INSTALL_TOOLS
-// 已随能力迁出本文件。
+// 网页搜索、读取和交互、软件安装等已迁能力由 capability registry 提供。
 const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
-const EXEC_TOOLS        = ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command', 'download_file', 'kill_process', 'list_processes']
-const MEDIA_TOOLS       = ['media_mode', 'music']
+const EXEC_TOOLS        = ['run_command', 'download_file', 'kill_process', 'list_processes']
+const MEDIA_TOOLS       = process.platform === 'darwin'
+  ? ['media_mode']
+  : ['media_mode', 'music']
 const REMINDER_TOOLS    = ['manage_reminder']
 const PREFETCH_TOOLS    = ['manage_prefetch_task']
 const TICKER_TOOLS      = ['set_tick_interval']
@@ -86,7 +68,7 @@ const STARTUP_SELF_CHECK_TOOLS = [
 ]
 // 人物卡片不再从消息文本做关键词或正则分类。只在能展示本机 UI 的真实用户轮
 // 暴露 schema，由主模型理解完整语义后决定是否调用。
-const INTENT_ROUTED_VISUAL_TOOLS = ['person_card_mode']
+const INTENT_ROUTED_VISUAL_TOOLS = ['person_card_mode', 'knowledge_cortex_mode']
 const FOCUS_BANNER_TOOLS = ['focus_banner']
 const TERMINAL_STREAM_TOOLS = ['terminal_stream']
 const CAPABILITY_DEMO_TOOLS = ['capability_demo']
@@ -224,6 +206,14 @@ const MEMORY_LOOKUP_TRIGGERS = [
   '你记得', '还记得', '记不记得', '记忆', '回忆', '之前说过', '以前说过', '之前提过', '以前提过',
   'remember', 'memory', 'recall',
 ]
+// Knowledge retrieval is intentionally independent from MEMORY_LOOKUP_TRIGGERS:
+// documents need source/version evidence; memories describe interaction history.
+const KNOWLEDGE_TRIGGERS = [
+  '知识库', '资料库', '文档库', '知识脑区', '根据资料', '根据文档', '收录资料', '导入资料',
+  '检索资料', '搜索资料', '查资料', '查文档', '文档中',
+  'import knowledge', 'search knowledge', 'knowledge base', 'document library', 'according to the document',
+]
+const KNOWLEDGE_TOOLS = ['manage_knowledge_region', 'import_knowledge', 'search_knowledge', 'inspect_knowledge_source']
 
 // 触发词 → 工具组的单一数据源。selectTools（按轮注入）和 find_tool（模型主动搜工具）
 // 共用它，避免两处各维护一份中文关键词。注：CORE / task / memory / 多模态 mmCaps gate 等
@@ -248,6 +238,7 @@ export const TOOL_GROUPS = [
   { triggers: REVIEW_TRIGGERS,       tools: REVIEW_TOOLS },
   { triggers: TASK_START_TRIGGERS,   tools: TASK_CTRL_OPENER },
   { triggers: MEMORY_LOOKUP_TRIGGERS, tools: ['search_memory', 'probe_memory'] },
+  { triggers: KNOWLEDGE_TRIGGERS, tools: KNOWLEDGE_TOOLS },
 ]
 
 // 通用辅助：消息正文里是否含有给定触发词之一（lower-case 包含）。
@@ -286,19 +277,6 @@ export function selectTools(ctx = {}) {
     fastUserPath = false,
   } = ctx
 
-  const body = (messageBody || '').toLowerCase()
-  const systemBrowserIntent = isSystemBrowserIntent(messageBody)
-  const statefulBrowserIntent = isStatefulBrowserIntent(messageBody)
-  const webAccessIntent = !systemBrowserIntent && (
-    statefulBrowserIntent
-    || isStatelessWebSearchIntent(messageBody)
-    || isStatelessWebReadIntent(messageBody)
-    || isDynamicWebReadIntent(messageBody)
-  )
-  const explicitLocalArtifactIntent = /(?:本地|项目内|工作区).{0,10}(?:文件|目录|代码|readme)|(?:保存|写入|导出|下载).{0,10}(?:文件|本地|目录)|(?:local|workspace|project).{0,12}(?:file|folder|directory|code|readme)|(?:save|write|export|download).{0,16}(?:file|local|folder|directory)/i.test(messageBody)
-  const terseBrowserFollowup = isTerseBrowserFollowup(messageBody)
-  const recentDedicatedChromeAction = Array.isArray(recentActionLog)
-    && recentActionLog.some(entry => BROWSER_TOOLS.includes(String(entry?.tool || '')))
   const out = new Set(CORE_TOOLS)
   // 被显式抑制的工具名:ActionLog 保活 / installed 列表 / fallback 兜底都要跳过,
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
@@ -314,19 +292,17 @@ export function selectTools(ctx = {}) {
     'browser_act',
   ])
 
-  // 任务控制只在已有任务或明确要求建立任务时出现。普通聊天无需为此携带
-  // task schema；没有命中的任务请求仍可通过 find_tool 按需发现 set_task。
-  if (hasTask || hits(body, TASK_START_TRIGGERS)) {
-    for (const t of (hasTask ? TASK_CTRL_FULL : TASK_CTRL_OPENER)) out.add(t)
+  // 活跃任务是运行时状态，不是对用户文本的关键词推断。
+  if (hasTask) {
+    for (const t of TASK_CTRL_FULL) out.add(t)
   }
 
-  const memoryLookup = hits(body, MEMORY_LOOKUP_TRIGGERS)
   // 记忆已由 injector 自动召回并注入 context。search/probe 只在显式记忆
-  // 查询、深度 recall 后续轮，或 TICK 自主判断时提供。
-  if (memoryLookup || hasRecall || isTick) out.add('search_memory')
+  // 轮、或 TICK 自主判断时提供；新的用户意图经 find_tool 由模型加载。
+  if (hasRecall || isTick) out.add('search_memory')
 
   // probe_memory 是诊断工具，不应因每条用户消息自动暴露。
-  if (memoryLookup || hasRecall || isTick) out.add('probe_memory')
+  if (hasRecall || isTick) out.add('probe_memory')
 
   // 语音悬浮球只存在于语音轮；普通 TUI 文本轮不需要此 schema。
   if (isVoiceTurn) out.add('voice_retire')
@@ -336,40 +312,14 @@ export function selectTools(ctx = {}) {
     for (const t of STARTUP_SELF_CHECK_TOOLS) out.add(t)
   }
 
-  // —— 按关键词逐组判断 ——
-
-  if (hits(body, FILESYSTEM_TRIGGERS) && (!webAccessIntent || explicitLocalArtifactIntent)) {
-    for (const t of FILESYSTEM_TOOLS) out.add(t)
-  }
-  if (hits(body, EXEC_TRIGGERS)) {
-    for (const t of EXEC_TOOLS) out.add(t)
-  }
-  if (hits(body, MEDIA_TRIGGERS)) {
-    for (const t of MEDIA_TOOLS) out.add(t)
-    // 媒体场景常需要先联网找链接——尤其视频要用专用 Chrome 搜到可嵌入的 B 站 BV 才能播。
-    // 不注入浏览器的话，模型会误以为"没有联网搜索"而直接放弃找视频。
-    // （这是"找的视频不能播放/找不到视频"的一个隐藏根因）。音乐用不到也无妨。
-    if (!systemBrowserIntent) {
-      for (const t of BROWSER_CAPABILITY_TOOLS) out.add(t)
-    }
-  }
-  if (hits(body, REMINDER_TRIGGERS)) {
-    for (const t of REMINDER_TOOLS) out.add(t)
-  }
-  if (hits(body, PREFETCH_TRIGGERS)) {
-    for (const t of PREFETCH_TOOLS) out.add(t)
-  }
-  // Cadence is part of the model's heartbeat judgment. Keep the control visible
-  // on every Tick instead of hiding it while a previous choice is active;
-  // ticker.js still makes identical repeated settings idempotent.
-  if (hits(body, TICKER_TRIGGERS) || isTick) {
+  // Cadence is part of the model's heartbeat judgment.  Its exposure on a
+  // heartbeat comes from the runtime lane, not from wording in user text.
+  if (isTick) {
     for (const t of TICKER_TOOLS) out.add(t)
   }
-  // —— 能力注册表：已迁能力（dedicated Chrome web / hotspot / worldcup / software-install）的工具注入 ——
-  // 每个能力用自己的 toolWhen 门（浏览器=网页意图、hotspot/worldcup=不自动、
-  // software-install=isSoftwareInstallRequest），保留与旧分支等价的解耦语义。
-  const capCtx = { text: body, rawText: messageBody, isTick, mmCaps, hasTask }
-  for (const t of capabilityToolsFor(capCtx)) out.add(t)
+
+  // An actual attached image is transport data rather than a wording-based
+  // intent.  The model still decides whether to call analyze_image.
   if (INLINE_IMAGE_RE.test(messageBody)) out.add('analyze_image')
 
   // 这是“给模型判断意图”的能力曝光，不是文本触发：无论用户怎样措辞，本地
@@ -377,55 +327,6 @@ export function selectTools(ctx = {}) {
   if (!isTick && localVisualTurn !== false) {
     for (const t of INTENT_ROUTED_VISUAL_TOOLS) out.add(t)
   }
-  if (hits(body, FOCUS_BANNER_TRIGGERS) || hasTask) {
-    for (const t of FOCUS_BANNER_TOOLS) out.add(t)
-  }
-  if (hits(body, TERMINAL_STREAM_TRIGGERS)) {
-    for (const t of TERMINAL_STREAM_TOOLS) out.add(t)
-  }
-  if (!isTick && localVisualTurn !== false && shouldInjectCapabilityDemo(messageBody)) {
-    for (const t of CAPABILITY_DEMO_TOOLS) out.add(t)
-  }
-  if (hits(body, ADMIN_TRIGGERS)) {
-    for (const t of ADMIN_TOOLS) out.add(t)
-  }
-  if (
-    (API_KEY_RE.test(messageBody) && API_DOCS_RE.test(messageBody))
-    || (API_CONFIG_CONFIRM_RE.test(body.trim()) && recentApiCapabilitySetupNeed(recentActionLog))
-  ) {
-    out.add('manage_api_capability')
-  }
-  // 成果审视：有任务时已随 TASK_CTRL_FULL 注入；这里覆盖"无任务但用户明确要求检查/验收成果"的临时场景。
-  if (hits(body, REVIEW_TRIGGERS)) {
-    for (const t of REVIEW_TOOLS) out.add(t)
-  }
-  // Tick 不再因为"它是 Tick"就预先装载 web/filesystem/reminder/prefetch/hotspot。
-  // 主模型先判断要做什么，再通过常驻 find_tool 加载所需能力。记忆和 cadence
-  // 控制保留在基线中，因为它们直接构成心跳自身的认知与节奏。
-
-  // —— 多模态生成：mmCaps gate + 关键词命中 ——
-  // 没配能力就别暴露工具（暴露了 agent 也调不通）。
-  // 配了能力但本轮没关键词命中也省掉——TTS schema 三百字符不小，每轮都灌太亏。
-  if (mmCaps.includes('tts')    && hits(body, TTS_TRIGGERS))       out.add(MM_GEN_TOOLS.tts)
-  if (mmCaps.includes('lyrics') && hits(body, LYRICS_TRIGGERS))    out.add(MM_GEN_TOOLS.lyrics)
-  if (mmCaps.includes('music')  && hits(body, MUSIC_GEN_TRIGGERS)) out.add(MM_GEN_TOOLS.music)
-  if (mmCaps.includes('image')  && hits(body, IMAGE_GEN_TRIGGERS)) out.add(MM_GEN_TOOLS.image)
-  // —— ActionLog 保活 ——
-  // 上轮（或最近 10 次）调用过的工具强制带上：跨轮工作流不能因为关键词没命中就断链。
-  // 保活只覆盖白龙马的"已知工具"——installed 工具走单独的全注入路径。
-  // 被抑制的工具跳过，避免 ActionLog 或扩展工具列表把明确撤下的旧工具捞回来。
-  if (Array.isArray(recentActionLog)) {
-    for (const entry of recentActionLog) {
-      const name = entry?.tool
-      if (name === 'browser_clear_data' && !isExplicitAgentBrowserDataDeletionRequest(messageBody)) continue
-      if (name === 'person_card_mode') continue
-      // Stateful dedicated-Chrome continuity must restore the complete safe group
-      // below, never a single stranded action schema on an unrelated turn.
-      if (typeof name === 'string' && (BROWSER_TOOLS.includes(name) || BROWSER_DISPLAY_TOOLS.includes(name))) continue
-      if (typeof name === 'string' && name && !suppressed.has(name)) out.add(name)
-    }
-  }
-
   // —— 用户安装的扩展工具 ——
   // 用户轮保持原有便利；自主 Tick 由 find_tool 按需发现。最近实际用过的扩展仍会由
   // 上面的 ActionLog 连贯性通道保活，不会打断正在进行的工作流。
@@ -435,25 +336,22 @@ export function selectTools(ctx = {}) {
     }
   }
 
-  // The official MCP server owns browser lifecycle, so there is no separate
-  // Bailongma session registry to inspect. A recent dedicated-Chrome action
-  // plus a terse follow-up is the continuity signal; restore the whole safe
-  // allowlist rather than only the one tool found in ActionLog.
-  const browserContinuity = terseBrowserFollowup && recentDedicatedChromeAction
-  if (browserContinuity) {
-    for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)
+  // 已迁能力（浏览器、系统浏览器、软件安装等）的首轮工具由 capability
+  // registry 的 toolWhen 决定。此前这里漏掉了 capabilityToolsFor 调用，
+  // 导致 registry 虽声明了可自动注入，实际却只能先调用 find_tool。
+  const capabilityCtx = {
+    text: String(messageBody || '').toLowerCase(),
+    rawText: String(messageBody || ''),
+    isTick,
+    mmCaps,
+    hasTask,
+  }
+  for (const name of capabilityToolsFor(capabilityCtx)) {
+    if (name && !suppressed.has(name)) out.add(name)
   }
 
-  // All current web intents get the complete safe dedicated-Chrome group. There is no
-  // stateless search/read fallback to restore from ActionLog.
-  if (webAccessIntent || browserContinuity) {
-    for (const name of BROWSER_CAPABILITY_TOOLS) out.add(name)
-  }
-
-  // —— Fastpath 收紧（可选） ——
-  // 实时用户消息：保留 core + web 兜底 + 已命中关键词的所有组，不再额外补。
-  // 当前实现里 fastUserPath 只是个 hint——上面的策略已经天然偏紧；这里仅
-  // 防御性地不做扩张。（不在 fastpath 里删工具，避免误删导致 agent "我不能"）
+  void senderId
+  void recentActionLog
   void fastUserPath
 
   // 最后一道兜底:被 suppressed 的工具不论谁加回来都剃掉。

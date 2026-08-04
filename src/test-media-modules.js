@@ -29,8 +29,14 @@ assert.deepEqual(
   {
     ok: false,
     tool: 'media_mode',
-    error: 'mode must be video, camera, image, or music',
+    error: process.platform === 'darwin'
+      ? 'mode must be video, camera, or image on macOS; use system_music for Music.app'
+      : 'mode must be video, camera, image, or music',
   },
 )
+
+if (process.platform === 'darwin') {
+  assert.equal(JSON.parse(media.execMediaMode({ mode: 'music', action: 'pause' })).ok, false)
+}
 
 console.log('media module boundary tests passed')

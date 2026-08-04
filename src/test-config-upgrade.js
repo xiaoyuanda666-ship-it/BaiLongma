@@ -92,7 +92,7 @@ async function loadFresh(json) {
   assert(config.security.execSandbox === false, 'A: execSandbox=false 被保留（不会悄悄重新开启沙盒）')
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
   assert(JSON.stringify(config.security.blockedTools) === JSON.stringify([
-    'exec_command',
+    'run_command',
     ...EXPECTED_BROWSER_TOOLS,
   ]), 'A: legacy web/browser blocks migrate to the official Playwright allowlist and deduplicate')
   assert(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !config.security.blockedTools.includes(name)),

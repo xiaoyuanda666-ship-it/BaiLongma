@@ -2,6 +2,7 @@ import { createHotspotPanel } from './hotspot-panel.js';
 import { createWorldcupPanel } from './worldcup-panel.js';
 import { createTyphoonPanel } from './typhoon-panel.js';
 import { createDocPanel } from './doc-panel.js';
+import { createKnowledgePanel } from './knowledge-panel.js';
 
 const createAppTitlebar = () => `
 <header class="app-titlebar" aria-label="Window drag area"></header>
@@ -159,6 +160,7 @@ const createSecondaryPanel = () => `
             <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
           </div>
         </div>
+        <div class="command-runs" id="command-runs" aria-live="polite" aria-label="实时命令状态" hidden></div>
         <div class="action-log" id="action-log" aria-live="polite">
           <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
         </div>
@@ -245,6 +247,10 @@ const createSettingsModal = () => `
   <div class="settings-modal" role="dialog" aria-modal="true" aria-label="设置">
     <div class="settings-header">
       <span class="settings-title">设置</span>
+      <span class="settings-autosave-status" id="settings-autosave-status" data-state="idle" role="status" aria-live="polite">
+        <span class="settings-autosave-dot" aria-hidden="true"></span>
+        <span id="settings-autosave-status-text">所有更改自动保存</span>
+      </span>
       <button class="settings-close" id="settings-close" type="button" aria-label="关闭">×</button>
     </div>
     <div class="settings-body">
@@ -278,7 +284,6 @@ const createSettingsModal = () => `
               <input class="settings-input" id="settings-agent-name" type="text" maxlength="32" autocomplete="off" spellcheck="false" placeholder="小白龙">
             </div>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-agent-name" type="button">保存</button>
               <span class="settings-feedback" id="settings-agent-name-feedback"></span>
             </div>
           </div>
@@ -338,11 +343,10 @@ const createSettingsModal = () => `
               <label class="settings-label" for="settings-llm-key">API Key</label>
               <div class="settings-secret-wrap">
                 <input class="settings-input" id="settings-llm-key" type="password" placeholder="已保存的 Key 会在这里显示" autocomplete="new-password">
-                <button class="settings-secret-toggle" id="settings-llm-key-toggle" type="button" aria-label="显示 API Key" title="显示/隐藏 API Key">👁</button>
+                <button class="settings-secret-toggle" id="settings-llm-key-toggle" type="button" data-visible="false" aria-label="显示 API Key" title="显示 API Key"></button>
               </div>
             </div>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-llm" type="button">保存</button>
               <span class="settings-feedback" id="settings-llm-feedback"></span>
             </div>
           </div>
@@ -355,7 +359,6 @@ const createSettingsModal = () => `
               <span id="settings-temperature-val" style="min-width:2.8em;text-align:right;color:var(--ink2);font-size:13px;">0.50</span>
             </div>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-temperature" type="button">保存</button>
               <span class="settings-feedback" id="settings-temperature-feedback"></span>
             </div>
           </div>
@@ -385,7 +388,6 @@ const createSettingsModal = () => `
               <input type="range" id="settings-tool-context-limit" min="0" max="40" step="1" value="5" aria-label="工具调用注入条数">
             </div>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-context-window" type="button">保存</button>
               <span class="settings-feedback" id="settings-context-window-feedback"></span>
             </div>
           </div>
@@ -408,7 +410,6 @@ const createSettingsModal = () => `
               <input class="settings-input" id="settings-minimax-key" type="password" placeholder="填入 MiniMax API Key…" autocomplete="new-password">
             </div>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-minimax" type="button">保存</button>
               <span class="settings-feedback" id="settings-minimax-feedback"></span>
             </div>
           </div>
@@ -484,7 +485,6 @@ const createSettingsModal = () => `
             <span class="settings-feedback" id="clawbot-feedback"></span>
           </div>
           <div class="settings-section settings-section-action">
-            <button class="settings-save-btn" id="settings-save-social" type="button">保存所有</button>
             <span class="settings-feedback" id="settings-social-feedback"></span>
           </div>
         </div>
@@ -534,7 +534,7 @@ const createSettingsModal = () => `
                 <label class="settings-label" for="voice-volc-apikey">API Key</label>
                 <div class="settings-secret-wrap">
                   <input class="settings-input" type="password" id="voice-volc-apikey" placeholder="输入后自动保存" autocomplete="new-password">
-                  <button class="settings-secret-toggle" id="voice-volc-apikey-toggle" type="button" aria-label="显示 API Key" title="显示/隐藏 API Key">👁</button>
+                  <button class="settings-secret-toggle" id="voice-volc-apikey-toggle" type="button" data-visible="false" aria-label="显示 API Key" title="显示 API Key"></button>
                 </div>
               </div>
             </div>
@@ -620,7 +620,7 @@ const createSettingsModal = () => `
                 <label class="settings-label" for="tts-doubao-key">API Key</label>
                 <div class="settings-secret-wrap">
                   <input class="settings-input" type="password" id="tts-doubao-key" placeholder="已保存的 Key 会在这里显示" autocomplete="new-password">
-                  <button class="settings-secret-toggle" id="tts-doubao-key-toggle" type="button" aria-label="显示 API Key" title="显示/隐藏 API Key">👁</button>
+                  <button class="settings-secret-toggle" id="tts-doubao-key-toggle" type="button" data-visible="false" aria-label="显示 API Key" title="显示 API Key"></button>
                 </div>
               </div>
               <div class="settings-row">
@@ -714,10 +714,14 @@ const createSettingsModal = () => `
               <label class="settings-label" for="voice-auto-mic">启动时自动开启麦克风</label>
               <input id="voice-auto-mic" type="checkbox" style="width:auto;flex:none;">
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="voice-space-ptt">允许按住空格键说话</label>
+              <input id="voice-space-ptt" type="checkbox" checked style="width:auto;flex:none;">
+            </div>
+            <p class="settings-hint" style="margin-top:-2px;">关闭后，空格键只用于正常输入；仍可使用麦克风按钮开始语音对话。</p>
           </div>
 
           <div class="settings-section settings-section-action">
-            <button class="settings-save-btn" id="settings-save-voice" type="button">保存</button>
             <span class="settings-feedback" id="settings-voice-feedback"></span>
           </div>
         </div>
@@ -726,7 +730,7 @@ const createSettingsModal = () => `
         <div class="settings-tab" data-tab="mcp">
           <div class="settings-section">
             <div class="settings-section-label">本地 MCP Server（stdio）</div>
-            <p class="settings-hint">保存后白龙马会启动已启用的 MCP Server、读取工具目录，并通过 find_tool 按需加载工具。command 会直接启动本地程序，请只配置你信任的 Server。环境变量会加密保存在本机；已保存的值显示为 [configured]。</p>
+            <p class="settings-hint">点击“应用配置并连接”后，白龙马会启动已启用的 MCP Server、读取工具目录，并通过 find_tool 按需加载工具。command 会直接启动本地程序，请只配置你信任的 Server。环境变量会加密保存在本机；已保存的值显示为 [configured]。</p>
             <textarea
               class="settings-input"
               id="mcp-servers-json"
@@ -755,7 +759,7 @@ const createSettingsModal = () => `
           </div>
 
           <div class="settings-section settings-section-action">
-            <button class="settings-save-btn" id="settings-save-mcp" type="button">保存并连接</button>
+            <button class="settings-save-btn" id="settings-save-mcp" type="button">应用配置并连接</button>
             <span class="settings-feedback" id="settings-mcp-feedback"></span>
           </div>
         </div>
@@ -775,7 +779,7 @@ const createSettingsModal = () => `
           </div>
           <div class="settings-section">
             <div class="settings-section-label">命令执行沙箱</div>
-            <p class="settings-hint">开启后 exec_command 工作目录锁定在 sandbox/，且禁止使用绝对路径和父目录引用。关闭后命令可访问系统任意目录。</p>
+            <p class="settings-hint">开启后 run_command 工作目录锁定在 sandbox/，且禁止使用绝对路径和父目录引用。关闭后命令可访问系统任意目录。</p>
             <div class="settings-row">
               <label class="settings-label" for="security-exec-sandbox">启用执行沙箱</label>
               <label class="settings-toggle">
@@ -828,12 +832,11 @@ const createSettingsModal = () => `
           <div class="settings-section">
             <div class="settings-section-label">工具黑名单</div>
             <p class="settings-hint">勾选后该工具将被拒绝执行，对话中 Agent 调用时会收到"已被安全策略禁用"错误。</p>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="exec_command"> exec_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
+            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="run_command"> run_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="chrome_devtools_browser"> 白龙马内置浏览器 &nbsp;<span style="color:var(--ink2);font-size:12px;">（Chrome DevTools MCP 的全部网页搜索、读取与浏览器操作）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="ui_set"> ui_set &nbsp;<span style="color:var(--ink2);font-size:12px;">（投影声明式界面 surface）</span></label></div>
           </div>
           <div class="settings-section settings-section-action">
-            <button class="settings-save-btn" id="settings-save-security" type="button">保存</button>
             <button class="settings-save-btn hidden" id="settings-restart-security" type="button" style="width:auto;padding:0 14px;">立即重启</button>
             <span class="settings-feedback" id="settings-security-feedback"></span>
           </div>
@@ -858,7 +861,6 @@ const createSettingsModal = () => `
             </div>
             <p class="settings-hint">可设置 1–1440 分钟，默认 20 分钟。任务、初次觉醒以及 Agent 临时调整的节奏可能使用更短间隔。</p>
             <div class="settings-row-action">
-              <button class="settings-save-btn" id="settings-save-heartbeat" type="button">保存心跳设置</button>
               <span class="settings-feedback" id="settings-heartbeat-feedback"></span>
             </div>
           </div>
@@ -878,15 +880,20 @@ const createSettingsModal = () => `
             </div>
             <div class="settings-row">
               <label class="settings-label" for="settings-amap-key">Web 端 Key</label>
-              <input class="settings-input" id="settings-amap-key" type="password" placeholder="留空保持现有 Key 不变" autocomplete="new-password" spellcheck="false">
+              <div class="settings-secret-wrap">
+                <input class="settings-input" id="settings-amap-key" type="password" placeholder="留空保持现有 Key 不变" autocomplete="new-password" spellcheck="false">
+                <button class="settings-secret-toggle" id="settings-amap-key-toggle" type="button" data-visible="false" aria-label="显示 Web 端 Key" title="显示 Web 端 Key"></button>
+              </div>
             </div>
             <div class="settings-row">
               <label class="settings-label" for="settings-amap-security">安全密钥</label>
-              <input class="settings-input" id="settings-amap-security" type="password" placeholder="securityJsCode，留空保持不变" autocomplete="new-password" spellcheck="false">
+              <div class="settings-secret-wrap">
+                <input class="settings-input" id="settings-amap-security" type="password" placeholder="securityJsCode，留空保持不变" autocomplete="new-password" spellcheck="false">
+                <button class="settings-secret-toggle" id="settings-amap-security-toggle" type="button" data-visible="false" aria-label="显示安全密钥" title="显示安全密钥"></button>
+              </div>
             </div>
             <p class="settings-hint">请在高德开放平台创建“Web端（JS API）”Key。安全密钥只在本地代理请求中使用，地图页面无法读取其明文。</p>
             <div class="settings-row-action" style="gap:8px;flex-wrap:wrap;">
-              <button class="settings-save-btn" id="settings-save-map" type="button">保存地图配置</button>
               <button class="settings-save-btn" id="settings-clear-map" type="button" style="width:auto;padding:0 14px;background:transparent;border:1px solid var(--line);color:var(--ink2);">清除</button>
               <a href="https://console.amap.com/dev/key/app" target="_blank" rel="noreferrer" class="settings-map-link">申请高德 Key ↗</a>
               <span class="settings-feedback" id="settings-map-feedback"></span>
@@ -1118,6 +1125,7 @@ export function createBrainUiMarkup() {
     createWorldcupPanel(),
     createTyphoonPanel(),
     createDocPanel(),
+    createKnowledgePanel(),
   ].join("\n\n");
 
   return `${createAppTitlebar()}\n\n<main class="app-viewport">${viewportMarkup}</main>`;

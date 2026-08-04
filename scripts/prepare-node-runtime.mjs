@@ -37,6 +37,38 @@ function inspectNode(executable) {
   }
 }
 
+// An Apple-silicon build host cannot execute a staged x64 Node binary unless
+// Rosetta is installed.  Packaging still needs to validate that cached binary
+// before creating an Intel app, so inspect its Mach-O architecture and its
+// embedded Node release string without executing foreign code.
+function inspectDarwinCrossArchNode(executable, target) {
+  const expectedMachArch = target.arch === 'x64' ? 'x86_64' : target.arch
+  const archResult = spawnSync('lipo', ['-archs', executable], { encoding: 'utf8' })
+  if (archResult.error || archResult.status !== 0) return null
+  const archs = String(archResult.stdout || '').trim().split(/\s+/)
+  if (!archs.includes(expectedMachArch)) return null
+
+  const stringsResult = spawnSync('strings', [executable], {
+    encoding: 'utf8',
+    // A full Node executable contains several MiB of string data; Node's
+    // default 1 MiB child-process buffer would otherwise report ENOBUFS.
+    maxBuffer: 32 * 1024 * 1024,
+  })
+  if (stringsResult.error || stringsResult.status !== 0) return null
+  const versions = [...String(stringsResult.stdout || '').matchAll(/\bv(\d+\.\d+\.\d+)\b/g)]
+    .map(match => match[1])
+  const version = versions.find(isSupportedVersion)
+  if (!version) return null
+  return { platform: 'darwin', arch: target.arch, version }
+}
+
+function inspectNodeForTarget(executable, target) {
+  if (target.platform === 'darwin' && process.platform === 'darwin' && target.arch !== process.arch) {
+    return inspectDarwinCrossArchNode(executable, target)
+  }
+  return inspectNode(executable)
+}
+
 function isSupportedVersion(version = '') {
   const parts = String(version).replace(/^v/, '').split('.').map(Number)
   for (let index = 0; index < MINIMUM_NODE.length; index += 1) {
@@ -52,7 +84,8 @@ function executableName(platform) {
 
 function validateRuntime(executable, target) {
   if (!existsSync(executable)) return null
-  const metadata = inspectNode(executable)
+  const metadata = inspectNodeForTarget(executable, target)
+  if (!metadata) return null
   if (metadata.platform !== target.platform || metadata.arch !== target.arch) return null
   if (!isSupportedVersion(metadata.version)) {
     throw new Error(`Node ${metadata.version} is too old for chrome-devtools-mcp; Node >= ${MINIMUM_NODE.join('.')} is required`)
@@ -74,7 +107,10 @@ function stageTarget(target) {
   const archSourceKey = `BAILONGMA_NODE_RUNTIME_SOURCE_${target.arch.toUpperCase()}`
   const requestedSource = String(process.env[archSourceKey] || process.env.BAILONGMA_NODE_RUNTIME_SOURCE || '').trim()
   const source = realpathSync(requestedSource || process.execPath)
-  const metadata = inspectNode(source)
+  const metadata = inspectNodeForTarget(source, target)
+  if (!metadata) {
+    throw new Error(`Cannot inspect Node runtime ${source} for ${target.key}`)
+  }
   if (metadata.platform !== target.platform || metadata.arch !== target.arch) {
     throw new Error(
       `Cannot stage ${target.key} from ${metadata.platform}-${metadata.arch} Node. `

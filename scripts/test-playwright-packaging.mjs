@@ -22,6 +22,12 @@ const require = createRequire(import.meta.url)
 const packagedRuntime = require('../electron/playwright-runtime.cjs')
 const mcpRuntime = resolveMcpRuntime(root)
 
+assert.equal(pkg.devDependencies.electron, lock.packages['node_modules/electron'].version,
+  'Electron must be pinned exactly so native modules are rebuilt for the installed ABI')
+for (const name of ['build', 'build:win', 'build:linux', 'publish']) {
+  assert.match(pkg.scripts[name], new RegExp(`-v ${pkg.devDependencies.electron.replaceAll('.', '\\.')}(?:\\s|$)`),
+    `${name} must rebuild native modules for the pinned Electron version`)
+}
 assert.equal(pkg.dependencies['@playwright/mcp'], '0.0.78')
 assert.equal(pkg.dependencies.playwright, undefined, 'Playwright must be versioned through @playwright/mcp')
 assert.equal(pkg.dependencies['playwright-core'], undefined, 'playwright-core must be versioned through @playwright/mcp')
@@ -105,6 +111,20 @@ assert.equal(packagedRuntime.configurePackagedPlaywright({
 }), path.join(root, 'fake-resources', 'playwright-browsers'))
 assert.equal(env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE, 'win64')
 assert.equal(env.BAILONGMA_BUNDLED_PLAYWRIGHT, '1')
+
+const bundledNode = path.join(root, 'fake-resources', 'node-runtime', 'node.exe')
+const nodeEnv = { Path: 'C:\\Windows\\System32' }
+assert.equal(packagedRuntime.configureBundledNodeRuntime({
+  isPackaged: true,
+  resourcesPath: path.join(root, 'fake-resources'),
+  platform: 'win32',
+  arch: 'x64',
+  env: nodeEnv,
+  existsSync: candidate => candidate === bundledNode,
+}), bundledNode)
+assert.equal(nodeEnv.BAILONGMA_NODE_RUNTIME_PATH, bundledNode)
+assert.equal(nodeEnv.BAILONGMA_MCP_NODE_PATH, bundledNode)
+assert.equal(nodeEnv.Path.split(';')[0], path.dirname(bundledNode))
 
 console.log(JSON.stringify({
   ok: true,

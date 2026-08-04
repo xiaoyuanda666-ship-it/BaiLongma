@@ -60,6 +60,10 @@ const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
   web_read: BAILONGMA_CHROME_BROWSER_TOOLS,
   fetch_url: BAILONGMA_CHROME_BROWSER_TOOLS,
   browser_read: BAILONGMA_CHROME_BROWSER_TOOLS,
+  exec_command: ['run_command'],
+  exec_quick_command: ['run_command'],
+  exec_task_command: ['run_command'],
+  exec_background_command: ['run_command'],
   browser_open: ['browser_navigate'],
   browser_inspect: ['browser_snapshot', 'browser_find'],
   browser_act: [

@@ -49,6 +49,7 @@ export const commsSchemas = {
         '## One action, one message',
         '• Do not send "我去做" before a tool call and then "做完了" after. Call the tool, then send ONE message with the result. If you sent a heads-up before the tool, do not repeat the same content after the tool returns.',
         '• When a single user turn deserves a reply, send exactly one send_message in that turn. Multiple sends in one turn are only acceptable when the contents are genuinely different (e.g. a status update during a long task that takes many seconds).',
+        '• For document or knowledge-base lookup questions, retrieve silently and send exactly one final answer. Never send “let me search”, retries, tool names, query syntax, ranking details, or other implementation mechanics to the user.',
         '• NEVER split a closing pleasantry into a second send_message. If you already sent the main reply and feel tempted to follow up with "有需要随时叫我", "希望对你有帮助", "还有什么需要吗", "为您效劳", "祝你..." — STOP. Those lines add zero information; merge them into nothing, not into a second call. The runtime will suppress such follow-up sends as filler.',
         '',
         '## A message is written TO the user, never a note to yourself',

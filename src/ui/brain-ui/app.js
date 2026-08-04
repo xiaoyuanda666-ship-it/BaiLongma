@@ -5,18 +5,29 @@ import { initChat, friendlyChannelLabel } from "./chat.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
 import { initVoicePanel } from "./voice-panel.js";
-import { shouldHandlePttKeyEvent } from "./voice-ptt.js";
-import { initHotspot, toggleHotspot, setHotspotMode, moveVoicePanelToBody, restoreVoicePanel } from "./hotspot.js";
+import { initHotspot, toggleHotspot, setHotspotMode } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
 import { cancelPersonCardAssistantEnrichment, enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode } from "./person-card.js";
 import { initDocPanel, setDocPanelMode } from "./doc.js";
+import { initKnowledgePanel, setKnowledgeCortexMode } from "./knowledge.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
 import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx, resumeJarvisAudioContext } from "./tts-fx.js";
 import { initAudioOutputRouting, applyOutputSink, listOutputDevices, getOutputPreference, setOutputPreference } from "./audio-output.js";
 import { createVoiceReplyCoordinator } from "./voice-reply-coordinator.js";
 import { createPlaybackProgressWatchdog, isCurrentStreamingTtsSession, nextStreamingTtsSession } from "./tts-lifecycle.js";
+import { initMediaModes } from "./media-modes.js";
+import { initAIVideoMode } from "./ai-video-mode.js";
+import { initSettings } from "./settings.js";
+import {
+  buildMemoryGraphLinks,
+  deterministicIndex,
+  findMemoryGraphAnchor,
+  markGraphCore,
+  semanticChildTargets as getSemanticChildTargets,
+  shuffleGraphItems,
+} from "./memory-graph-data.js";
 const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
 document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
 if (hasWindowsTitleBarOverlay) {
@@ -39,6 +50,7 @@ const MAX_UI_ZOOM = 1.8;
 const UI_ZOOM_STEP = 0.1;
 const UI_ZOOM_WHEEL_STEP = 0.05;
 const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
+const VOICE_SPACE_PTT_KEY = "bailongma-voice-space-ptt-enabled";
 const MEMORY_GRAPH_ENABLED = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) !== "false";
 const UI_CLIENT_ID = getUiClientId();
 const SSE_LAST_EVENT_KEY = "bailongma-sse-last-event-id";
@@ -729,7 +741,7 @@ function naturalTwitch(big = Math.random() < 0.3) {
   // 小抽动（常态）只动少数节点低热度；大波（偶发）才整片涌动
   const ratio = big ? 0.3 : 0.1;
   const twitchCount = Math.max(big ? 6 : 3, Math.floor(nodeData.length * ratio));
-  const candidates = shuffleArray(nodeData.filter(node => !node._core)).slice(0, twitchCount);
+  const candidates = shuffleGraphItems(nodeData.filter(node => !node._core)).slice(0, twitchCount);
 
   candidates.forEach(node => {
     const anchor = anchorMap.get(String(node._nid)) || nodeData[deterministicIndex(node._nid, nodeData.length)];
@@ -791,7 +803,7 @@ function computeDegrees() {
   });
 
   nodeData.forEach(node => {
-    const childTargets = semanticChildTargets(node);
+    const childTargets = getSemanticChildTargets(node);
     if (childTargets.size) {
       node._childCount = childTargets.size;
       return;
@@ -814,36 +826,8 @@ function showTip(event, d) {
     .html(`<span class="tip-type">${type}</span><div>${label}</div>`);
 }
 
-function parseEntities(raw) {
-  try {
-    const p = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
-    return Array.isArray(p) ? p : [];
-  } catch { return []; }
-}
-
-function parseLinks(raw) {
-  try {
-    const parsed = typeof raw === "string" ? JSON.parse(raw || "[]") : (raw || []);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-
-function semanticChildTargets(node) {
-  const targets = new Set();
-  parseLinks(node.links).forEach(link => {
-    if (!link || typeof link !== "object") return;
-    const relation = String(link.relation || "").toLowerCase();
-    const targetId = String(link.target_id || link.targetId || "").trim();
-    if (relation === "parent_of" && targetId) targets.add(targetId);
-  });
-  return targets;
-}
-
 function markCore() {
-  nodeData.forEach(n => { n._core = false; });
-  const core = nodeData.find(n => parseEntities(n.entities).includes("agent:jarvis"))
-    || nodeData[0];
-  if (core) core._core = true;
+  markGraphCore(nodeData);
 }
 
 function renderLegend() {
@@ -929,137 +913,6 @@ function renderGraph(restartAlpha = 2) {
   refreshNodeVisuals();
 }
 
-function deterministicIndex(seed, mod) {
-  let hash = 2166136261;
-  const text = String(seed);
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash >>> 0) % mod;
-}
-
-function shuffleArray(items) {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-function createVisualOrder(nodes) {
-  const coreNode = nodes.find(n => n._core || parseEntities(n.entities).includes("agent:jarvis")) || null;
-  const rest = shuffleArray(nodes.filter(n => !coreNode || n._nid !== coreNode._nid));
-  return coreNode ? [coreNode, ...rest] : rest;
-}
-
-function chooseVisualParent(child, candidates, childCounts) {
-  if (!candidates.length) return null;
-  const weighted = [];
-  candidates.forEach(candidate => {
-    const currentChildren = childCounts.get(candidate._nid) || 0;
-    const maxChildren = maxVisualChildren(candidate);
-    const recencyBias = Math.max(0, 400000 - Math.abs((child._ts || 0) - (candidate._ts || 0))) / 100000;
-    const coreBias = candidate._core ? 1.4 : 0;
-    const strengthBias = (candidate._strength || 0.4) * 0.8;
-    const remainingCapacity = Math.max(0, maxChildren - currentChildren);
-    const capacityBias = currentChildren === 0 ? 1.2 : 0.35 + remainingCapacity * 0.25;
-    const entryCount = 1 + Math.max(0, Math.round((recencyBias + coreBias + strengthBias + capacityBias) * 2));
-    for (let w = 0; w < entryCount; w++) {
-      weighted.push(candidate);
-    }
-  });
-  if (!weighted.length) return candidates[Math.floor(Math.random() * candidates.length)] || null;
-  return weighted[Math.floor(Math.random() * weighted.length)] || null;
-}
-
-function getCurrentVisualChildCounts(nodes) {
-  const counts = new Map(nodes.map(n => [n._nid, 0]));
-  linkData.forEach(link => {
-    if (link._kind !== "visual_parent") return;
-    const parentId = typeof link.target === "object" ? String(link.target._nid) : String(link.target);
-    counts.set(parentId, (counts.get(parentId) || 0) + 1);
-  });
-  return counts;
-}
-
-function maxVisualChildren(node) {
-  if (!node) return 2;
-  if (node._core) return 4;
-  const degree = node._deg || 0;
-  const strength = node._strength || 0;
-  return (degree >= 4 || strength >= 0.72) ? 4 : 2;
-}
-
-function addSupplementalVisualLinks(linkSet, childCounts) {
-  const ordered = createVisualOrder(nodeData);
-  const extraLinks = Math.min(18, Math.max(2, Math.floor(nodeData.length / 5)));
-  let added = 0;
-
-  for (let i = 1; i < ordered.length && added < extraLinks; i++) {
-    const source = ordered[i];
-    const candidates = shuffleArray(
-      ordered.slice(0, i).filter(node => {
-        if (node._nid === source._nid) return false;
-        return (childCounts.get(node._nid) || 0) < maxVisualChildren(node);
-      })
-    );
-
-    const target = candidates[0];
-    if (!target) continue;
-
-    const lid = `visual-extra:${source._nid}=>${target._nid}`;
-    const rev = `visual-extra:${target._nid}=>${source._nid}`;
-    const base = `visual:${source._nid}=>${target._nid}`;
-    const baseRev = `visual:${target._nid}=>${source._nid}`;
-    if (linkSet.has(lid) || linkSet.has(rev) || linkSet.has(base) || linkSet.has(baseRev)) continue;
-
-    linkSet.add(lid);
-    linkData.push({ source: source._nid, target: target._nid, _lid: lid, _kind: "visual_random" });
-    childCounts.set(target._nid, (childCounts.get(target._nid) || 0) + 1);
-    added += 1;
-  }
-}
-
-function addRandomVisualLinks(linkSet) {
-  if (nodeData.length < 2) return;
-
-  const ordered = createVisualOrder(nodeData);
-  const childCounts = new Map(ordered.map(n => [n._nid, 0]));
-
-  for (let i = 1; i < ordered.length; i++) {
-    const child = ordered[i];
-    const candidates = ordered
-      .slice(0, i)
-      .filter(node => (childCounts.get(node._nid) || 0) < maxVisualChildren(node));
-
-    const parent = chooseVisualParent(child, candidates, childCounts);
-    if (!parent || parent._nid === child._nid) continue;
-
-    const lid = `visual:${child._nid}=>${parent._nid}`;
-    const rev = `visual:${parent._nid}=>${child._nid}`;
-    if (linkSet.has(lid) || linkSet.has(rev)) continue;
-
-    linkSet.add(lid);
-    linkData.push({ source: child._nid, target: parent._nid, _lid: lid, _kind: "visual_parent" });
-    childCounts.set(parent._nid, (childCounts.get(parent._nid) || 0) + 1);
-  }
-
-  addSupplementalVisualLinks(linkSet, childCounts);
-}
-
-function findAnchorNode(memory, nodeMap) {
-  const nodes = Array.from(nodeMap.values());
-  const childCounts = getCurrentVisualChildCounts(nodes);
-  const candidates = createVisualOrder(nodes)
-    .filter(node => (childCounts.get(node._nid) || 0) < maxVisualChildren(node));
-  return chooseVisualParent(memory, candidates, childCounts)
-    || nodeData.find(n => n._core)
-    || nodeData[0]
-    || null;
-}
-
 async function loadMemories() {
   if (!MEMORY_GRAPH_ENABLED) return;
   try {
@@ -1087,9 +940,7 @@ async function loadMemories() {
       };
     });
 
-    const linkSet = new Set();
-    linkData = [];
-    addRandomVisualLinks(linkSet);
+    linkData = buildMemoryGraphLinks(nodeData);
 
     renderGraph(1.1);
     if (isInitialGraphLoad) {
@@ -1108,7 +959,7 @@ function addNewNodes(memories) {
   memories.forEach(memory => {
     const nid = memory.mem_id || memory.id;
     if (!nid || nodeMap.has(String(nid))) return;
-    const anchor = findAnchorNode(memory, nodeMap);
+    const anchor = findMemoryGraphAnchor(memory, nodeData, linkData);
     const anchorX = anchor?.x ?? graphLayout.centerX;
     const anchorY = anchor?.y ?? graphLayout.centerY;
     const node = {
@@ -1128,9 +979,7 @@ function addNewNodes(memories) {
   });
   if (!newNids.length) return;
 
-  const linkSet = new Set();
-  linkData = [];
-  addRandomVisualLinks(linkSet);
+  linkData = buildMemoryGraphLinks(nodeData);
   renderGraph(2);
   highlightNodes(newNids, 10000);
 }
@@ -1195,6 +1044,7 @@ const heartbeatStateLabelEl = document.getElementById("heartbeat-state-label");
 const heartbeatCountEl = document.getElementById("heartbeat-count");
 const heartbeatLastEl = document.getElementById("heartbeat-last");
 const actionLogEl = document.getElementById("action-log");
+const commandRunsEl = document.getElementById("command-runs");
 const actionLogModuleEl = actionLogEl?.closest(".action-log-module");
 const actionLogSurfaceEl = document.getElementById("action-log-surface");
 const browserPreviewEl = document.getElementById("browser-preview");
@@ -1248,6 +1098,11 @@ let lastHeartbeatAt = 0;
 let activeHeartbeatRound = false;
 let heartbeatConnectionState = "waiting";
 let defaultHeartbeatIntervalMinutes = 20;
+const COMMAND_RUN_UI_LIMIT = 3;
+const COMMAND_RUN_CACHE_LIMIT = 24;
+const COMMAND_RUN_OUTPUT_LIMIT = 1800;
+const commandRunViews = new Map();
+let commandRunRenderFrame = 0;
 
 function heartbeatClock(ts) {
   return new Date(Number(ts) || Date.now()).toLocaleTimeString("zh-CN", {
@@ -1288,6 +1143,97 @@ function renderActionLog() {
     }
     actionLogEl.scrollTop = actionLogEl.scrollHeight;
   }
+}
+
+function commandRunStateLabel(state) {
+  return ({
+    starting: "启动中",
+    running: "运行中",
+    cancelling: "正在停止",
+    completed: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  })[state] || state || "等待中";
+}
+
+function renderCommandRuns() {
+  commandRunRenderFrame = 0;
+  if (!commandRunsEl) return;
+  const runs = [...commandRunViews.values()]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, COMMAND_RUN_UI_LIMIT);
+  commandRunsEl.replaceChildren();
+  commandRunsEl.hidden = runs.length === 0;
+  for (const run of runs) {
+    const card = document.createElement("article");
+    card.className = "command-run";
+    card.dataset.state = run.state || "starting";
+    card.title = run.command || run.runId;
+
+    const dot = document.createElement("span");
+    dot.className = "command-run-dot";
+    const command = document.createElement("code");
+    command.className = "command-run-command";
+    command.textContent = run.command || `命令 ${run.runId.slice(-6)}`;
+    const state = document.createElement("span");
+    state.className = "command-run-state";
+    state.textContent = commandRunStateLabel(run.state);
+    card.append(dot, command, state);
+
+    if (run.output) {
+      const output = document.createElement("pre");
+      output.className = "command-run-output";
+      output.textContent = run.output.replace(/\r/g, "").trimEnd();
+      card.appendChild(output);
+    }
+    commandRunsEl.appendChild(card);
+  }
+}
+
+function scheduleCommandRunRender() {
+  if (commandRunRenderFrame) return;
+  commandRunRenderFrame = requestAnimationFrame(renderCommandRuns);
+}
+
+function commandRunView(runId) {
+  const id = String(runId || "");
+  if (!id) return null;
+  let run = commandRunViews.get(id);
+  if (!run) {
+    run = { runId: id, state: "starting", command: "", output: "", lastSequence: 0, updatedAt: Date.now() };
+    commandRunViews.set(id, run);
+    if (commandRunViews.size > COMMAND_RUN_CACHE_LIMIT) {
+      const oldest = [...commandRunViews.values()]
+        .filter(item => !["starting", "running", "cancelling"].includes(item.state))
+        .sort((left, right) => left.updatedAt - right.updatedAt)[0]
+        || [...commandRunViews.values()].sort((left, right) => left.updatedAt - right.updatedAt)[0];
+      if (oldest && oldest.runId !== id) commandRunViews.delete(oldest.runId);
+    }
+  }
+  return run;
+}
+
+function handleCommandRunEvent(data = {}, ts = null) {
+  const run = commandRunView(data.run_id);
+  if (!run) return;
+  if (data.command != null) run.command = String(data.command);
+  if (data.state) run.state = String(data.state);
+  if (data.pid != null) run.pid = data.pid;
+  if (data.exit_code != null) run.exitCode = data.exit_code;
+  run.updatedAt = Date.parse(ts) || Date.now();
+  scheduleCommandRunRender();
+}
+
+function handleCommandOutputEvent(data = {}, ts = null) {
+  const run = commandRunView(data.run_id);
+  if (!run) return;
+  const sequence = Number(data.sequence) || 0;
+  // SSE reconnect replay is allowed; never append the same output record twice.
+  if (sequence && sequence <= run.lastSequence) return;
+  run.lastSequence = Math.max(run.lastSequence, sequence);
+  run.output = `${run.output}${String(data.text || "")}`.slice(-COMMAND_RUN_OUTPUT_LIMIT);
+  run.updatedAt = Date.parse(ts) || Date.now();
+  scheduleCommandRunRender();
 }
 
 function describeAction(name, args = {}, result = "") {
@@ -1702,6 +1648,13 @@ async function loadBrowserPreviewImage(data = {}) {
 }
 
 function handleBrowserPreviewEvent(data = {}) {
+  // Closing a page is valid without selecting a presentation in this turn.
+  // Deal with that lifecycle event before mode dispatch so it never needs an
+  // implicit card/window fallback merely to dismiss an existing surface.
+  if (data.state === "closed") {
+    hideBrowserPreview();
+    return;
+  }
   if (data.mode === "window") {
     // Large mode detaches the same live WebContentsView into its own window;
     // no reload, screenshot swap, or browser-profile handoff is involved.
@@ -1710,10 +1663,6 @@ function handleBrowserPreviewEvent(data = {}) {
     return;
   }
   if (data.mode !== "card") return;
-  if (data.state === "closed") {
-    hideBrowserPreview();
-    return;
-  }
   if (data.state === "failed") {
     if (!browserPreviewActive) hideBrowserPreview();
     return;
@@ -2050,9 +1999,12 @@ const HEARTBEAT_FRAME_INTERVAL_MS = 120;
 const HEARTBEAT_PULSE_SHAPE = [0.02, 0.08, -0.08, 0.2, 0.92, -0.4, 0.34, 0.1, 0.02];
 const HEARTBEAT_MAJOR_STRENGTH = 1;
 const HEARTBEAT_TOOL_STRENGTH = 0.8;
+const TOOL_HEARTBEAT_INTERVAL_MS = 3000;
 const heartbeatSamples = Array.from({ length: HEARTBEAT_SAMPLE_COUNT }, () => 0);
 let heartbeatPulseQueue = [];
 let heartbeatBeatTimer = null;
+let toolHeartbeatTimer = null;
+const activeToolExecutions = new Map();
 
 function renderHeartbeatWave() {
   if (!heartbeatWaveEl || !heartbeatAreaEl) return;
@@ -2082,6 +2034,48 @@ function triggerHeartbeatPulse(strength = HEARTBEAT_MAJOR_STRENGTH, kind = "majo
     heartbeatMonitorEl?.removeAttribute("data-beat");
     heartbeatBeatTimer = null;
   }, 760);
+}
+
+function toolExecutionKey(name) {
+  return String(name || "__unknown_tool__");
+}
+
+function hasActiveToolExecutions() {
+  return activeToolExecutions.size > 0;
+}
+
+function stopToolHeartbeatTimer() {
+  if (!toolHeartbeatTimer) return;
+  clearInterval(toolHeartbeatTimer);
+  toolHeartbeatTimer = null;
+}
+
+function beginToolHeartbeat(name) {
+  const key = toolExecutionKey(name);
+  activeToolExecutions.set(key, (activeToolExecutions.get(key) || 0) + 1);
+  triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
+  if (toolHeartbeatTimer) return;
+  toolHeartbeatTimer = setInterval(() => {
+    if (!hasActiveToolExecutions()) {
+      stopToolHeartbeatTimer();
+      return;
+    }
+    // 长时间工具调用期间保持可视活动，但不计作 L2 Tick。
+    triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
+  }, TOOL_HEARTBEAT_INTERVAL_MS);
+}
+
+function finishToolHeartbeat(name) {
+  const key = toolExecutionKey(name);
+  const count = activeToolExecutions.get(key) || 0;
+  if (count > 1) activeToolExecutions.set(key, count - 1);
+  else if (count === 1) activeToolExecutions.delete(key);
+  if (!hasActiveToolExecutions()) stopToolHeartbeatTimer();
+}
+
+function resetToolHeartbeats() {
+  activeToolExecutions.clear();
+  stopToolHeartbeatTimer();
 }
 
 function advanceHeartbeatWave() {
@@ -2134,7 +2128,7 @@ const AI_ACTIVITY_IDLE_AFTER_MS = 15_000;
 const AI_TOOL_GROUPS = {
   "扫描文件": new Set(["read_file", "list_dir"]),
   "改动文件": new Set(["write_file", "make_dir", "delete_file"]),
-  "执行命令": new Set(["exec_command", "exec_quick_command", "exec_task_command", "exec_background_command", "download_file", "kill_process", "list_processes"]),
+  "执行命令": new Set(["run_command", "download_file", "kill_process", "list_processes"]),
   "上网": new Set([
     "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
     "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
@@ -2396,6 +2390,7 @@ function handle({ type, data = {}, ts = null }) {
       // 新用户轮开始后，上一轮人物卡的简介更新窗口立即失效。只有本轮再次
       // 调用 person_card_mode，随后的有效人物说明才允许更新当前卡片。
       cancelPersonCardAssistantEnrichment();
+      resetToolHeartbeats();
       // L1 也是一次真实意识唤醒：只驱动波形，不累加 L2 心跳计数。
       triggerHeartbeatPulse(HEARTBEAT_MAJOR_STRENGTH, "major");
       if (activeHeartbeatRound) {
@@ -2423,6 +2418,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "tick":
+      resetToolHeartbeats();
       currentPath = "l2";
       setVoiceThinking(true);
       revealCognitionStream();
@@ -2433,6 +2429,7 @@ function handle({ type, data = {}, ts = null }) {
       L2.startThinkingSession();
       break;
     case "scheduled_task":
+      resetToolHeartbeats();
       currentPath = "l3";
       setVoiceThinking(true);
       revealCognitionStream();
@@ -2522,8 +2519,8 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "tool_executing": {
       setVoiceThinking(false);
-      // 工具开始执行时给一次小跳；tool_call 是完成事件，不再重复入队。
-      triggerHeartbeatPulse(HEARTBEAT_TOOL_STRENGTH, "minor");
+      // 开始时立即跳一次；未完成前每 3 秒继续小跳。
+      beginToolHeartbeat(data.name);
       const stream = currentStream();
       const action = data.name ? stream.toolAction(data.name, data.args) : "处理事务";
       if (isCardBrowserAction(data)) prepareBrowserPreview(data);
@@ -2538,6 +2535,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "tool_call": {
+      finishToolHeartbeat(data.name);
       const stream = currentStream();
       if (currentPath !== "l1") {
         setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolAction(data.name, data.args)}`, "tool");
@@ -2547,11 +2545,18 @@ function handle({ type, data = {}, ts = null }) {
       recordAiActivity(data.name);
       break;
     }
+    case "command_run":
+      handleCommandRunEvent(data, ts);
+      break;
+    case "command_output":
+      handleCommandOutputEvent(data, ts);
+      break;
     case "browser_preview":
       handleBrowserPreviewEvent(data);
       break;
     case "response":
       // Round complete — stop all animations
+      resetToolHeartbeats();
       currentStream().end();
       setVoiceThinking(false);
       if (currentPath === "l2") {
@@ -2568,6 +2573,7 @@ function handle({ type, data = {}, ts = null }) {
       liveReplyActive = false; liveRawText = ""; liveTurnSpeak = false;
       break;
     case "processing_preempted":
+      resetToolHeartbeats();
       currentStream().end();
       setVoiceThinking(false);
       hideBrowserPreview();
@@ -2595,6 +2601,7 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "message_dropped":
+      resetToolHeartbeats();
       setVoiceThinking(false);
       hideBrowserPreview();
       currentStream().startThinkingSession();
@@ -2605,6 +2612,7 @@ function handle({ type, data = {}, ts = null }) {
       }
       break;
     case "error":
+      resetToolHeartbeats();
       if (isBusyErrorMessage(data.error)) {
         setVoiceThinking(true);
         currentStream().startThinkingSession();
@@ -2621,6 +2629,7 @@ function handle({ type, data = {}, ts = null }) {
       }
       break;
     case "protocol_violation":
+      resetToolHeartbeats();
       currentStream().end();
       setVoiceThinking(false);
       hideBrowserPreview();
@@ -2759,6 +2768,14 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "person_card_mode":
       setPersonCardMode(!!data.active || data.action === "show" || data.action === "open" || data.action === "update", { source: "agent_event", card: data.card || null });
+      break;
+    case "knowledge_cortex_mode":
+      setKnowledgeCortexMode(!!data.active || data.action === "show" || data.action === "open" || data.action === "update", {
+        source: "agent_event",
+        regionId: data.region_id || data.regionId,
+        query: data.query,
+        documentId: data.document_id || data.documentId,
+      });
       break;
     case "social_status":
       window.dispatchEvent(new CustomEvent("bailongma:social_status", { detail: data }));
@@ -3666,6 +3683,7 @@ chat = initChat({
   activationWarmupKey: ACTIVATION_WARMUP_KEY,
   getAgentName: () => agentName,
   defaultInputPlaceholder,
+  isSpacePttEnabled: () => localStorage.getItem(VOICE_SPACE_PTT_KEY) !== "false",
   openSettings: (tab) => openSettingsRef?.(tab),
   onUserMessage: (text) => {
     if (document.body.classList.contains('hotspot-mode') && /关闭|退出|关掉|隐藏/.test(text)) {
@@ -3704,6 +3722,7 @@ loadBrainUiHistory().finally(connectSSE);
 loadAgentProfile();
 initPersonCard();
 initDocPanel().catch((err) => console.warn('[DocPanel] init failed:', err));
+initKnowledgePanel();
 chat.restoreChatHistory();
 setInterval(() => chat?.restoreChatHistory?.(), 15_000);
 window.addEventListener("focus", () => chat?.restoreChatHistory?.());
@@ -3740,1898 +3759,16 @@ requestAnimationFrame(() => {
 });
 initWechatPopup();
 initFeishuPopup();
-
-// ── TTS settings panel init ───────────────────────────────────────────────────
-function initTTSSettings() {
-  const providerSel = document.getElementById("tts-provider-select");
-  const voiceSel    = document.getElementById("tts-voice-select");
-  const testBtn     = document.getElementById("tts-test-btn");
-  const testStatus  = document.getElementById("tts-test-status");
-  const fxToggle    = document.getElementById("tts-fx-toggle");
-  const doubaoKeyInput = document.getElementById("tts-doubao-key");
-  const doubaoKeyToggle = document.getElementById("tts-doubao-key-toggle");
-  if (!providerSel) return;
-
-  let doubaoKeyVisible = false;
-  function setDoubaoKeyVisible(visible) {
-    doubaoKeyVisible = Boolean(visible);
-    if (doubaoKeyInput) doubaoKeyInput.type = doubaoKeyVisible ? "text" : "password";
-    if (doubaoKeyToggle) {
-      doubaoKeyToggle.setAttribute("aria-label", doubaoKeyVisible ? "隐藏 API Key" : "显示 API Key");
-      doubaoKeyToggle.title = doubaoKeyVisible ? "隐藏 API Key" : "显示 API Key";
-    }
-  }
-  doubaoKeyToggle?.addEventListener("click", () => setDoubaoKeyVisible(!doubaoKeyVisible));
-
-  // 流式合成开关（默认开）：纯播放行为，存在 localStorage
-  const streamingToggle = document.getElementById("tts-streaming-toggle");
-  if (streamingToggle) {
-    streamingToggle.checked = isTTSStreamingEnabled();
-    streamingToggle.addEventListener("change", () => setTTSStreamingEnabled(streamingToggle.checked));
-  }
-
-  let allVoices = {};
-
-  // ── 机器人音效：开关 + 滑块面板 ──
-  const fxSlidersBox = document.getElementById("tts-fx-sliders");
-  // 滑块对应的参数键，及数值显示精度
-  const FX_SLIDERS = [
-    { key: "wet",              digits: 2 },
-    { key: "reverbSeconds",    digits: 1 },
-    { key: "driveMix",         digits: 2 },
-    { key: "metallic",         digits: 2 },
-    { key: "ring",             digits: 2 },
-    { key: "chorus",           digits: 2 },
-    { key: "metallicFeedback", digits: 2 },
-    { key: "metallicDelayMs",  digits: 1 },
-    { key: "ringHz",           digits: 0 },
-  ];
-
-  function loadFxSliders() {
-    const p = getJarvisFxParams();
-    for (const s of FX_SLIDERS) {
-      const el = document.getElementById(`tts-fx-${s.key}`);
-      const val = document.getElementById(`tts-fx-${s.key}-val`);
-      const v = Number(p[s.key] ?? 0);
-      if (el) el.value = v;
-      if (val) val.textContent = v.toFixed(s.digits);
-    }
-  }
-
-  for (const s of FX_SLIDERS) {
-    const el = document.getElementById(`tts-fx-${s.key}`);
-    const val = document.getElementById(`tts-fx-${s.key}-val`);
-    if (!el) continue;
-    el.addEventListener("input", () => {
-      const v = parseFloat(el.value);
-      setJarvisFxParams({ [s.key]: v });
-      if (val) val.textContent = v.toFixed(s.digits);
-    });
-  }
-
-  const fxReset = document.getElementById("tts-fx-reset");
-  if (fxReset) {
-    fxReset.addEventListener("click", () => { resetJarvisFxParams(); loadFxSliders(); });
-  }
-
-  // 语速滑块（豆包 speech_rate，-50~100，0=正常）：显示更新；存档走保存/试听
-  const fmtRate = (r) => (r === 0 ? "正常" : (r > 0 ? "+" + r : String(r)));
-  const doubaoRateEl = document.getElementById("tts-doubao-rate");
-  const doubaoRateVal = document.getElementById("tts-doubao-rate-val");
-  if (doubaoRateEl) {
-    doubaoRateEl.addEventListener("input", () => {
-      if (doubaoRateVal) doubaoRateVal.textContent = fmtRate(parseInt(doubaoRateEl.value, 10) || 0);
-    });
-  }
-
-  // 付费解锁
-  const fxLockBox = document.getElementById("tts-fx-lock");
-  const fxPwInput = document.getElementById("tts-fx-pw");
-  const fxUnlockBtn = document.getElementById("tts-fx-unlock");
-  const fxUnlockMsg = document.getElementById("tts-fx-unlock-msg");
-
-  // 机器人音效开关跟随当前选中的音色；未解锁则禁用开关+显示付费提示；解锁且开启时展开滑块
-  function syncFxToggle() {
-    const unlocked = isFxUnlocked();
-    const on = unlocked && isFxEnabledForVoice(voiceSel?.value);
-    if (fxToggle) { fxToggle.checked = on; fxToggle.disabled = !unlocked; }
-    if (fxSlidersBox) fxSlidersBox.style.display = on ? "flex" : "none";
-    if (fxLockBox) fxLockBox.style.display = unlocked ? "none" : "flex";
-  }
-  if (fxToggle) {
-    fxToggle.addEventListener("change", () => {
-      if (!isFxUnlocked()) { fxToggle.checked = false; syncFxToggle(); return; }
-      setFxEnabledForVoice(voiceSel?.value, fxToggle.checked);
-      if (fxSlidersBox) fxSlidersBox.style.display = fxToggle.checked ? "flex" : "none";
-    });
-  }
-  if (fxUnlockBtn) {
-    fxUnlockBtn.addEventListener("click", () => {
-      const res = tryUnlockFx(fxPwInput?.value?.trim() || "");
-      if (fxUnlockMsg) {
-        fxUnlockMsg.textContent = res.ok ? "已解锁 ✓ 现在可以开启机器人音效了" : res.reason;
-        fxUnlockMsg.style.color = res.ok ? "#3ba55d" : "#e05050";
-      }
-      if (res.ok) syncFxToggle();
-    });
-  }
-  if (voiceSel) {
-    voiceSel.addEventListener("change", syncFxToggle);
-  }
-  loadFxSliders();
-  syncFxToggle();
-
-  const credSections = {
-    doubao:     document.getElementById("tts-creds-doubao"),
-    minimax:    document.getElementById("tts-creds-minimax"),
-    openai:     document.getElementById("tts-creds-openai"),
-    elevenlabs: document.getElementById("tts-creds-elevenlabs"),
-    volcano:    document.getElementById("tts-creds-volcano"),
-  };
-
-  function showCredSection(provider) {
-    Object.entries(credSections).forEach(([k, el]) => {
-      if (el) el.style.display = k === provider ? "" : "none";
-    });
-  }
-
-  function updateVoiceOptions(provider, savedId) {
-    if (!voiceSel) return;
-    const voices = allVoices[provider] || [];
-    voiceSel.innerHTML = voices.map(v =>
-      `<option value="${v.id}">${v.label}</option>`
-    ).join("");
-    if (savedId && voices.some(v => v.id === savedId)) {
-      voiceSel.value = savedId;
-    }
-    syncFxToggle();
-  }
-
-  providerSel.addEventListener("change", () => {
-    showCredSection(providerSel.value);
-    updateVoiceOptions(providerSel.value);
-  });
-
-  fetch(`${API}/settings/tts`).then(r => r.json()).then(({ tts, voices }) => {
-    if (voices) allVoices = voices;
-    const provider = tts?.ttsProvider || "doubao";
-    if (tts?.ttsProvider) providerSel.value = tts.ttsProvider;
-    else providerSel.value = "doubao";
-    updateVoiceOptions(provider, tts?.ttsVoiceId);
-    activeTTSVoiceId = voiceSel?.value || tts?.ttsVoiceId || null;
-    const appidEl = document.getElementById("tts-volcano-appid");
-    if (appidEl && tts?.volcanoAppId?.value) appidEl.value = tts.volcanoAppId.value;
-    if (doubaoKeyInput) doubaoKeyInput.value = typeof tts?.doubaoKey?.value === "string" ? tts.doubaoKey.value : "";
-    const doubaoResourceEl = document.getElementById("tts-doubao-resource");
-    if (doubaoResourceEl && tts?.doubaoResourceId) doubaoResourceEl.value = tts.doubaoResourceId;
-    const rateEl = document.getElementById("tts-doubao-rate");
-    if (rateEl) {
-      const r = Number(tts?.doubaoSpeechRate || 0) || 0;
-      rateEl.value = r;
-      const rv = document.getElementById("tts-doubao-rate-val");
-      if (rv) rv.textContent = r === 0 ? "正常" : (r > 0 ? "+" + r : String(r));
-    }
-    const baseurlEl = document.getElementById("tts-openai-baseurl");
-    if (baseurlEl && tts?.openaiTtsBaseURL) baseurlEl.value = tts.openaiTtsBaseURL;
-    showCredSection(provider);
-  }).catch(() => {});
-
-  showCredSection(providerSel.value);
-
-  const origSaveBtn = document.getElementById("settings-save-voice");
-  if (origSaveBtn) {
-    origSaveBtn.addEventListener("click", () => {
-      const ttsBody = { ttsProvider: providerSel.value };
-      const voiceId  = voiceSel?.value?.trim();
-      if (voiceId) { ttsBody.ttsVoiceId = voiceId; activeTTSVoiceId = voiceId; }
-      const minimaxKey = document.getElementById("tts-minimax-key")?.value?.trim();
-      if (minimaxKey) ttsBody.minimaxKey = minimaxKey;
-      const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
-      if (doubaoKey) ttsBody.doubaoKey = doubaoKey;
-      const doubaoResource = document.getElementById("tts-doubao-resource")?.value?.trim();
-      if (doubaoResource) ttsBody.doubaoResourceId = doubaoResource;
-      const rateEl2 = document.getElementById("tts-doubao-rate");
-      if (rateEl2) ttsBody.doubaoSpeechRate = rateEl2.value;
-      const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
-      if (openaiKey) ttsBody.openaiTtsKey = openaiKey;
-      const baseURL = document.getElementById("tts-openai-baseurl")?.value?.trim();
-      if (baseURL) ttsBody.openaiTtsBaseURL = baseURL;
-      const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
-      if (elevenKey) ttsBody.elevenLabsKey = elevenKey;
-      const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
-      if (volcanoAppId) ttsBody.volcanoAppId = volcanoAppId;
-      const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
-      if (volcanoToken) ttsBody.volcanoToken = volcanoToken;
-
-      fetch(`${API}/settings/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(ttsBody),
-      }).then(() => {
-        ["tts-minimax-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) el.value = "";
-        });
-      }).catch(() => {});
-    });
-  }
-
-  if (testBtn) {
-    testBtn.addEventListener("click", async () => {
-      testBtn.disabled = true;
-      if (testStatus) testStatus.textContent = "保存配置中…";
-      try {
-        const preBody = { ttsProvider: providerSel.value };
-        const currentVoice = voiceSel?.value?.trim();
-        if (currentVoice) { preBody.ttsVoiceId = currentVoice; activeTTSVoiceId = currentVoice; }
-        const minimaxKey2 = document.getElementById("tts-minimax-key")?.value?.trim();
-        if (minimaxKey2) preBody.minimaxKey = minimaxKey2;
-        const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
-        if (doubaoKey) preBody.doubaoKey = doubaoKey;
-        const doubaoResource = document.getElementById("tts-doubao-resource")?.value?.trim();
-        if (doubaoResource) preBody.doubaoResourceId = doubaoResource;
-        const rateEl3 = document.getElementById("tts-doubao-rate");
-        if (rateEl3) preBody.doubaoSpeechRate = rateEl3.value;
-        const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
-        if (openaiKey) preBody.openaiTtsKey = openaiKey;
-        const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
-        if (elevenKey) preBody.elevenLabsKey = elevenKey;
-        const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
-        if (volcanoAppId) preBody.volcanoAppId = volcanoAppId;
-        const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
-        if (volcanoToken) preBody.volcanoToken = volcanoToken;
-        await fetch(`${API}/settings/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(preBody),
-        });
-        if (testStatus) testStatus.textContent = "合成中…";
-        const ttsResp = await fetch(`${API}/tts/stream`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: "你好，这是一段语音合成测试，听起来清晰自然吗？" }),
-        });
-        if (!ttsResp.ok) {
-          let errMsg = `合成失败（HTTP ${ttsResp.status}）`;
-          try { const j = await ttsResp.json(); errMsg = j.error || errMsg; } catch {}
-          if (testStatus) testStatus.textContent = errMsg;
-          return;
-        }
-        const ttsBlob = await ttsResp.blob();
-        if (ttsBlob.size === 0) {
-          if (testStatus) testStatus.textContent = "合成失败：接口返回空数据，请检查 API Key 和账户配置。";
-          return;
-        }
-        const ttsUrl = URL.createObjectURL(ttsBlob);
-        const ttsAudio = new Audio(ttsUrl);
-        attachJarvisFx(ttsAudio, voiceSel?.value || activeTTSVoiceId); // 试听按当前选中音色的开关决定是否叠加
-        ttsAudio.onended = () => { URL.revokeObjectURL(ttsUrl); if (testStatus) testStatus.textContent = ""; };
-        ttsAudio.onerror = () => { URL.revokeObjectURL(ttsUrl); if (testStatus) testStatus.textContent = "播放失败"; };
-        await applyOutputSink(ttsAudio).catch(() => {}); // 试听也走同一输出路由
-        await ttsAudio.play();
-        if (testStatus) testStatus.textContent = "播放中";
-        setTimeout(() => { if (testStatus && testStatus.textContent === "播放中") testStatus.textContent = ""; }, 8000);
-      } catch {
-        if (testStatus) testStatus.textContent = "失败 — 请检查配置和 API Key";
-      } finally {
-        testBtn.disabled = false;
-      }
-    });
-  }
-}
-
-// ── Settings modal ──
-(function initSettings() {
-  const settingsBtn     = document.getElementById("settings-btn");
-  const overlay         = document.getElementById("settings-overlay");
-  const closeBtn        = document.getElementById("settings-close");
-  const providerSelect  = document.getElementById("settings-provider-select");
-  const modelSelect     = document.getElementById("settings-model-select");
-  const officialCustomModelInput = document.getElementById("settings-official-custom-model");
-  const llmKeyInput     = document.getElementById("settings-llm-key");
-  const llmKeyToggle    = document.getElementById("settings-llm-key-toggle");
-  const saveLlmBtn      = document.getElementById("settings-save-llm");
-  const llmFeedback     = document.getElementById("settings-llm-feedback");
-  const agentNameInput  = document.getElementById("settings-agent-name");
-  const saveAgentNameBtn = document.getElementById("settings-save-agent-name");
-  const agentNameFeedback = document.getElementById("settings-agent-name-feedback");
-  const tempSlider      = document.getElementById("settings-temperature");
-  const tempVal         = document.getElementById("settings-temperature-val");
-  const saveTempBtn     = document.getElementById("settings-save-temperature");
-  const tempFeedback    = document.getElementById("settings-temperature-feedback");
-  const thinkingToggle  = document.getElementById("settings-thinking");
-  const thinkingFeedback = document.getElementById("settings-thinking-feedback");
-  const contextRange = document.getElementById("settings-context-range");
-  const chatContextSlider = document.getElementById("settings-chat-context-limit");
-  const chatContextVal = document.getElementById("settings-chat-context-limit-val");
-  const toolContextSlider = document.getElementById("settings-tool-context-limit");
-  const toolContextVal = document.getElementById("settings-tool-context-limit-val");
-  const saveContextWindowBtn = document.getElementById("settings-save-context-window");
-  const contextWindowFeedback = document.getElementById("settings-context-window-feedback");
-  const minimaxKeyInput = document.getElementById("settings-minimax-key");
-  const saveMinimaxBtn  = document.getElementById("settings-save-minimax");
-  const minimaxFeedback = document.getElementById("settings-minimax-feedback");
-  const saveSocialBtn   = document.getElementById("settings-save-social");
-  const socialFeedback  = document.getElementById("settings-social-feedback");
-  const saveVoiceBtn    = document.getElementById("settings-save-voice");
-  const voiceFeedback   = document.getElementById("settings-voice-feedback");
-  const voiceThreshSlider = document.getElementById("settings-voice-threshold");
-  const voiceThreshVal    = document.getElementById("settings-voice-threshold-val");
-  const voiceMicSelect    = document.getElementById("voice-mic-select");
-  const voiceRefreshMicsBtn = document.getElementById("voice-refresh-mics");
-  const voiceMicStatus    = document.getElementById("voice-mic-status");
-  const voiceOutputSelect    = document.getElementById("voice-output-select");
-  const voiceRefreshOutputsBtn = document.getElementById("voice-refresh-outputs");
-  const voiceOutputStatus    = document.getElementById("voice-output-status");
-  const volcAsrKeyInput      = document.getElementById("voice-volc-apikey");
-  const volcAsrKeyToggle     = document.getElementById("voice-volc-apikey-toggle");
-  const mapKeyInput          = document.getElementById("settings-amap-key");
-  const mapSecurityInput     = document.getElementById("settings-amap-security");
-  const saveMapBtn           = document.getElementById("settings-save-map");
-  const clearMapBtn          = document.getElementById("settings-clear-map");
-  const mapFeedback          = document.getElementById("settings-map-feedback");
-  const heartbeatToggle      = document.getElementById("settings-heartbeat-enabled");
-  const heartbeatInterval    = document.getElementById("settings-heartbeat-interval");
-  const saveHeartbeatBtn     = document.getElementById("settings-save-heartbeat");
-  const heartbeatFeedback    = document.getElementById("settings-heartbeat-feedback");
-
-  if (!settingsBtn || !overlay) return;
-
-  let cachedProviders = null;
-
-  function syncContextWindowControls(changed = "load") {
-    let chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
-    let toolCallLimit = Math.min(40, Math.max(0, Number(toolContextSlider?.value) || 0));
-    if (toolCallLimit >= chatMessageLimit) {
-      toolCallLimit = Math.max(0, chatMessageLimit - 1);
-    }
-    if (chatContextSlider) chatContextSlider.value = String(chatMessageLimit);
-    if (toolContextSlider) {
-      toolContextSlider.value = String(toolCallLimit);
-      toolContextSlider.setAttribute("aria-valuemax", String(Math.max(0, chatMessageLimit - 1)));
-    }
-    if (chatContextVal) chatContextVal.textContent = `${chatMessageLimit} 条`;
-    if (toolContextVal) toolContextVal.textContent = `${toolCallLimit} 条`;
-    if (contextRange) {
-      contextRange.style.setProperty("--chat-context-position", `${chatMessageLimit / 40 * 100}%`);
-      contextRange.style.setProperty("--tool-context-position", `${toolCallLimit / 40 * 100}%`);
-      contextRange.dataset.activeHandle = changed;
-    }
-  }
-  let cachedLlm = null;
-  let llmKeyVisible = false;
-  let volcAsrKeyVisible = false;
-  let volcAsrSaveTimer = null;
-  let volcAsrSaveRequest = 0;
-  const agentNameRe = /^[一-龥A-Za-z0-9 _-]+$/;
-  const CUSTOM_MODEL_VALUE = "__custom_model__";
-
-  overlay.querySelectorAll(".settings-nav-item").forEach(btn => {
-    btn.addEventListener("click", () => {
-      overlay.querySelectorAll(".settings-nav-item").forEach(b => b.classList.remove("active"));
-      overlay.querySelectorAll(".settings-tab").forEach(t => t.classList.remove("active"));
-      btn.classList.add("active");
-      const tab = btn.dataset.tab;
-      overlay.querySelector(`.settings-tab[data-tab="${tab}"]`)?.classList.add("active");
-      if (tab === "social") loadSocialSettings();
-      if (tab === "security") loadSecuritySettings();
-      if (tab === "mcp") loadMcpSettings();
-      if (tab === "advanced") {
-        loadHeartbeatSettings();
-        loadMapSettings();
-      }
-      if (tab === "update") loadUpdateSettings();
-    });
-  });
-
-  function showFeedback(el, msg, isError = false) {
-    if (!el) return;
-    el.textContent = msg;
-    el.className = "settings-feedback" + (isError ? " error" : "");
-    setTimeout(() => { el.textContent = ""; el.className = "settings-feedback"; }, 3000);
-  }
-
-  function refreshConfigSummary({ llm, minimax }) {
-    const cfgLlm = document.getElementById("settings-cfg-llm");
-    const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
-    const cfgMedia = document.getElementById("settings-cfg-media");
-    const cfgMediaDot = document.getElementById("settings-cfg-media-dot");
-    if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"}`;
-    if (cfgLlmDot) {
-      cfgLlmDot.textContent = "●";
-      cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
-      cfgLlmDot.title = llm.activated ? "Running" : "Inactive";
-    }
-    if (cfgMedia) cfgMedia.textContent = `minimax · ${minimax.configured ? "configured" : "not configured"}`;
-    if (cfgMediaDot) {
-      cfgMediaDot.textContent = "●";
-      cfgMediaDot.className = `settings-config-dot ${minimax.configured ? "active" : "inactive"}`;
-    }
-  }
-
-  function escapeHtml(text) {
-    return String(text ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function syncOfficialCustomModelRow() {
-    const customRow = document.getElementById("settings-official-custom-model-row");
-    if (!customRow || !modelSelect) return;
-    customRow.style.display = modelSelect.value === CUSTOM_MODEL_VALUE ? "" : "none";
-  }
-
-  function populateModelSelect(models, current) {
-    if (!modelSelect || !models) return;
-    const list = Array.isArray(models) ? models.filter(m => m?.id) : [];
-    const currentModel = String(current || "").trim();
-    const hasCurrent = currentModel && list.some(m => m.id === currentModel);
-    modelSelect.innerHTML = list
-      .map(m => `<option value="${escapeHtml(m.id)}"${m.deprecated ? " data-deprecated" : ""}>${escapeHtml(m.label || m.id)}</option>`)
-      .concat(`<option value="${CUSTOM_MODEL_VALUE}">手动输入模型名…</option>`)
-      .join("");
-    if (hasCurrent) {
-      modelSelect.value = currentModel;
-      if (officialCustomModelInput) officialCustomModelInput.value = "";
-    } else if (currentModel) {
-      modelSelect.value = CUSTOM_MODEL_VALUE;
-      if (officialCustomModelInput) officialCustomModelInput.value = currentModel;
-    }
-    syncOfficialCustomModelRow();
-  }
-
-  function populateProviderSelect(providers, current) {
-    if (!providerSelect || !providers) return;
-    const selected = current || providerSelect.value || "auto";
-    const options = [`<option value="auto">Auto-detect</option>`]
-      .concat(Object.entries(providers).map(([id, provider]) => {
-        const label = provider.label || id;
-        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
-      }));
-    providerSelect.innerHTML = options.join("");
-    providerSelect.value = providers[selected] || selected === "auto" ? selected : "auto";
-  }
-
-  function setLlmKeyVisible(visible) {
-    llmKeyVisible = Boolean(visible);
-    if (llmKeyInput) llmKeyInput.type = llmKeyVisible ? "text" : "password";
-    if (llmKeyToggle) {
-      llmKeyToggle.setAttribute("aria-label", llmKeyVisible ? "隐藏 API Key" : "显示 API Key");
-      llmKeyToggle.title = llmKeyVisible ? "隐藏 API Key" : "显示 API Key";
-    }
-  }
-
-  function getProviderConfigForUI(provider, llm = cachedLlm) {
-    const summary = cachedProviders?.[provider] || {};
-    if (llm && provider === llm.provider) {
-      return {
-        ...summary,
-        ...llm,
-        apiKey: llm.apiKey ?? summary.apiKey ?? "",
-      };
-    }
-    return summary;
-  }
-
-  function applyCustomProviderUI(providerOrLlm) {
-    const provider = typeof providerOrLlm === "string"
-      ? providerOrLlm
-      : (providerOrLlm?.provider || "auto");
-    const providerCfg = getProviderConfigForUI(provider, typeof providerOrLlm === "object" ? providerOrLlm : cachedLlm);
-    const customSection = document.getElementById("settings-custom-llm-section");
-    const modelRow = document.getElementById("settings-model-row");
-    const officialCustomModelRow = document.getElementById("settings-official-custom-model-row");
-    if (provider === "auto") {
-      if (customSection) customSection.style.display = "none";
-      if (modelRow) modelRow.style.display = "none";
-      if (officialCustomModelRow) officialCustomModelRow.style.display = "none";
-      if (llmKeyInput) llmKeyInput.value = "";
-      setLlmKeyVisible(false);
-      return;
-    }
-    if (provider === "custom") {
-      if (customSection) customSection.style.display = "";
-      if (modelRow) modelRow.style.display = "none";
-      if (officialCustomModelRow) officialCustomModelRow.style.display = "none";
-      const baseUrlEl = document.getElementById("settings-custom-baseurl");
-      const modelEl = document.getElementById("settings-custom-model");
-      if (baseUrlEl) baseUrlEl.value = providerCfg.baseURL || "";
-      if (modelEl) modelEl.value = providerCfg.model || "";
-    } else {
-      if (customSection) customSection.style.display = "none";
-      if (modelRow) modelRow.style.display = "";
-      if (cachedProviders?.[provider]) {
-        populateModelSelect(
-          cachedProviders[provider].models,
-          providerCfg.model || cachedProviders[provider].defaultModel,
-        );
-      }
-    }
-    if (llmKeyInput) llmKeyInput.value = providerCfg.apiKey || "";
-    setLlmKeyVisible(false);
-  }
-
-  async function loadSettings() {
-    try {
-      const data = await fetch(`${API}/settings`).then(r => r.json());
-      const { llm, minimax, providers } = data;
-      if (providers) cachedProviders = providers;
-      cachedLlm = llm;
-      if (agentNameInput) agentNameInput.value = data.agent_name || agentName || DEFAULT_AGENT_NAME;
-      refreshConfigSummary({ llm, minimax });
-      populateProviderSelect(providers, llm.provider || "auto");
-      if (providerSelect && llm.provider) providerSelect.value = llm.provider;
-      applyCustomProviderUI(llm);
-      if (typeof llm.temperature === "number" && tempSlider) {
-        tempSlider.value = String(llm.temperature);
-        if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
-      }
-      if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
-      const contextWindow = llm.contextWindow || {};
-      const chatMessageLimit = Number(contextWindow.chatMessageLimit) || 20;
-      const toolCallLimit = Number.isInteger(Number(contextWindow.toolCallLimit))
-        ? Number(contextWindow.toolCallLimit)
-        : 5;
-      if (chatContextSlider) chatContextSlider.value = String(chatMessageLimit);
-      if (toolContextSlider) toolContextSlider.value = String(toolCallLimit);
-      syncContextWindowControls();
-    } catch {}
-  }
-
-  const SOCIAL_FIELD_MAP = {
-    "social-discord-token":  "DISCORD_BOT_TOKEN",
-    "social-feishu-appid":   "FEISHU_APP_ID",
-    "social-feishu-secret":  "FEISHU_APP_SECRET",
-    "social-feishu-token":   "FEISHU_VERIFICATION_TOKEN",
-    "social-wechat-appid":   "WECHAT_OFFICIAL_APP_ID",
-    "social-wechat-secret":  "WECHAT_OFFICIAL_APP_SECRET",
-    "social-wechat-token":   "WECHAT_OFFICIAL_TOKEN",
-    "social-wecom-botkey":   "WECOM_BOT_KEY",
-    "social-wecom-token":    "WECOM_INCOMING_TOKEN",
-  };
-
-  const SOCIAL_PLATFORM_STATUS = {
-    "social-status-discord": ["DISCORD_BOT_TOKEN"],
-    "social-status-feishu":  ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_VERIFICATION_TOKEN"],
-    "social-status-wechat":  ["WECHAT_OFFICIAL_APP_ID", "WECHAT_OFFICIAL_APP_SECRET", "WECHAT_OFFICIAL_TOKEN"],
-    "social-status-wecom":   ["WECOM_BOT_KEY", "WECOM_INCOMING_TOKEN"],
-  };
-
-  async function loadSocialSettings() {
-    try {
-      const { social } = await fetch(`${API}/settings/social`).then(r => r.json());
-      for (const [statusId, keys] of Object.entries(SOCIAL_PLATFORM_STATUS)) {
-        const el = document.getElementById(statusId);
-        if (!el) continue;
-        const configuredCount = keys.filter(k => social[k]?.configured).length;
-        if (configuredCount === keys.length) {
-          el.textContent = "● 已配置";
-          el.className = "settings-platform-status ok";
-        } else if (configuredCount > 0) {
-          el.textContent = `● 部分配置 (${configuredCount}/${keys.length})`;
-          el.className = "settings-platform-status miss";
-        } else {
-          el.textContent = "○ 未配置";
-          el.className = "settings-platform-status miss";
-        }
-      }
-    } catch {}
-  }
-
-  const fileSandboxToggle = document.getElementById("security-file-sandbox");
-  const execSandboxToggle = document.getElementById("security-exec-sandbox");
-  const lanAccessToggle   = document.getElementById("security-lan-access");
-  const lanAccessToken    = document.getElementById("security-lan-token");
-  const copyLanTokenBtn   = document.getElementById("security-copy-lan-token");
-  const lanAddressSelect  = document.getElementById("security-lan-address");
-  const lanAccessUrl      = document.getElementById("security-lan-url");
-  const copyLanUrlBtn     = document.getElementById("security-copy-lan-url");
-  const lanSharePanel     = document.getElementById("security-lan-share");
-  const lanAccessQr       = document.getElementById("security-lan-access-qr");
-  const lanCertificateQr  = document.getElementById("security-lan-cert-qr");
-  const lanCertificateLink = document.getElementById("security-lan-cert-link");
-  const lanAccessHint     = document.getElementById("security-lan-hint");
-  const saveSecurityBtn   = document.getElementById("settings-save-security");
-  const restartSecurityBtn = document.getElementById("settings-restart-security");
-  const securityFeedback  = document.getElementById("settings-security-feedback");
-
-  const mcpServersJson = document.getElementById("mcp-servers-json");
-  const mcpStatus = document.getElementById("mcp-status");
-  const saveMcpBtn = document.getElementById("settings-save-mcp");
-  const mcpFeedback = document.getElementById("settings-mcp-feedback");
-
-  function renderMcpStatus(status = {}) {
-    if (!mcpStatus) return;
-    const servers = Array.isArray(status.servers) ? status.servers : [];
-    if (servers.length === 0) {
-      mcpStatus.textContent = "没有配置 MCP Server";
-      return;
-    }
-    mcpStatus.textContent = servers.map(server => {
-      const marker = server.status === "connected" ? "●" : server.status === "disabled" ? "○" : "×";
-      const tools = `${server.loadedToolCount || 0}/${server.toolCount || 0} tools`;
-      const error = server.error ? `\n  ${server.error}` : "";
-      return `${marker} ${server.name || server.id} · ${server.status} · ${tools}${error}`;
-    }).join("\n");
-  }
-
-  async function loadMcpSettings() {
-    try {
-      const data = await fetch(`${API}/settings/mcp`).then(r => r.json());
-      if (!data.ok) throw new Error(data.error || "读取失败");
-      if (mcpServersJson) {
-        const servers = (data.mcp?.servers || []).map(({ envKeys, ...server }) => server);
-        mcpServersJson.value = JSON.stringify(servers, null, 2);
-      }
-      renderMcpStatus(data.status);
-    } catch (error) {
-      if (mcpStatus) mcpStatus.textContent = error?.message || "读取 MCP 设置失败";
-    }
-  }
-
-  if (saveMcpBtn) {
-    saveMcpBtn.addEventListener("click", async () => {
-      let servers;
-      try {
-        servers = JSON.parse(mcpServersJson?.value || "[]");
-        if (!Array.isArray(servers)) throw new Error("顶层必须是 Server 数组");
-      } catch (error) {
-        showFeedback(mcpFeedback, `JSON 格式错误：${error.message}`, true);
-        return;
-      }
-      saveMcpBtn.disabled = true;
-      showFeedback(mcpFeedback, "正在保存并连接…");
-      try {
-        const res = await fetch(`${API}/settings/mcp`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ servers }),
-        });
-        const data = await res.json();
-        if (!data.ok) throw new Error(data.error || "保存失败");
-        const publicServers = (data.mcp?.servers || []).map(({ envKeys, ...server }) => server);
-        if (mcpServersJson) mcpServersJson.value = JSON.stringify(publicServers, null, 2);
-        renderMcpStatus(data.status);
-        showFeedback(mcpFeedback, `已保存，加载 ${data.status?.toolCount || 0} 个 MCP 工具`);
-      } catch (error) {
-        showFeedback(mcpFeedback, error?.message || "请求失败", true);
-      } finally {
-        saveMcpBtn.disabled = false;
-      }
-    });
-  }
-
-  let lanAccessEntries = [];
-
-  function showSelectedLanAccessEntry() {
-    const index = Number(lanAddressSelect?.value || 0);
-    const entry = lanAccessEntries[index] || lanAccessEntries[0] || null;
-    if (lanAccessUrl) lanAccessUrl.value = entry?.url || "";
-    if (lanAccessQr) lanAccessQr.src = entry?.qrDataUrl || "";
-    if (lanCertificateQr) lanCertificateQr.src = entry?.certificateQrDataUrl || "";
-    if (lanCertificateLink) {
-      lanCertificateLink.href = entry?.certificateUrl || "#";
-      lanCertificateLink.style.pointerEvents = entry ? "" : "none";
-    }
-    if (lanSharePanel) lanSharePanel.style.display = entry ? "" : "none";
-  }
-
-  function applyLanNetworkSettings(network = {}) {
-    const previousAddress = lanAccessEntries[Number(lanAddressSelect?.value || 0)]?.address;
-    if (lanAccessToggle) lanAccessToggle.checked = network.allowLanAccess === true;
-    if (lanAccessToken) lanAccessToken.value = network.accessToken || "";
-    lanAccessEntries = Array.isArray(network.accessEntries) ? network.accessEntries : [];
-    if (lanAddressSelect) {
-      lanAddressSelect.innerHTML = "";
-      lanAccessEntries.forEach((entry, index) => {
-        const option = document.createElement("option");
-        option.value = String(index);
-        option.textContent = entry.address;
-        lanAddressSelect.appendChild(option);
-      });
-      const previousIndex = lanAccessEntries.findIndex(entry => entry.address === previousAddress);
-      lanAddressSelect.value = String(previousIndex >= 0 ? previousIndex : 0);
-      lanAddressSelect.disabled = lanAccessEntries.length === 0;
-    }
-    showSelectedLanAccessEntry();
-    if (lanAccessHint) {
-      if (!network.allowLanAccess) {
-        lanAccessHint.textContent = "开启局域网访问并重启后，这里会生成完整链接和二维码。";
-      } else if (network.httpsEnabled) {
-        lanAccessHint.textContent = "首次使用先安装根证书并启用完全信任，再扫描访问二维码。完整链接包含访问口令，请勿发给不信任的人。";
-      } else {
-        lanAccessHint.textContent = "当前未启用 HTTPS，iPad Safari 无法使用麦克风。";
-      }
-    }
-  }
-
-  lanAddressSelect?.addEventListener("change", showSelectedLanAccessEntry);
-
-  const BAILONGMA_CHROME_BROWSER_TOOL_NAMES = [
-    "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
-    "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
-    "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
-    "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",
-    "browser_console_messages", "browser_resize", "browser_close",
-  ];
-
-  async function loadSecuritySettings() {
-    try {
-      const { security, network } = await fetch(`${API}/settings/security`).then(r => r.json());
-      if (fileSandboxToggle) fileSandboxToggle.checked = security.fileSandbox !== false;
-      if (execSandboxToggle) execSandboxToggle.checked = security.execSandbox !== false;
-      applyLanNetworkSettings(network);
-      restartSecurityBtn?.classList.add("hidden");
-      document.querySelectorAll(".security-blocked-tool").forEach(cb => {
-        const blocked = security.blockedTools || [];
-        cb.checked = cb.value === "chrome_devtools_browser"
-          ? BAILONGMA_CHROME_BROWSER_TOOL_NAMES.every(name => blocked.includes(name))
-          : blocked.includes(cb.value);
-      });
-    } catch {}
-  }
-
-  if (saveSecurityBtn) {
-    saveSecurityBtn.addEventListener("click", async () => {
-      const blockedTools = [...document.querySelectorAll(".security-blocked-tool")]
-        .filter(cb => cb.checked)
-        .map(cb => cb.value);
-      const body = {
-        fileSandbox: fileSandboxToggle ? fileSandboxToggle.checked : true,
-        execSandbox: execSandboxToggle ? execSandboxToggle.checked : true,
-        allowLanAccess: lanAccessToggle ? lanAccessToggle.checked : false,
-        blockedTools,
-      };
-      saveSecurityBtn.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/security`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          applyLanNetworkSettings(data.network);
-          if (data.network?.restartRequired) {
-            showFeedback(securityFeedback, "已保存 — 重启后生效");
-            restartSecurityBtn?.classList.remove("hidden");
-          } else {
-            showFeedback(securityFeedback, "已保存 — 立即生效");
-          }
-        } else {
-          showFeedback(securityFeedback, data.error || "保存失败", true);
-        }
-      } catch {
-        showFeedback(securityFeedback, "请求失败", true);
-      } finally {
-        saveSecurityBtn.disabled = false;
-      }
-    });
-  }
-
-  if (restartSecurityBtn) {
-    restartSecurityBtn.addEventListener("click", async () => {
-      restartSecurityBtn.disabled = true;
-      try {
-        await fetch(`${API}/admin/restart`, { method: "POST" });
-        showFeedback(securityFeedback, "正在重启…");
-      } catch {
-        showFeedback(securityFeedback, "重启请求失败，请手动重启应用", true);
-        restartSecurityBtn.disabled = false;
-      }
-    });
-  }
-
-  if (saveSocialBtn) {
-    saveSocialBtn.addEventListener("click", async () => {
-      const updates = {};
-      for (const [fieldId, envKey] of Object.entries(SOCIAL_FIELD_MAP)) {
-        const val = document.getElementById(fieldId)?.value?.trim() || "";
-        if (val) updates[envKey] = val;
-      }
-      saveSocialBtn.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/social`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showFeedback(socialFeedback, "已保存");
-          Object.keys(SOCIAL_FIELD_MAP).forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.value = "";
-          });
-          loadSocialSettings();
-        } else {
-          showFeedback(socialFeedback, data.error || "保存失败", true);
-        }
-      } catch {
-        showFeedback(socialFeedback, "请求失败", true);
-      } finally {
-        saveSocialBtn.disabled = false;
-      }
-    });
-  }
-
-  if (tempSlider && tempVal) {
-    tempSlider.addEventListener("input", () => {
-      tempVal.textContent = parseFloat(tempSlider.value).toFixed(2);
-    });
-  }
-  if (saveTempBtn) {
-    saveTempBtn.addEventListener("click", async () => {
-      const temperature = parseFloat(tempSlider?.value ?? "0.5");
-      saveTempBtn.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/temperature`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ temperature }),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showFeedback(tempFeedback, `已设为 ${data.temperature.toFixed(2)}`);
-        } else {
-          showFeedback(tempFeedback, data.error || "保存失败", true);
-        }
-      } catch { showFeedback(tempFeedback, "请求失败", true); }
-      finally { saveTempBtn.disabled = false; }
-    });
-  }
-
-  if (thinkingToggle) {
-    thinkingToggle.addEventListener("change", async () => {
-      const thinking = thinkingToggle.checked;
-      thinkingToggle.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/thinking`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ thinking }),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showFeedback(thinkingFeedback, data.thinking ? "已开启 — 下一轮生效" : "已关闭 — 下一轮生效");
-        } else {
-          thinkingToggle.checked = !thinking;
-          showFeedback(thinkingFeedback, data.error || "保存失败", true);
-        }
-      } catch {
-        thinkingToggle.checked = !thinking;
-        showFeedback(thinkingFeedback, "请求失败", true);
-      } finally { thinkingToggle.disabled = false; }
-    });
-  }
-
-  copyLanTokenBtn?.addEventListener("click", async () => {
-    const token = lanAccessToken?.value?.trim();
-    if (!token) {
-      showFeedback(securityFeedback, "请先开启局域网访问并保存", true);
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(token);
-      showFeedback(securityFeedback, "访问口令已复制");
-    } catch {
-      showFeedback(securityFeedback, "复制失败，请手动选择口令", true);
-    }
-  });
-
-  copyLanUrlBtn?.addEventListener("click", async () => {
-    const url = lanAccessUrl?.value?.trim();
-    if (!url) {
-      showFeedback(securityFeedback, "请先开启局域网访问并重启", true);
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      showFeedback(securityFeedback, "完整访问链接已复制");
-    } catch {
-      lanAccessUrl.focus();
-      lanAccessUrl.select();
-      showFeedback(securityFeedback, "已选中链接，请手动复制", true);
-    }
-  });
-
-  if (chatContextSlider) {
-    chatContextSlider.addEventListener("input", () => {
-      syncContextWindowControls("chat");
-    });
-  }
-  if (toolContextSlider) {
-    toolContextSlider.addEventListener("input", () => {
-      syncContextWindowControls("tool");
-    });
-  }
-  syncContextWindowControls();
-  if (saveContextWindowBtn) {
-    saveContextWindowBtn.addEventListener("click", async () => {
-      const body = {
-        chatMessageLimit: Number(chatContextSlider?.value || 20),
-        toolCallLimit: Number(toolContextSlider?.value || 0),
-      };
-      saveContextWindowBtn.disabled = true;
-      try {
-        const res = await fetch(`${API}/settings/context-window`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        const data = await res.json();
-        if (data.ok) {
-          showFeedback(contextWindowFeedback, "已保存 — 下一轮生效");
-        } else {
-          showFeedback(contextWindowFeedback, data.error || "保存失败", true);
-        }
-      } catch {
-        showFeedback(contextWindowFeedback, "请求失败", true);
-      } finally {
-        saveContextWindowBtn.disabled = false;
-      }
-    });
-  }
-
-  const VOICE_LANG_KEY       = "bailongma-voice-lang";
-  const VOICE_AUTO_SEND_KEY  = "bailongma-voice-auto-send";
-  const VOICE_AUTO_MIC_KEY   = "bailongma-voice-auto-mic";
-  const VOICE_THRESHOLD_KEY  = "bailongma-voice-threshold";
-  const VOICE_PROVIDER_KEY   = "bailongma-voice-provider";
-  const VOICE_MIC_DEVICE_KEY = "bailongma-voice-mic-device-id";
-
-  function applyVoiceProviderUI(provider) {
-    const panels = {
-      aliyun: "voice-cred-aliyun",
-      volcengine: "voice-cred-volcengine",
-      tencent: "voice-cred-tencent",
-      xunfei: "voice-cred-xunfei",
-      local: null,
-    };
-    for (const [key, id] of Object.entries(panels)) {
-      if (!id) continue;
-      const el = document.getElementById(id);
-      if (el) el.style.display = key === provider ? "" : "none";
-    }
-  }
-
-  function detectVoiceProviderFromKey(key) {
-    const value = (key || "").trim();
-    if (!value) return null;
-    if (/^sk-[A-Za-z0-9_\-.]{20,}$/.test(value)) {
-      return { provider: "aliyun", label: "阿里云 ASR", fieldId: "voice-aliyun-key" };
-    }
-    if (/^AKID/i.test(value)) {
-      return { provider: "tencent", label: "腾讯云 ASR", fieldId: "voice-tencent-sid" };
-    }
-    if (/^\d{6,10}$/.test(value)) {
-      return { provider: "xunfei", label: "科大讯飞", fieldId: "voice-xunfei-appid" };
-    }
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-      return {
-        provider: "volcengine",
-        label: "火山豆包 ASR",
-        fieldId: "voice-volc-apikey",
-      };
-    }
-    return null;
-  }
-
-  function setVoiceMicStatus(message, isError = false) {
-    if (!voiceMicStatus) return;
-    voiceMicStatus.textContent = message;
-    voiceMicStatus.style.color = isError ? "var(--warm)" : "var(--dim)";
-  }
-
-  async function loadMicrophoneDevices({ requestPermission = false } = {}) {
-    if (!voiceMicSelect) return;
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      voiceMicSelect.disabled = true;
-      setVoiceMicStatus(
-        window.isSecureContext === false
-          ? "当前局域网页面不是安全上下文，Safari 无法使用麦克风；请改用 HTTPS 安全访问链接。"
-          : "当前环境不支持麦克风设备枚举，将使用系统默认麦克风。",
-        true,
-      );
-      return;
-    }
-
-    const savedDeviceId = localStorage.getItem(VOICE_MIC_DEVICE_KEY) || "";
-    const preferredDeviceId = voiceMicSelect.value || savedDeviceId;
-    let permissionError = null;
-
-    voiceMicSelect.disabled = true;
-    if (voiceRefreshMicsBtn) voiceRefreshMicsBtn.disabled = true;
-
-    try {
-      if (requestPermission && navigator.mediaDevices.getUserMedia) {
-        try {
-          const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          permissionStream.getTracks().forEach(track => track.stop());
-        } catch (err) {
-          permissionError = err;
-        }
-      }
-
-      const devices = (await navigator.mediaDevices.enumerateDevices())
-        .filter(device => device.kind === "audioinput");
-
-      voiceMicSelect.innerHTML = "";
-      const defaultOption = document.createElement("option");
-      defaultOption.value = "";
-      defaultOption.textContent = "系统默认麦克风";
-      voiceMicSelect.appendChild(defaultOption);
-
-      devices.forEach((device, index) => {
-        const option = document.createElement("option");
-        option.value = device.deviceId;
-        option.textContent = device.label || `麦克风 ${index + 1}`;
-        voiceMicSelect.appendChild(option);
-      });
-
-      const selectedStillExists = !preferredDeviceId || devices.some(device => device.deviceId === preferredDeviceId);
-      voiceMicSelect.value = selectedStillExists ? preferredDeviceId : "";
-      if (!selectedStillExists && savedDeviceId) localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
-
-      const hasLabels = devices.some(device => device.label);
-      if (permissionError) {
-        setVoiceMicStatus("未获得麦克风权限，仍可使用系统默认麦克风；点刷新可重新授权。", true);
-      } else if (!devices.length) {
-        setVoiceMicStatus("未检测到独立麦克风，将使用系统默认麦克风。");
-      } else if (!hasLabels) {
-        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风；点刷新并授权后可显示完整名称。`);
-      } else {
-        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风。更换后重新开启语音对话生效。`);
-      }
-    } catch {
-      setVoiceMicStatus("麦克风列表读取失败，将使用系统默认麦克风。", true);
-    } finally {
-      voiceMicSelect.disabled = false;
-      if (voiceRefreshMicsBtn) voiceRefreshMicsBtn.disabled = false;
-    }
-  }
-
-  function setVoiceOutputStatus(message, isError = false) {
-    if (!voiceOutputStatus) return;
-    voiceOutputStatus.textContent = message;
-    voiceOutputStatus.style.color = isError ? "var(--warm)" : "var(--dim)";
-  }
-
-  // 填充"语音输出设备"下拉。结构对齐麦克风选择器：第一项=自动，其余=具体设备；
-  // 虚拟/串流设备打标提示用户它们不会真正出声。
-  async function loadOutputDevices({ requestPermission = false } = {}) {
-    if (!voiceOutputSelect) return;
-    if (!('setSinkId' in HTMLMediaElement.prototype)) {
-      voiceOutputSelect.disabled = true;
-      setVoiceOutputStatus("当前环境不支持指定输出设备，将使用系统默认。", true);
-      return;
-    }
-    const savedDeviceId = getOutputPreference();
-    const preferred = voiceOutputSelect.value || savedDeviceId;
-    voiceOutputSelect.disabled = true;
-    if (voiceRefreshOutputsBtn) voiceRefreshOutputsBtn.disabled = true;
-    try {
-      // label/deviceId 需要媒体权限；点"刷新"时主动请求一次，平时静默枚举
-      if (requestPermission && navigator.mediaDevices?.getUserMedia) {
-        try {
-          const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-          s.getTracks().forEach(t => t.stop());
-        } catch {}
-      }
-      const outs = await listOutputDevices();
-      // 只列真实可选设备（隐藏 default/communications 别名，避免和"自动"重复）
-      const selectable = outs.filter(d => !d.isDefault && d.label);
-      voiceOutputSelect.innerHTML = "";
-      const autoOpt = document.createElement("option");
-      autoOpt.value = "";
-      autoOpt.textContent = "自动（跟随系统，避开虚拟设备）";
-      voiceOutputSelect.appendChild(autoOpt);
-      selectable.forEach((d, i) => {
-        const opt = document.createElement("option");
-        opt.value = d.deviceId;
-        opt.textContent = (d.label || `输出设备 ${i + 1}`) + (d.isVirtual ? "（虚拟，可能没声音）" : "");
-        voiceOutputSelect.appendChild(opt);
-      });
-      const stillExists = !preferred || selectable.some(d => d.deviceId === preferred);
-      voiceOutputSelect.value = stillExists ? preferred : "";
-      if (!stillExists && savedDeviceId) setOutputPreference(""); // 钉的设备没了 → 回到自动
-
-      const hasLabels = selectable.some(d => d.label);
-      if (!selectable.length) {
-        setVoiceOutputStatus("未检测到独立扬声器/耳机，点刷新并授权后可显示。");
-      } else if (!hasLabels) {
-        setVoiceOutputStatus("点刷新并授权后可显示设备完整名称。");
-      } else {
-        setVoiceOutputStatus("语音从这里发声。默认自动；拔耳机会自动切回扬声器，不被虚拟声卡占用。");
-      }
-    } catch {
-      setVoiceOutputStatus("输出设备列表读取失败，将使用系统默认。", true);
-    } finally {
-      voiceOutputSelect.disabled = false;
-      if (voiceRefreshOutputsBtn) voiceRefreshOutputsBtn.disabled = false;
-    }
-  }
-
-  voiceRefreshOutputsBtn?.addEventListener("click", () => loadOutputDevices({ requestPermission: true }));
-  // 选择即时生效（无需点保存）：写偏好 → 模块自动把在播语音切过去并复评横幅
-  voiceOutputSelect?.addEventListener("change", () => {
-    setOutputPreference(voiceOutputSelect.value || "");
-    setVoiceOutputStatus(voiceOutputSelect.value ? "已切换，立即生效。" : "已设为自动，立即生效。");
-  });
-
-  const voiceProviderSelect = document.getElementById("voice-provider-select");
-  if (voiceProviderSelect) {
-    voiceProviderSelect.addEventListener("change", () => applyVoiceProviderUI(voiceProviderSelect.value));
-  }
-
-  const voiceAutoKey = document.getElementById("voice-auto-key");
-  const voiceAutoDetect = document.getElementById("voice-auto-detect");
-  if (voiceAutoKey) {
-    voiceAutoKey.addEventListener("input", () => {
-      const detected = detectVoiceProviderFromKey(voiceAutoKey.value);
-      if (!detected) {
-        if (voiceAutoDetect) voiceAutoDetect.textContent = voiceAutoKey.value.trim() ? "未识别" : "";
-        return;
-      }
-      if (voiceProviderSelect) voiceProviderSelect.value = detected.provider;
-      applyVoiceProviderUI(detected.provider);
-      const target = document.getElementById(detected.fieldId);
-      if (target) target.value = voiceAutoKey.value.trim();
-      for (const [id, value] of Object.entries(detected.defaults || {})) {
-        const el = document.getElementById(id);
-        if (el && !el.value.trim()) el.value = value;
-      }
-      if (voiceAutoDetect) voiceAutoDetect.textContent = detected.label;
-    });
-  }
-
-  async function loadMapSettings() {
-    const status = document.getElementById("settings-map-status");
-    const dot = document.getElementById("settings-map-status-dot");
-    try {
-      const data = await fetch(`${API}/settings/map`).then(r => r.json());
-      const map = data?.map || {};
-      if (status) {
-        status.textContent = map.configured
-          ? "高德地图 · 已配置"
-          : `高德地图 · Key ${map.keyConfigured ? "已配置" : "未配置"} / 安全密钥 ${map.securityConfigured ? "已配置" : "未配置"}`;
-      }
-      if (dot) {
-        dot.textContent = "●";
-        dot.className = `settings-config-dot ${map.configured ? "active" : "inactive"}`;
-      }
-    } catch {
-      if (status) status.textContent = "读取配置失败";
-      if (dot) dot.className = "settings-config-dot inactive";
-    }
-  }
-
-  function syncHeartbeatControls() {
-    if (heartbeatInterval) {
-      heartbeatInterval.setAttribute(
-        "aria-label",
-        heartbeatToggle?.checked === false ? "重新启用心跳后使用的默认间隔（分钟）" : "默认心跳间隔（分钟）",
-      );
-    }
-  }
-
-  function applyVoiceConfigStatus(voice = null, error = "") {
-    const el = document.getElementById("voice-config-status");
-    if (!el) return;
-    if (error) {
-      el.textContent = error;
-      el.style.color = "var(--warm)";
-      return;
-    }
-    const provider = voice?.voiceProvider || "aliyun";
-    const definitions = {
-      local: { label: "本机识别（macOS）", keys: [] },
-      aliyun: { label: "阿里云百炼 ASR", keys: ["aliyunApiKey"] },
-      volcengine: { label: "火山豆包 ASR", keys: ["volcAsrApiKey"] },
-      tencent: { label: "腾讯云 ASR", keys: ["tencentSecretId", "tencentSecretKey", "tencentAppId"] },
-      xunfei: { label: "科大讯飞 RTASR", keys: ["xunfeiAppId", "xunfeiApiKey", "xunfeiApiSecret"] },
-    };
-    const definition = definitions[provider] || definitions.aliyun;
-    const configured = definition.keys.length === 0
-      || definition.keys.every(key => voice?.[key]?.configured === true);
-    el.textContent = configured
-      ? `已读取主机配置：${definition.label}（已配置）`
-      : `已读取主机配置：${definition.label}（配置尚未完整）`;
-    el.style.color = configured ? "var(--ok, #4caf50)" : "var(--dim)";
-  }
-
-  async function loadHeartbeatSettings() {
-    try {
-      const response = await fetch(`${API}/settings/heartbeat`);
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "读取失败");
-      const heartbeat = data.heartbeat || {};
-      applyHeartbeatConfig(heartbeat);
-      if (heartbeatToggle) heartbeatToggle.checked = heartbeat.enabled !== false;
-      if (heartbeatInterval) heartbeatInterval.value = String(heartbeat.defaultIntervalMinutes || 20);
-      syncHeartbeatControls();
-    } catch (err) {
-      showFeedback(heartbeatFeedback, err.message || "读取心跳设置失败", true);
-    }
-  }
-
-  heartbeatToggle?.addEventListener("change", syncHeartbeatControls);
-
-  saveHeartbeatBtn?.addEventListener("click", async () => {
-    const defaultIntervalMinutes = Number(heartbeatInterval?.value);
-    if (!Number.isInteger(defaultIntervalMinutes) || defaultIntervalMinutes < 1 || defaultIntervalMinutes > 1440) {
-      showFeedback(heartbeatFeedback, "请输入 1–1440 之间的整数分钟", true);
-      return;
-    }
-    saveHeartbeatBtn.disabled = true;
-    try {
-      const response = await fetch(`${API}/settings/heartbeat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: heartbeatToggle?.checked !== false,
-          defaultIntervalMinutes,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
-      applyHeartbeatConfig(data.heartbeat);
-      showFeedback(heartbeatFeedback, data.heartbeat?.enabled ? "心跳设置已生效" : "心跳已关闭");
-      syncHeartbeatControls();
-    } catch (err) {
-      showFeedback(heartbeatFeedback, err.message || "保存失败", true);
-    } finally {
-      saveHeartbeatBtn.disabled = false;
-    }
-  });
-
-  if (saveMapBtn) {
-    saveMapBtn.addEventListener("click", async () => {
-      const jsKey = mapKeyInput?.value?.trim() || "";
-      const securityCode = mapSecurityInput?.value?.trim() || "";
-      if (!jsKey && !securityCode) {
-        showFeedback(mapFeedback, "请输入 Key 或安全密钥", true);
-        return;
-      }
-      saveMapBtn.disabled = true;
-      try {
-        const response = await fetch(`${API}/settings/map`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jsKey, securityCode }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
-        if (mapKeyInput) mapKeyInput.value = "";
-        if (mapSecurityInput) mapSecurityInput.value = "";
-        showFeedback(mapFeedback, data.map?.configured ? "地图服务已启用" : "已保存，请补全配置");
-        loadMapSettings();
-      } catch (err) {
-        showFeedback(mapFeedback, err.message || "保存失败", true);
-      } finally {
-        saveMapBtn.disabled = false;
-      }
-    });
-  }
-
-  if (clearMapBtn) {
-    clearMapBtn.addEventListener("click", async () => {
-      clearMapBtn.disabled = true;
-      try {
-        const response = await fetch(`${API}/settings/map`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clear: true }),
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "清除失败");
-        if (mapKeyInput) mapKeyInput.value = "";
-        if (mapSecurityInput) mapSecurityInput.value = "";
-        showFeedback(mapFeedback, "地图配置已清除");
-        loadMapSettings();
-      } catch (err) {
-        showFeedback(mapFeedback, err.message || "清除失败", true);
-      } finally {
-        clearMapBtn.disabled = false;
-      }
-    });
-  }
-
-  function setVolcAsrKeyVisible(visible) {
-    volcAsrKeyVisible = Boolean(visible);
-    if (volcAsrKeyInput) volcAsrKeyInput.type = volcAsrKeyVisible ? "text" : "password";
-    if (volcAsrKeyToggle) {
-      volcAsrKeyToggle.setAttribute("aria-label", volcAsrKeyVisible ? "隐藏 API Key" : "显示 API Key");
-      volcAsrKeyToggle.title = volcAsrKeyVisible ? "隐藏 API Key" : "显示 API Key";
-    }
-  }
-
-  async function saveVolcAsrKeyAutomatically() {
-    if (!volcAsrKeyInput) return;
-    const apiKey = volcAsrKeyInput.value.trim();
-    const request = ++volcAsrSaveRequest;
-    try {
-      const resp = await fetch(`${API}/settings/voice`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voiceProvider: "volcengine", volcAsrApiKey: apiKey }),
-      });
-      if (!resp.ok) throw new Error("保存失败");
-      if (request !== volcAsrSaveRequest) return;
-      volcAsrKeyInput.value = apiKey;
-      localStorage.setItem(VOICE_PROVIDER_KEY, "volcengine");
-      showFeedback(voiceFeedback, apiKey ? "已自动保存" : "已清除");
-    } catch {
-      if (request === volcAsrSaveRequest) showFeedback(voiceFeedback, "自动保存失败", true);
-    }
-  }
-
-  volcAsrKeyToggle?.addEventListener("click", () => {
-    setVolcAsrKeyVisible(!volcAsrKeyVisible);
-  });
-
-  volcAsrKeyInput?.addEventListener("input", () => {
-    if (volcAsrSaveTimer) clearTimeout(volcAsrSaveTimer);
-    volcAsrSaveTimer = setTimeout(() => {
-      volcAsrSaveTimer = null;
-      saveVolcAsrKeyAutomatically();
-    }, 500);
-  });
-
-  voiceRefreshMicsBtn?.addEventListener("click", () => {
-    loadMicrophoneDevices({ requestPermission: true });
-  });
-
-  voiceMicSelect?.addEventListener("change", () => {
-    setVoiceMicStatus("保存后，重新开启语音对话生效。");
-  });
-
-  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
-    if (!overlay.hidden) { loadMicrophoneDevices(); loadOutputDevices(); }
-  });
-
-  async function loadVoiceSettings() {
-    const langSelect = document.getElementById("voice-lang-select");
-    const autoSend   = document.getElementById("voice-auto-send");
-    if (langSelect) langSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
-    if (autoSend) autoSend.checked = localStorage.getItem(VOICE_AUTO_SEND_KEY) !== "false";
-    const autoMic = document.getElementById("voice-auto-mic");
-    if (autoMic) autoMic.checked = localStorage.getItem(VOICE_AUTO_MIC_KEY) === "true";
-    const savedThresh = parseFloat(localStorage.getItem(VOICE_THRESHOLD_KEY) || "0.008");
-    if (voiceThreshSlider) voiceThreshSlider.value = String(savedThresh);
-    if (voiceThreshVal)    voiceThreshVal.textContent = savedThresh.toFixed(3);
-    await loadMicrophoneDevices();
-    await loadOutputDevices();
-
-    let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
-    try {
-      const resp = await fetch(`${API}/settings/voice`);
-      const data = await resp.json().catch(() => ({}));
-      if (resp.status === 403) {
-        showFeedback(voiceFeedback, "局域网访问未配对，请使用带口令的访问链接", true);
-        applyVoiceConfigStatus(null, "无法读取主机配置：局域网访问尚未配对");
-      }
-      if (resp.ok && data?.voice?.voiceProvider) {
-        savedProvider = data.voice.voiceProvider;
-        localStorage.setItem(VOICE_PROVIDER_KEY, savedProvider);
-        applyVoiceConfigStatus(data.voice);
-      }
-      const savedVolcAsrKey = data?.voice?.volcAsrApiKey?.value;
-      if (volcAsrKeyInput) volcAsrKeyInput.value = typeof savedVolcAsrKey === "string" ? savedVolcAsrKey : "";
-    } catch {
-      applyVoiceConfigStatus(null, "无法读取主机上的语音识别配置");
-    }
-    if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
-    applyVoiceProviderUI(savedProvider);
-  }
-
-  if (voiceThreshSlider && voiceThreshVal) {
-    voiceThreshSlider.addEventListener("input", () => {
-      voiceThreshVal.textContent = parseFloat(voiceThreshSlider.value).toFixed(3);
-    });
-  }
-
-
-  if (saveVoiceBtn) {
-    saveVoiceBtn.addEventListener("click", async () => {
-      const lang      = document.getElementById("voice-lang-select")?.value || "zh-CN";
-      const autoSend  = document.getElementById("voice-auto-send")?.checked ?? true;
-      const autoMic   = document.getElementById("voice-auto-mic")?.checked ?? false;
-      const threshold = parseFloat(voiceThreshSlider?.value ?? "0.008");
-      const provider  = voiceProviderSelect?.value || "aliyun";
-      const micDeviceId = voiceMicSelect?.value || "";
-
-      localStorage.setItem(VOICE_LANG_KEY,      lang);
-      localStorage.setItem(VOICE_AUTO_SEND_KEY,  String(autoSend));
-      localStorage.setItem(VOICE_AUTO_MIC_KEY,   String(autoMic));
-      localStorage.setItem(VOICE_THRESHOLD_KEY,  String(threshold));
-      localStorage.setItem(VOICE_PROVIDER_KEY,   provider);
-      if (micDeviceId) localStorage.setItem(VOICE_MIC_DEVICE_KEY, micDeviceId);
-      else localStorage.removeItem(VOICE_MIC_DEVICE_KEY);
-
-      window.dispatchEvent(new CustomEvent("bailongma:voice-threshold", { detail: { threshold } }));
-      const micLabel = voiceMicSelect?.selectedOptions?.[0]?.textContent || "系统默认麦克风";
-      setVoiceMicStatus(`当前麦克风：${micLabel}。重新开启语音对话生效。`);
-
-      const body = { voiceProvider: provider };
-      const aliyunKey = document.getElementById("voice-aliyun-key")?.value?.trim();
-      if (aliyunKey) body.aliyunApiKey = aliyunKey;
-      const tencentSid = document.getElementById("voice-tencent-sid")?.value?.trim();
-      if (tencentSid) body.tencentSecretId = tencentSid;
-      const tencentSkey = document.getElementById("voice-tencent-skey")?.value?.trim();
-      if (tencentSkey) body.tencentSecretKey = tencentSkey;
-      const tencentAppid = document.getElementById("voice-tencent-appid")?.value?.trim();
-      if (tencentAppid) body.tencentAppId = tencentAppid;
-      const xunfeiAppid = document.getElementById("voice-xunfei-appid")?.value?.trim();
-      if (xunfeiAppid) body.xunfeiAppId = xunfeiAppid;
-      const xunfeiApikey = document.getElementById("voice-xunfei-apikey")?.value?.trim();
-      if (xunfeiApikey) body.xunfeiApiKey = xunfeiApikey;
-      const volcApiKey = document.getElementById("voice-volc-apikey")?.value?.trim();
-      if (volcApiKey) body.volcAsrApiKey = volcApiKey;
-
-      if (Object.keys(body).length > 0) {
-        try {
-          saveVoiceBtn.disabled = true;
-          const resp = await fetch(`${API}/settings/voice`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (!resp.ok) throw new Error("保存失败");
-          [
-            "voice-aliyun-key",
-            "voice-auto-key",
-            "voice-tencent-sid",
-            "voice-tencent-skey",
-            "voice-xunfei-apikey",
-          ].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) el.value = "";
-          });
-          if (voiceAutoDetect) voiceAutoDetect.textContent = "";
-          showFeedback(voiceFeedback, "已保存");
-          loadVoiceSettings();
-        } catch { showFeedback(voiceFeedback, "保存失败", true); }
-        finally { saveVoiceBtn.disabled = false; }
-      } else {
-        showFeedback(voiceFeedback, "已保存");
-      }
-    });
-  }
-
-  initTTSSettings();
-
-  const memoryGraphToggle = document.getElementById("settings-memory-graph-toggle");
-  const memoryGraphFeedback = document.getElementById("settings-memory-graph-feedback");
-  if (memoryGraphToggle) {
-    memoryGraphToggle.checked = localStorage.getItem(MEMORY_GRAPH_STORAGE_KEY) !== "false";
-    memoryGraphToggle.addEventListener("change", () => {
-      localStorage.setItem(MEMORY_GRAPH_STORAGE_KEY, String(memoryGraphToggle.checked));
-      if (memoryGraphFeedback) {
-        memoryGraphFeedback.textContent = "下次刷新页面后生效";
-        memoryGraphFeedback.className = "settings-feedback";
-        setTimeout(() => { memoryGraphFeedback.textContent = ""; }, 3000);
-      }
-    });
-  }
-
-  function openSettings(tab = null) {
-    overlay.hidden = false;
-    loadSettings();
-    loadVoiceSettings();
-    if (tab) {
-      overlay.querySelectorAll(".settings-nav-item").forEach(b => {
-        b.classList.toggle("active", b.dataset.tab === tab);
-      });
-      overlay.querySelectorAll(".settings-tab").forEach(t => {
-        t.classList.toggle("active", t.dataset.tab === tab);
-      });
-      if (tab === "social") loadSocialSettings();
-      if (tab === "mcp") loadMcpSettings();
-      if (tab === "advanced") {
-        loadHeartbeatSettings();
-        loadMapSettings();
-      }
-      if (tab === "update") loadUpdateSettings();
-    }
-  }
-
-  function closeSettings() {
-    overlay.hidden = true;
-    if (llmKeyInput) llmKeyInput.value = "";
-    if (minimaxKeyInput) minimaxKeyInput.value = "";
-  }
-
-  // 暴露给 chat.js 的斜杠命令使用
-  openSettingsRef = openSettings;
-
-  settingsBtn.addEventListener("click", () => openSettings());
-  closeBtn.addEventListener("click", closeSettings);
-  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeSettings(); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) closeSettings(); });
-
-  if (providerSelect) {
-    providerSelect.addEventListener("change", () => {
-      applyCustomProviderUI(providerSelect.value);
-    });
-  }
-
-  if (modelSelect) {
-    modelSelect.addEventListener("change", syncOfficialCustomModelRow);
-  }
-
-  saveAgentNameBtn?.addEventListener("click", async () => {
-    const nextName = agentNameInput?.value?.trim() || "";
-    if (nextName.length > 32) {
-      showFeedback(agentNameFeedback, "AI 名字不能超过 32 个字符", true);
-      return;
-    }
-    if (nextName && !agentNameRe.test(nextName)) {
-      showFeedback(agentNameFeedback, "AI 名字只允许中文、英文字母、数字、空格、下划线、短横线", true);
-      return;
-    }
-    saveAgentNameBtn.disabled = true;
-    try {
-      const res = await fetch(`${API}/settings/agent-name`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentName: nextName }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        const savedName = data.agent_name || DEFAULT_AGENT_NAME;
-        if (agentNameInput) agentNameInput.value = savedName;
-        setAgentName(savedName);
-        showFeedback(agentNameFeedback, "已保存");
-      } else {
-        showFeedback(agentNameFeedback, data.error || "保存失败", true);
-      }
-    } catch {
-      showFeedback(agentNameFeedback, "请求失败", true);
-    } finally {
-      saveAgentNameBtn.disabled = false;
-    }
-  });
-
-  llmKeyToggle?.addEventListener("click", () => {
-    setLlmKeyVisible(!llmKeyVisible);
-  });
-
-  saveLlmBtn?.addEventListener("click", async () => {
-    const provider = providerSelect?.value || "auto";
-    const apiKey = llmKeyInput.value.trim();
-    saveLlmBtn.disabled = true;
-    try {
-      const selectedCfg = cachedProviders?.[provider] || {};
-      const body = { provider };
-      if (provider === "custom") {
-        body.baseURL = document.getElementById("settings-custom-baseurl")?.value?.trim();
-        body.model = document.getElementById("settings-custom-model")?.value?.trim();
-        if (!body.baseURL || !body.model) {
-          showFeedback(llmFeedback, "请填入 Base URL 和模型名称", true);
-          saveLlmBtn.disabled = false;
-          return;
-        }
-        if (apiKey !== (selectedCfg.apiKey || "")) body.apiKey = apiKey || "none";
-      } else if (provider === "auto") {
-        if (!apiKey) {
-          showFeedback(llmFeedback, "自动识别需要填入 API Key", true);
-          saveLlmBtn.disabled = false;
-          return;
-        }
-        body.apiKey = apiKey;
-      } else {
-        if (modelSelect.value === CUSTOM_MODEL_VALUE) {
-          body.model = officialCustomModelInput?.value?.trim();
-          if (!body.model) {
-            showFeedback(llmFeedback, "请填入模型名称", true);
-            saveLlmBtn.disabled = false;
-            return;
-          }
-        } else {
-          body.model = modelSelect.value;
-        }
-        if (apiKey && apiKey !== (selectedCfg.apiKey || "")) body.apiKey = apiKey;
-      }
-
-      const res = await fetch(`${API}/settings/model`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        showFeedback(llmFeedback, "已保存");
-        loadSettings();
-      } else {
-        showFeedback(llmFeedback, data.error || "保存失败", true);
-      }
-    } catch { showFeedback(llmFeedback, "请求失败", true); }
-    finally { saveLlmBtn.disabled = false; }
-  });
-
-  saveMinimaxBtn?.addEventListener("click", async () => {
-    const apiKey = minimaxKeyInput.value.trim();
-    if (!apiKey) { showFeedback(minimaxFeedback, "API Key 不能为空", true); return; }
-    saveMinimaxBtn.disabled = true;
-    try {
-      const res = await fetch(`${API}/settings/minimax`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        showFeedback(minimaxFeedback, "已保存");
-        minimaxKeyInput.value = "";
-        loadSettings();
-      } else {
-        showFeedback(minimaxFeedback, data.error || "保存失败", true);
-      }
-    } catch { showFeedback(minimaxFeedback, "请求失败", true); }
-    finally { saveMinimaxBtn.disabled = false; }
-  });
-
-  const clawbotConnectBtn = document.getElementById("clawbot-connect-btn");
-  const clawbotLogoutBtn  = document.getElementById("clawbot-logout-btn");
-  const clawbotQrArea     = document.getElementById("clawbot-qr-area");
-  const clawbotQrImg      = document.getElementById("clawbot-qr-img");
-  const clawbotQrHint     = document.getElementById("clawbot-qr-hint");
-  const clawbotFeedback   = document.getElementById("clawbot-feedback");
-  const clawbotStatus     = document.getElementById("social-status-clawbot");
-  let clawbotPollTimer    = null;
-
-  function setClawbotStatus(text, ok) {
-    if (!clawbotStatus) return;
-    clawbotStatus.textContent = ok ? `● ${text}` : `○ ${text}`;
-    clawbotStatus.className = `settings-platform-status ${ok ? "ok" : "miss"}`;
-  }
-
-  function stopClawbotPoll() {
-    if (clawbotPollTimer) { clearInterval(clawbotPollTimer); clawbotPollTimer = null; }
-  }
-
-  async function pollClawbotQR() {
-    try {
-      const data = await fetch(`${API}/social/wechat-clawbot/qr`).then(r => r.json());
-      if (data.status === "connected") {
-        stopClawbotPoll();
-        if (clawbotQrArea) clawbotQrArea.style.display = "none";
-        setClawbotStatus("已连接", true);
-        if (clawbotFeedback) showFeedback(clawbotFeedback, "微信绑定成功！");
-        loadSocialSettings();
-      } else if (data.status === "qr_ready" && data.qr_url) {
-        if (clawbotQrImg) clawbotQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.qr_url)}`;
-        if (clawbotQrArea) clawbotQrArea.style.display = "block";
-        if (clawbotQrHint) clawbotQrHint.textContent = "等待扫码…";
-        setClawbotStatus("等待扫码", false);
-      } else if (data.status === "qr_pending") {
-        if (clawbotQrHint) clawbotQrHint.textContent = "正在生成二维码…";
-      } else if (data.status === "error") {
-        stopClawbotPoll();
-        if (clawbotQrArea) clawbotQrArea.style.display = "none";
-        setClawbotStatus("连接失败", false);
-        if (clawbotFeedback) showFeedback(clawbotFeedback, data.error || "连接失败", true);
-      }
-    } catch {}
-  }
-
-  if (clawbotConnectBtn) {
-    pollClawbotQR();
-  }
-
-  clawbotConnectBtn?.addEventListener("click", async () => {
-    if (clawbotQrArea) clawbotQrArea.style.display = "none";
-    setClawbotStatus("启动中…", false);
-    stopClawbotPoll();
-    try {
-      await fetch(`${API}/settings/social`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ _clawbot_connect: "1" }),
-      });
-    } catch {}
-    await pollClawbotQR();
-    clawbotPollTimer = setInterval(pollClawbotQR, 2000);
-  });
-
-  clawbotLogoutBtn?.addEventListener("click", async () => {
-    stopClawbotPoll();
-    if (clawbotQrArea) clawbotQrArea.style.display = "none";
-    try {
-      await fetch(`${API}/social/wechat-clawbot/logout`, { method: "POST" });
-      setClawbotStatus("已断开", false);
-      showFeedback(clawbotFeedback, "微信已断开");
-    } catch {
-      showFeedback(clawbotFeedback, "请求失败", true);
-    }
-  });
-
-  window.addEventListener("bailongma:social_status", (e) => {
-    const d = e.detail;
-    if (d?.platform !== "wechat-clawbot") return;
-    if (d.status === "connected") {
-      stopClawbotPoll();
-      if (clawbotQrArea) clawbotQrArea.style.display = "none";
-      setClawbotStatus("已连接", true);
-    } else if (d.status === "qr_ready") {
-      if (!clawbotPollTimer) clawbotPollTimer = setInterval(pollClawbotQR, 2000);
-      pollClawbotQR();
-    } else if (d.status === "session_expired") {
-      stopClawbotPoll();
-      setClawbotStatus("会话已过期 — 请重新扫码", false);
-    } else if (d.status === "idle") {
-      setClawbotStatus("未连接", false);
-    }
-  });
-
-  const settingsCheckUpdateBtn     = document.getElementById("settings-check-update-btn");
-  const settingsDownloadUpdateBtn  = document.getElementById("settings-download-update-btn");
-  const settingsInstallUpdateBtn   = document.getElementById("settings-install-update-btn");
-  const settingsIgnoreUpdateBtn    = document.getElementById("settings-ignore-update-btn");
-  const settingsUpdateStatusEl     = document.getElementById("settings-update-status");
-  const settingsUpdateFeedback     = document.getElementById("settings-update-feedback");
-  const settingsCurrentVersion     = document.getElementById("settings-current-version");
-  const settingsSuppressToggle     = document.getElementById("settings-suppress-updates");
-  const settingsIgnoredSection     = document.getElementById("settings-ignored-section");
-  const settingsIgnoredVersionEl   = document.getElementById("settings-ignored-version-val");
-  const settingsClearIgnoredBtn    = document.getElementById("settings-clear-ignored-btn");
-
-  let pendingUpdateVersion = null;
-  let removeUpdaterListener = null;
-
-  function setUpdateStatusText(text, state = "idle") {
-    if (!settingsUpdateStatusEl) return;
-    settingsUpdateStatusEl.textContent = text;
-    settingsUpdateStatusEl.dataset.state = state;
-  }
-
-  function setUpdateFeedback(text, isError = false) {
-    if (!settingsUpdateFeedback) return;
-    settingsUpdateFeedback.textContent = text || "";
-    settingsUpdateFeedback.className = isError ? "settings-feedback error" : "settings-feedback";
-  }
-
-  function showUpdateButtons({ check = true, checkDisabled = false, checkLabel = "检查更新", download = false, install = false, ignore = false } = {}) {
-    if (settingsCheckUpdateBtn) {
-      settingsCheckUpdateBtn.classList.toggle("hidden", !check);
-      settingsCheckUpdateBtn.disabled = checkDisabled;
-      settingsCheckUpdateBtn.textContent = checkLabel;
-    }
-    settingsDownloadUpdateBtn?.classList.toggle("hidden", !download);
-    settingsInstallUpdateBtn?.classList.toggle("hidden", !install);
-    settingsIgnoreUpdateBtn?.classList.toggle("hidden", !ignore);
-  }
-
-  function syncUpdateSettings() {
-    const ignored = localStorage.getItem(IGNORED_VERSION_KEY) || null;
-    const suppressed = localStorage.getItem(SUPPRESS_UPDATES_KEY) === "true";
-    if (settingsSuppressToggle) settingsSuppressToggle.checked = suppressed;
-    if (settingsIgnoredSection) settingsIgnoredSection.style.display = ignored ? "" : "none";
-    if (settingsIgnoredVersionEl && ignored) settingsIgnoredVersionEl.textContent = ignored;
-  }
-
-  async function loadUpdateSettings() {
-    syncUpdateSettings();
-    const bridge = window.bailongma;
-    if (!bridge?.isElectron) {
-      if (settingsCurrentVersion) settingsCurrentVersion.textContent = "仅桌面端可用";
-      if (settingsCheckUpdateBtn) settingsCheckUpdateBtn.disabled = true;
-      setUpdateStatusText("仅桌面端可用", "muted");
-      return;
-    }
-    try {
-      const ver = await bridge.getVersion?.();
-      if (settingsCurrentVersion && ver) settingsCurrentVersion.textContent = ver;
-    } catch {}
-
-    removeUpdaterListener = bridge.onUpdaterStatus?.((payload = {}) => {
-      const stage = payload.stage || "idle";
-      const ver = payload.version || "";
-      const percent = typeof payload.percent === "number" ? Math.round(payload.percent) : null;
-
-      switch (stage) {
-        case "checking":
-          setUpdateStatusText("正在检查更新…", "checking");
-          showUpdateButtons({ checkDisabled: true, checkLabel: "检查中…" });
-          break;
-        case "available":
-          pendingUpdateVersion = ver;
-          setUpdateStatusText(`发现新版本 ${ver}`, "available");
-          showUpdateButtons({ check: false, download: true, ignore: true });
-          break;
-        case "downloading":
-          setUpdateStatusText(`下载中${percent !== null ? ` ${percent}%` : "…"}`, "downloading");
-          showUpdateButtons({ check: false });
-          break;
-        case "downloaded":
-          setUpdateStatusText(`版本 ${ver} 已就绪 — 重启后安装`, "ready");
-          showUpdateButtons({ check: false, install: true });
-          break;
-        case "up-to-date":
-          setUpdateStatusText(`已是最新版本 ${ver}`, "idle");
-          showUpdateButtons({ checkLabel: "检查更新" });
-          break;
-        case "error":
-          setUpdateStatusText(`更新失败：${payload.message || "请稍后再试"}`, "error");
-          showUpdateButtons({ checkLabel: "重试" });
-          break;
-        case "dev":
-          setUpdateStatusText("开发模式不检查更新", "muted");
-          showUpdateButtons({ checkDisabled: true, checkLabel: "开发模式" });
-          break;
-        default:
-          showUpdateButtons({});
-          break;
-      }
-    }) || null;
-  }
-
-  window.addEventListener("beforeunload", () => {
-    if (typeof removeUpdaterListener === "function") {
-      removeUpdaterListener();
-      removeUpdaterListener = null;
-    }
-  });
-
-  settingsSuppressToggle?.addEventListener("change", () => {
-    localStorage.setItem(SUPPRESS_UPDATES_KEY, settingsSuppressToggle.checked ? "true" : "false");
-    syncUpdateSettings();
-  });
-
-  settingsClearIgnoredBtn?.addEventListener("click", () => {
-    localStorage.removeItem(IGNORED_VERSION_KEY);
-    syncUpdateSettings();
-  });
-
-  settingsCheckUpdateBtn?.addEventListener("click", async () => {
-    const bridge = window.bailongma;
-    if (!bridge?.isElectron) return;
-    setUpdateStatusText("正在检查更新…", "checking");
-    setUpdateFeedback("");
-    showUpdateButtons({ checkDisabled: true, checkLabel: "检查中…" });
-    try {
-      const result = await bridge.checkForUpdates?.();
-      if (result?.ok === false && result?.message) {
-        setUpdateStatusText(`更新失败：${result.message}`, "error");
-        showUpdateButtons({ checkLabel: "重试" });
-      }
-    } catch (err) {
-      setUpdateStatusText(`更新失败：${err?.message || "请稍后再试"}`, "error");
-      showUpdateButtons({ checkLabel: "重试" });
-    }
-  });
-
-  settingsDownloadUpdateBtn?.addEventListener("click", async () => {
-    const bridge = window.bailongma;
-    if (!bridge?.isElectron) return;
-    setUpdateStatusText("开始下载…", "downloading");
-    showUpdateButtons({ check: false });
-    try {
-      await bridge.startDownload?.();
-    } catch (err) {
-      setUpdateStatusText(`下载失败：${err?.message || "请稍后再试"}`, "error");
-      showUpdateButtons({ checkLabel: "重试" });
-    }
-  });
-
-  settingsInstallUpdateBtn?.addEventListener("click", () => {
-    window.bailongma?.quitAndInstall?.();
-  });
-
-  settingsIgnoreUpdateBtn?.addEventListener("click", () => {
-    if (pendingUpdateVersion) {
-      localStorage.setItem(IGNORED_VERSION_KEY, pendingUpdateVersion);
-      syncUpdateSettings();
-    }
-    setUpdateStatusText("已忽略此版本", "muted");
-    showUpdateButtons({ checkLabel: "检查更新" });
-  });
-})();
-
+initSettings({
+  defaultAgentName: DEFAULT_AGENT_NAME,
+  getAgentName: () => agentName,
+  setAgentName,
+  getTtsStreamingEnabled: isTTSStreamingEnabled,
+  setTtsStreamingEnabled: setTTSStreamingEnabled,
+  getTtsVoiceId: () => activeTTSVoiceId,
+  setTtsVoiceId: (voiceId) => { activeTTSVoiceId = voiceId; },
+  setOpenSettings: (openSettings) => { openSettingsRef = openSettings; },
+});
 // ── Voice panel ──
 initVoicePanel({
   btnId:      "voice-btn",
@@ -5660,877 +3797,5 @@ initHotspot().catch((err) => console.warn('[Hotspot] init failed:', err));
 // ── Worldcup mode ──
 initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
 initTyphoon();
-
-// ── Media modes (video / image) ──
-(function initMediaModes() {
-  const videoBtn      = document.getElementById("video-btn");
-  const videoExitBtn  = document.getElementById("video-exit-btn");
-  const videoFeed     = document.getElementById("video-feed");
-  const videoFrame    = document.getElementById("video-frame");
-  const videoSurface  = document.getElementById("video-surface");
-  const videoBackdrop = document.getElementById("video-backdrop");
-  const videoTitle    = document.getElementById("video-title");
-  const imageExitBtn  = document.getElementById("image-exit-btn");
-  const imageDisplay  = document.getElementById("image-display");
-  const imageSurface  = document.getElementById("image-surface");
-  const imageTitle    = document.getElementById("image-title");
-
-  let videoStream = null;
-  let videoActive = false;
-  let imageActive = false;
-  let videoKind   = "empty";
-  let currentVideoSource = "";
-  let currentVideoStart = null;
-  // wall-clock ms when current play started/resumed; used to estimate elapsed
-  // for cross-origin iframes (bilibili) where we can't read currentTime.
-  let playResumeAt = null;
-
-  function normalizeUrl(url = "") {
-    return String(url || "").trim();
-  }
-
-  function localPathToUrl(src) {
-    const s = String(src || "").trim();
-    if (!s) return "";
-    if (/^https?:\/\//i.test(s)) return s;
-    // Local path (file:// or absolute) → backend HTTP media endpoint to avoid file:// CORS restriction
-    let resolved = s;
-    if (/^file:\/\//i.test(s)) {
-      resolved = decodeURIComponent(s.replace(/^file:\/\/\//i, "").replace(/^file:\/\//i, ""));
-    }
-    const filename = resolved.split(/[\\/]/).filter(Boolean).pop() || "";
-    if (!filename) return s;
-    return "/media/music/" + encodeURIComponent(filename);
-  }
-
-  function extractYoutubeId(url) {
-    return normalizeUrl(url).match(
-      /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/
-    )?.[1] || null;
-  }
-
-  function youtubeEmbedUrl(url, { autoplay = false, start = null } = {}) {
-    const id = extractYoutubeId(url);
-    if (!id) return null;
-    const params = new URLSearchParams({
-      enablejsapi: "1",
-      playsinline: "1",
-      rel: "0",
-      autoplay: autoplay ? "1" : "0",
-    });
-    if (Number.isFinite(Number(start))) params.set("start", String(Math.max(0, Math.round(Number(start)))));
-    return `https://www.youtube.com/embed/${id}?${params.toString()}`;
-  }
-
-  function extractBilibiliId(url) {
-    const raw = normalizeUrl(url);
-    return raw.match(/\/video\/(BV[A-Za-z0-9]+)/i)?.[1]
-        || raw.match(/\b(BV[A-Za-z0-9]+)\b/i)?.[1]
-        || null;
-  }
-
-  function bilibiliEmbedUrl(url, { autoplay = false, start = null } = {}) {
-    const bvid = extractBilibiliId(url);
-    if (!bvid) return null;
-    const params = new URLSearchParams({
-      bvid,
-      autoplay: autoplay ? "1" : "0",
-      high_quality: "1",
-    });
-    if (Number.isFinite(Number(start))) params.set("t", String(Math.max(0, Math.round(Number(start)))));
-    return `https://player.bilibili.com/player.html?${params.toString()}`;
-  }
-
-  function iframeUrlFor(url, options) {
-    return youtubeEmbedUrl(url, options) || bilibiliEmbedUrl(url, options);
-  }
-
-  function saveMediaHistory({ url, title, kind, videoId = null, platform = null }) {
-    fetch(`${API}/media/history`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, title: title || "", kind, videoId, platform }),
-    }).catch(() => {});
-  }
-
-  async function validateYoutubeUrl(url) {
-    try {
-      const oembed = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
-      const res = await fetch(oembed, { signal: AbortSignal.timeout(5000) });
-      return res.ok;
-    } catch {
-      return null; // network failure — don't block, allow playback to proceed
-    }
-  }
-
-  function stopCamera() {
-    videoStream?.getTracks().forEach(t => t.stop());
-    videoStream = null;
-  }
-
-  function setPanelVisible(visible) {
-    videoActive = Boolean(visible);
-    document.body.classList.toggle("video-mode", videoActive);
-    videoBtn?.classList.toggle("active", videoActive);
-    if (videoActive) moveVoicePanelToBody();
-    else restoreVoicePanel();
-    window.dispatchEvent(new CustomEvent("bailongma:video-mode", {
-      detail: { active: videoActive, kind: videoKind },
-    }));
-  }
-
-  function pauseCurrentVideo() {
-    if (videoKind === "youtube") {
-      postFrameCommand("pauseVideo");
-      playResumeAt = null;
-    } else if (videoKind === "bilibili") {
-      // bilibili iframe 跨域读不到 currentTime，用 wall-clock 估算累计进度
-      if (playResumeAt) {
-        const elapsed = (Date.now() - playResumeAt) / 1000;
-        currentVideoStart = (Number(currentVideoStart) || 0) + elapsed;
-      }
-      playResumeAt = null;
-      reloadFrameAutoplay(false);
-    } else if (videoKind === "file") {
-      try { videoFeed?.pause?.(); } catch {}
-      playResumeAt = null;
-    }
-  }
-
-  function resumeCurrentVideo() {
-    if (videoKind === "youtube") {
-      postFrameCommand("playVideo");
-      playResumeAt = Date.now();
-    } else if (videoKind === "bilibili") {
-      reloadFrameAutoplay(true);
-      playResumeAt = Date.now();
-    } else if (videoKind === "file") {
-      videoFeed?.play?.().catch(() => {});
-      playResumeAt = Date.now();
-    }
-  }
-
-  function resetVideoSurface() {
-    stopCamera();
-    if (videoFeed) {
-      try { videoFeed.pause(); } catch {}
-      videoFeed.removeAttribute("src");
-      videoFeed.srcObject = null;
-      videoFeed.hidden = true;
-      videoFeed.load?.();
-    }
-    if (videoFrame) {
-      videoFrame.src = "about:blank";
-      videoFrame.hidden = true;
-    }
-    if (videoBackdrop) videoBackdrop.style.backgroundImage = "";
-    videoSurface?.classList.remove("has-media");
-    videoKind = "empty";
-    currentVideoSource = "";
-    currentVideoStart = null;
-    playResumeAt = null;
-  }
-
-  function toggleVideoPanelVisibility() {
-    if (videoActive) {
-      pauseCurrentVideo();
-      setPanelVisible(false);
-    } else {
-      if (musicActive) closeMusicPanel();
-      setPanelVisible(true);
-      if (videoKind !== "empty") resumeCurrentVideo();
-    }
-  }
-
-  function closeAndDestroyVideo() {
-    setPanelVisible(false);
-    resetVideoSurface();
-  }
-
-  function setVideoModeActive(active) {
-    if (!active) {
-      closeAndDestroyVideo();
-    } else {
-      setPanelVisible(true);
-    }
-  }
-
-  function setBackdrop(kind, url) {
-    if (!videoBackdrop) return;
-    if (kind === "youtube") {
-      const id = extractYoutubeId(url);
-      if (id) {
-        videoBackdrop.style.backgroundImage =
-          `url(https://img.youtube.com/vi/${id}/maxresdefault.jpg)`;
-        return;
-      }
-    }
-    // Bilibili / file / camera: solid color fallback (CSS already sets #000 background)
-    videoBackdrop.style.backgroundImage = "";
-  }
-
-  async function showCamera({ title = "Camera", autoplay = true } = {}) {
-    setPanelVisible(true);
-    resetVideoSurface();
-    if (videoTitle) videoTitle.textContent = title;
-    try {
-      videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      if (videoFeed) {
-        videoFeed.hidden = false;
-        videoFeed.muted = true;
-        videoFeed.srcObject = videoStream;
-        if (autoplay) videoFeed.play?.().catch(() => {});
-      }
-      videoSurface?.classList.add("has-media");
-      videoKind = "camera";
-    } catch (e) {
-      console.warn("Camera access failed:", e);
-    }
-  }
-
-  async function showVideo({
-    url = "", title = "Video", autoplay = true,
-    muted = false, volume = null, currentTime = null, camera = false,
-  } = {}) {
-    if (camera) { showCamera({ title, autoplay }); return; }
-
-    const source = normalizeUrl(url);
-    if (musicActive) closeMusicPanel();
-    setPanelVisible(true);
-    resetVideoSurface();
-    currentVideoSource = source;
-    currentVideoStart = Number.isFinite(Number(currentTime)) ? Math.max(0, Number(currentTime)) : null;
-    if (videoTitle) videoTitle.textContent = title || "Video";
-
-    const embedUrl = iframeUrlFor(source, { autoplay, start: currentTime });
-    if (embedUrl && videoFrame) {
-      videoFrame.hidden = false;
-      videoFrame.src = embedUrl;
-      videoSurface?.classList.add("has-media");
-      videoKind = embedUrl.includes("youtube.com") ? "youtube" : "bilibili";
-      if (autoplay) playResumeAt = Date.now();
-
-      setBackdrop(videoKind, source);
-      saveMediaHistory({
-        url: source,
-        title,
-        kind: videoKind,
-        videoId: videoKind === "youtube" ? extractYoutubeId(source) : extractBilibiliId(source),
-        platform: videoKind,
-      });
-
-      if (videoKind === "youtube") {
-        validateYoutubeUrl(source).then(ok => {
-          if (ok === false) console.warn("[Media] YouTube video may not play (region block / private / deleted):", source);
-        });
-      }
-      return;
-    }
-
-    if (videoFeed && source) {
-      videoFeed.hidden = false;
-      videoFeed.src = source;
-      videoFeed.muted = Boolean(muted);
-      if (Number.isFinite(Number(volume))) videoFeed.volume = Math.max(0, Math.min(1, Number(volume)));
-      if (Number.isFinite(Number(currentTime))) videoFeed.currentTime = Math.max(0, Number(currentTime));
-      videoSurface?.classList.add("has-media");
-      videoKind = "file";
-      saveMediaHistory({ url: source, title, kind: "file" });
-      if (autoplay) {
-        videoFeed.play?.().catch(() => {});
-        playResumeAt = Date.now();
-      }
-    }
-  }
-
-  function postFrameCommand(command, args = []) {
-    if (!videoFrame?.contentWindow || videoFrame.hidden) return;
-    if (videoKind === "youtube") {
-      videoFrame.contentWindow.postMessage(JSON.stringify({
-        event: "command",
-        func: command,
-        args,
-      }), "*");
-    }
-  }
-
-  function reloadFrameAutoplay(autoplay) {
-    if (!videoFrame || videoFrame.hidden || !currentVideoSource) return;
-    const nextUrl = iframeUrlFor(currentVideoSource, {
-      autoplay,
-      start: currentVideoStart,
-    });
-    if (nextUrl) videoFrame.src = nextUrl;
-  }
-
-  function controlVideo({ action, volume, currentTime, autoplay } = {}) {
-    const op = action || (autoplay ? "play" : null);
-    if (op === "hide" || op === "close") { closeAndDestroyVideo(); return; }
-    if (op === "play") resumeCurrentVideo();
-    if (op === "pause") pauseCurrentVideo();
-    if (Number.isFinite(Number(volume))) {
-      const v = Math.max(0, Math.min(1, Number(volume)));
-      if (videoFeed) { videoFeed.volume = v; videoFeed.muted = v === 0; }
-      postFrameCommand("setVolume", [Math.round(v * 100)]);
-    }
-    if (Number.isFinite(Number(currentTime))) {
-      const t = Math.max(0, Number(currentTime));
-      currentVideoStart = t;
-      if (videoFeed) videoFeed.currentTime = t;
-      postFrameCommand("seekTo", [t, true]);
-      // seek 后重置 elapsed 基线，下次 pause 时累计才正确
-      if (playResumeAt) playResumeAt = Date.now();
-    }
-  }
-
-  function setImageModeActive(active) {
-    imageActive = Boolean(active);
-    document.body.classList.toggle("image-mode", imageActive);
-    if (!imageActive && imageDisplay) {
-      imageDisplay.removeAttribute("src");
-      imageDisplay.alt = "";
-      imageSurface?.classList.remove("has-media");
-    }
-  }
-
-  function showImage({ url = "", title = "Image", alt = "" } = {}) {
-    const source = normalizeUrl(url);
-    setImageModeActive(true);
-    if (imageTitle) imageTitle.textContent = title || "Image";
-    if (imageDisplay && source) {
-      imageDisplay.src = source;
-      imageDisplay.alt = alt || title || "";
-      imageSurface?.classList.add("has-media");
-    }
-  }
-
-  function handleMediaCommand(payload = {}) {
-    const mode   = payload.mode || payload.kind;
-    const action = payload.action || "show";
-    if (mode === "image") {
-      if (action === "hide" || action === "close") setImageModeActive(false);
-      else showImage(payload);
-      return { ok: true, mode: "image", action };
-    }
-    if (mode === "camera") {
-      if (action === "hide" || action === "close") closeAndDestroyVideo();
-      else showCamera(payload);
-      return { ok: true, mode: "camera", action };
-    }
-    if (mode === "video") {
-      if (action === "show" || payload.url || payload.camera) showVideo(payload);
-      else controlVideo(payload);
-      return { ok: true, mode: "video", action };
-    }
-    if (mode === "music") {
-      if (action === "show" || payload.src || payload.playlist) showMusic(payload);
-      else controlMusic(payload);
-      return { ok: true, mode: "music", action };
-    }
-    return { ok: false, error: "unknown media mode" };
-  }
-
-  // ── Music mode ────────────────────────────────────────────────────────────
-  const musicBtn       = document.getElementById("music-btn");
-  const musicExitBtn   = document.getElementById("music-exit-btn");
-  const musicAudio     = document.getElementById("music-audio");
-  const musicPlayBtn   = document.getElementById("music-play");
-  const musicPrevBtn   = document.getElementById("music-prev");
-  const musicNextBtn   = document.getElementById("music-next");
-  const musicSeek      = document.getElementById("music-seek");
-  const musicVolInput  = document.getElementById("music-vol");
-  const musicTimeCur   = document.getElementById("music-time-cur");
-  const musicTimeTotal = document.getElementById("music-time-total");
-  const musicMetaTitle  = document.getElementById("music-meta-title");
-  const musicMetaArtist = document.getElementById("music-meta-artist");
-  const musicCoverEl    = document.getElementById("music-cover");
-  const musicCoverTitle = document.getElementById("music-cover-title");
-  const musicCoverArtist = document.getElementById("music-cover-artist");
-  const musicLyricsScroll = document.getElementById("music-lyrics-scroll");
-  const musicNoLyrics     = document.getElementById("music-no-lyrics");
-
-  let musicActive  = false;
-  let musicPlaying = false;
-  let musicWasPlayingBeforeHide = false;
-  let lrcLines     = [];
-  let playlist     = [];
-  let playlistIdx  = 0;
-  let isSeeking    = false;
-
-  function parseLrc(text) {
-    const lines = [];
-    const re = /\[(\d+):(\d{1,2}(?:\.\d+)?)\](.*)/g;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const t = parseInt(m[1], 10) * 60 + parseFloat(m[2]);
-      const txt = m[3].trim();
-      if (txt) lines.push({ time: t, text: txt });
-    }
-    return lines.sort((a, b) => a.time - b.time);
-  }
-
-  function fmtTime(s) {
-    if (!isFinite(s) || s < 0) return "0:00";
-    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-  }
-
-  function setMusicPanelVisible(visible) {
-    musicActive = Boolean(visible);
-    document.body.classList.toggle("music-mode", musicActive);
-    musicBtn?.classList.toggle("active", musicActive);
-    window.dispatchEvent(new CustomEvent("bailongma:music-mode", {
-      detail: { active: musicActive },
-    }));
-  }
-
-  function setMusicPlaying(playing) {
-    musicPlaying = Boolean(playing);
-    document.body.classList.toggle("music-playing", musicPlaying);
-    if (musicPlayBtn) musicPlayBtn.textContent = musicPlaying ? "⏸" : "▶";
-    if (musicPlaying) {
-      musicAudio?.play?.().catch(() => {});
-    } else {
-      musicAudio?.pause?.();
-    }
-  }
-
-  function loadLrc(lrcText) {
-    lrcLines = lrcText ? parseLrc(lrcText) : [];
-    if (musicLyricsScroll) {
-      musicLyricsScroll.innerHTML = lrcLines
-        .map((l, i) => `<div class="lrc-line" data-idx="${i}">${l.text}</div>`)
-        .join("");
-    }
-    if (musicNoLyrics) musicNoLyrics.hidden = lrcLines.length > 0;
-  }
-
-  function syncLyrics(currentTime) {
-    if (!lrcLines.length || !musicLyricsScroll) return;
-    let active = -1;
-    for (let i = 0; i < lrcLines.length; i++) {
-      if (lrcLines[i].time <= currentTime + 0.3) active = i;
-      else break;
-    }
-    if (active < 0) return;
-    const lines = musicLyricsScroll.querySelectorAll(".lrc-line");
-    lines.forEach((el, i) => el.classList.toggle("active", i === active));
-    const activeLine = lines[active];
-    if (activeLine) {
-      const pane = document.getElementById("music-lyrics-pane");
-      if (pane) pane.scrollTo({ top: activeLine.offsetTop - pane.clientHeight / 2 + activeLine.clientHeight / 2, behavior: "smooth" });
-    }
-  }
-
-  function loadTrack(index, autoplay = true) {
-    const track = playlist[index];
-    if (!track || !musicAudio) return;
-
-    musicAudio.src = localPathToUrl(track.src || "");
-    musicAudio.volume = parseFloat(musicVolInput?.value ?? "0.8");
-
-    const title  = track.title  || "未知曲目";
-    const artist = track.artist || "";
-    if (musicMetaTitle)  musicMetaTitle.textContent  = title;
-    if (musicMetaArtist) musicMetaArtist.textContent = artist;
-    if (musicCoverTitle)  musicCoverTitle.textContent  = title.slice(0, 14);
-    if (musicCoverArtist) musicCoverArtist.textContent = artist;
-    if (musicTimeCur)   musicTimeCur.textContent   = "0:00";
-    if (musicTimeTotal) musicTimeTotal.textContent = "0:00";
-    if (musicSeek)      { musicSeek.value = "0"; musicSeek.max = "100"; }
-
-    if (track.cover && musicCoverEl) {
-      musicCoverEl.style.backgroundImage = `url(${track.cover})`;
-      musicCoverEl.style.background = "";
-    } else if (musicCoverEl) {
-      musicCoverEl.style.backgroundImage = "";
-      let hash = 0;
-      for (const ch of title) hash = (hash * 31 + ch.charCodeAt(0)) & 0xffffffff;
-      const hue = Math.abs(hash) % 360;
-      musicCoverEl.style.background = `hsl(${hue}, 45%, 32%)`;
-    }
-
-    loadLrc(track.lrc || "");
-    if (autoplay) setMusicPlaying(true);
-  }
-
-  function showMusic({
-    src = "", title = "", artist = "", lrc = "", cover = "",
-    autoplay = true, playlist: pl = null,
-  } = {}) {
-    if (videoActive) closeAndDestroyVideo();
-    setMusicPanelVisible(true);
-    if (pl && pl.length) {
-      playlist = pl;
-    } else {
-      playlist = [{ src, title, artist, lrc, cover }];
-    }
-    playlistIdx = 0;
-    loadTrack(0, autoplay);
-  }
-
-  function closeMusicPanel() {
-    setMusicPlaying(false);
-    setMusicPanelVisible(false);
-    if (musicAudio) musicAudio.src = "";
-    lrcLines = [];
-    if (musicLyricsScroll) musicLyricsScroll.innerHTML = "";
-    if (musicNoLyrics) musicNoLyrics.hidden = false;
-  }
-
-  function controlMusic({ action, volume, currentTime } = {}) {
-    if (action === "hide" || action === "close") { closeMusicPanel(); return; }
-    if (action === "play")  setMusicPlaying(true);
-    if (action === "pause") setMusicPlaying(false);
-    if (Number.isFinite(Number(volume))) {
-      const v = Math.max(0, Math.min(1, Number(volume)));
-      if (musicAudio) musicAudio.volume = v;
-      if (musicVolInput) musicVolInput.value = String(v);
-    }
-    if (Number.isFinite(Number(currentTime)) && musicAudio) {
-      musicAudio.currentTime = Math.max(0, Number(currentTime));
-    }
-  }
-
-  function toggleMusicPanelVisibility() {
-    if (musicActive) {
-      musicWasPlayingBeforeHide = musicPlaying;
-      setMusicPlaying(false);
-      setMusicPanelVisible(false);
-    } else if (musicAudio?.src) {
-      if (videoActive) closeAndDestroyVideo();
-      setMusicPanelVisible(true);
-      if (musicWasPlayingBeforeHide) setMusicPlaying(true);
-    }
-  }
-
-  if (musicAudio) {
-    musicAudio.addEventListener("loadedmetadata", () => {
-      if (musicTimeTotal) musicTimeTotal.textContent = fmtTime(musicAudio.duration);
-      if (musicSeek) musicSeek.max = String(musicAudio.duration || 100);
-    });
-    musicAudio.addEventListener("timeupdate", () => {
-      if (isSeeking) return;
-      const t = musicAudio.currentTime;
-      if (musicTimeCur) musicTimeCur.textContent = fmtTime(t);
-      if (musicSeek && musicAudio.duration) musicSeek.value = String(t);
-      syncLyrics(t);
-    });
-    musicAudio.addEventListener("ended", () => {
-      setMusicPlaying(false);
-      if (playlistIdx < playlist.length - 1) {
-        playlistIdx++;
-        loadTrack(playlistIdx, true);
-      }
-    });
-  }
-
-  musicPlayBtn?.addEventListener("click", () => setMusicPlaying(!musicPlaying));
-  musicPrevBtn?.addEventListener("click", () => {
-    if (playlistIdx > 0) { playlistIdx--; loadTrack(playlistIdx, musicPlaying); }
-    else if (musicAudio) musicAudio.currentTime = 0;
-  });
-  musicNextBtn?.addEventListener("click", () => {
-    if (playlistIdx < playlist.length - 1) { playlistIdx++; loadTrack(playlistIdx, musicPlaying); }
-  });
-  musicVolInput?.addEventListener("input", () => {
-    if (musicAudio) musicAudio.volume = parseFloat(musicVolInput.value);
-  });
-  musicSeek?.addEventListener("mousedown", () => { isSeeking = true; });
-  musicSeek?.addEventListener("input", () => {
-    if (musicTimeCur) musicTimeCur.textContent = fmtTime(parseFloat(musicSeek.value));
-  });
-  musicSeek?.addEventListener("change", () => {
-    if (musicAudio) musicAudio.currentTime = parseFloat(musicSeek.value);
-    isSeeking = false;
-  });
-  musicExitBtn?.addEventListener("click", closeMusicPanel);
-  musicBtn?.addEventListener("click", toggleMusicPanelVisibility);
-
-  window.addEventListener("keydown", (e) => {
-    if (e.target?.tagName === "INPUT" || e.target?.tagName === "TEXTAREA" || e.target?.isContentEditable) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === "m" || e.key === "M") {
-      e.preventDefault();
-      toggleMusicPanelVisibility();
-    }
-  });
-
-  window.bailongmaMedia = { handle: handleMediaCommand, showVideo, controlVideo, showImage, showCamera, showMusic, controlMusic };
-  window.addEventListener("bailongma:media", (event) => handleMediaCommand(event.detail || {}));
-
-  // Push-to-talk：按住空格说话；Agent 正在说话时按下空格直接打断
-  (() => {
-    let pttHeld = false;
-    const messageInput = document.getElementById("msg-input");
-
-    window.addEventListener("keydown", (e) => {
-      if (!shouldHandlePttKeyEvent(e, messageInput)) return;
-      e.preventDefault();
-      if (e.repeat) return;
-      if (pttHeld) return;
-      pttHeld = true;
-      document.body.classList.add("ptt-active");
-      // 不论是否在播，stopTTS 内部已做 no-op 守卫
-      try { window.stopTTS?.(); } catch {}
-      window.bailongmaVoice?.pttStart?.();
-    }, { capture: true });
-
-    window.addEventListener("keyup", (e) => {
-      const isSpace = e.code === "Space" || e.key === " " || e.key === "Spacebar";
-      if (!isSpace) return;
-      if (!pttHeld) return;
-      pttHeld = false;
-      document.body.classList.remove("ptt-active");
-      e.preventDefault();
-      window.bailongmaVoice?.pttEnd?.();
-    }, { capture: true });
-
-    // 切到后台/失焦（如点开 DevTools、切窗口）时如果还按着，强制释放 PTT，避免 mic 永远不关。
-    // 关键：用 send:false —— 失焦不是"主动松手发送"，不能把没说完的半句误发出去。
-    window.addEventListener("blur", () => {
-      if (!pttHeld) return;
-      pttHeld = false;
-      document.body.classList.remove("ptt-active");
-      window.bailongmaVoice?.pttEnd?.({ send: false });
-    });
-  })();
-
-  videoBtn?.addEventListener("click", toggleVideoPanelVisibility);
-  videoExitBtn?.addEventListener("click", closeAndDestroyVideo);
-  imageExitBtn?.addEventListener("click", () => setImageModeActive(false));
-
-  window.addEventListener("keydown", (e) => {
-    if (e.target?.tagName === "INPUT" || e.target?.tagName === "TEXTAREA" || e.target?.isContentEditable) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === "v" || e.key === "V") {
-      e.preventDefault();
-      toggleVideoPanelVisibility();
-    }
-    // H key: toggle hotspot mode
-    if (e.key === "h" || e.key === "H") {
-      e.preventDefault();
-      toggleHotspot();
-    }
-  });
-})();
-
-
-// ── AI 视频生成模式（Seedance · 生成工作台）──
-// 三段式：生成栏(多任务队列) + 播放区 + 输入区。全程由 aivideo_mode SSE 事件驱动。
-(function initAIVideoMode(){
-  var el = function(id){ return document.getElementById(id); };
-  var panel = el("aivideo-panel");
-  if (!panel) return;
-  var queueEl=el("aivideo-queue"), stage=el("aivideo-stage"), stageEmpty=el("aivideo-stage-empty"),
-      feed=el("aivideo-feed"), dlBtn=el("aivideo-dl"), playerMeta=el("aivideo-player-meta"),
-      dropzone=el("aivideo-dropzone"), modeTag=el("aivideo-modetag"), modeHint=el("aivideo-modehint"),
-      promptInput=el("aivideo-prompt-input"), ratioSel=el("aivideo-ratio"), resSel=el("aivideo-resolution"),
-      durSel=el("aivideo-duration"), submitBtn=el("aivideo-submit"), composeErr=el("aivideo-compose-err"),
-      fileInput=el("aivideo-file-input"), newBtn=el("aivideo-new-btn"), exitBtn=el("aivideo-exit-btn");
-
-  var active=false, jobs=[], selId=null, images=[], submitting=false;
-
-  var toastEl=document.createElement("div"); toastEl.className="aivideo-toast"; document.body.appendChild(toastEl);
-  var toastTimer=null;
-  function showToast(html){ toastEl.innerHTML=html; toastEl.classList.add("show"); clearTimeout(toastTimer); toastTimer=setTimeout(function(){ toastEl.classList.remove("show"); },3200); }
-
-  function mediaUrl(u){ var s=String(u||""); if(!s) return ""; return s.charAt(0)==="/" ? (API+s) : s; }
-  function modeLabel(m){ return m==="flf"?"首尾帧":(m==="image"?"图生视频":"文生视频"); }
-  function jobById(id){ for(var i=0;i<jobs.length;i++){ if(jobs[i].id===id) return jobs[i]; } return null; }
-
-  // —— 感知同步：把「面板开关 + 提示词草稿」实时回传后端，让 agent 能直接看到用户在框里写了什么 ——
-  var draftTimer=null, lastDraftSent=null;
-  function syncDraft(immediate){
-    clearTimeout(draftTimer);
-    var doSync=function(){
-      var payload=JSON.stringify({ open:active, prompt:(promptInput.value||"") });
-      if(payload===lastDraftSent) return;            // 没变化就不发，省流量
-      lastDraftSent=payload;
-      try{ fetch(API+"/aivideo/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:payload}).catch(function(){}); }catch(e){}
-    };
-    if(immediate) doSync(); else draftTimer=setTimeout(doSync,400);
-  }
-
-  function setActive(on){
-    active=!!on; document.body.classList.toggle("aivideo-mode", active);
-    if(active){ try{ window.bailongmaMedia&&window.bailongmaMedia.controlVideo&&window.bailongmaMedia.controlVideo({action:"pause"}); }catch(e){} document.body.classList.remove("video-mode"); }
-    syncDraft(true);   // 开/关状态立即同步
-  }
-
-  // —— 生成栏 ——
-  function renderQueue(){
-    queueEl.innerHTML="";
-    if(!jobs.length){ var em=document.createElement("div"); em.className="aivideo-queue-empty"; em.textContent="还没有生成任务"; queueEl.appendChild(em); return; }
-    jobs.forEach(function(j){
-      var t=document.createElement("div");
-      t.className="av-tile "+(j.status==="gen"?"gen":j.status==="fail"?"fail":"")+(j.id===selId?" sel":"");
-      var fr=document.createElement("div"); fr.className="frame";
-      if(j.status==="done"){
-        var v=document.createElement("video"); v.className="thumb"; v.src=mediaUrl(j.videoUrl); v.muted=true; v.playsInline=true; v.preload="metadata"; fr.appendChild(v);
-        var pl=document.createElement("div"); pl.className="play"; pl.textContent="▶"; fr.appendChild(pl);
-        if(j.dur){ var d=document.createElement("div"); d.className="dur"; d.textContent=j.dur+"s"; fr.appendChild(d); }
-      } else if(j.status==="gen"){
-        var orb=document.createElement("div"); orb.className="av-orb"; orb.innerHTML="<i></i><i></i>"; fr.appendChild(orb);
-        var gb=document.createElement("div"); gb.className="genbadge"; gb.textContent="生成中"; fr.appendChild(gb);
-        var gt=document.createElement("div"); gt.className="gentime"; gt.dataset.start=String(j.start||Date.now()); gt.textContent="0:00"; fr.appendChild(gt);
-      } else {
-        var x=document.createElement("div"); x.className="x"; x.textContent="!"; fr.appendChild(x);
-      }
-      if(j.status!=="gen"){ var rm=document.createElement("button"); rm.className="rm"; rm.textContent="×"; rm.onclick=function(e){ e.stopPropagation(); removeJob(j.id); }; fr.appendChild(rm); }
-      t.appendChild(fr);
-      var lb=document.createElement("div"); lb.className="label";
-      lb.textContent = j.status==="fail" ? ("失败 · "+(j.error||"")) : (j.prompt || modeLabel(j.mode));
-      t.appendChild(lb);
-      t.onclick=function(){ if(j.status==="done") loadPlayer(j); };
-      queueEl.appendChild(t);
-    });
-  }
-  function tickTimers(){ var now=Date.now(); var list=queueEl.querySelectorAll(".gentime"); for(var i=0;i<list.length;i++){ var s=Math.floor((now-Number(list[i].dataset.start))/1000); if(s<0)s=0; list[i].textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); } }
-  setInterval(tickTimers,500);
-  function removeJob(id){ jobs=jobs.filter(function(j){ return j.id!==id; }); if(selId===id){ selId=null; clearPlayer(); } renderQueue(); }
-
-  // —— 重建历史：从后端拉已完成视频（newest-first），合并进 jobs。 ——
-  // 修复「面板关闭重开 / app 重启后队列空了」：jobs[] 原本纯内存，重载即丢，
-  // 而视频其实还在磁盘。这里按 id 去重，不覆盖本会话进行中的瓦片。
-  function hydrateHistory(){
-    fetch(API+"/aivideo/history").then(function(r){ return r.json(); }).then(function(d){
-      if(!d||!d.ok||!Array.isArray(d.jobs)) return;
-      var changed=false;
-      d.jobs.forEach(function(h){
-        if(!h||!h.id) return;
-        var ex=jobById(h.id);
-        if(ex){
-          if(ex.status!=="done"&&h.videoUrl){ ex.status="done"; ex.videoUrl=h.videoUrl; ex.mode=ex.mode||h.mode; ex.prompt=ex.prompt||h.prompt; ex.res=ex.res||h.res; ex.ratio=ex.ratio||h.ratio; ex.dur=ex.dur||h.dur; changed=true; }
-          return;
-        }
-        jobs.push({ id:h.id, status:"done", videoUrl:h.videoUrl, mode:h.mode, prompt:h.prompt, res:h.res, ratio:h.ratio, dur:h.dur });
-        changed=true;
-      });
-      if(changed) renderQueue();
-    }).catch(function(){});
-  }
-
-  // —— 播放区 ——
-  function clearPlayer(){ try{ feed.pause(); }catch(e){} feed.removeAttribute("src"); if(feed.load) feed.load(); feed.hidden=true; dlBtn.hidden=true; stageEmpty.hidden=false; if(stage) stage.classList.add("is-empty"); playerMeta.textContent=""; }
-  function loadPlayer(j){
-    selId=j.id; feed.src=mediaUrl(j.videoUrl); feed.hidden=false; feed.muted=false; dlBtn.hidden=false; stageEmpty.hidden=true; if(stage) stage.classList.remove("is-empty");
-    playerMeta.innerHTML="<b>"+modeLabel(j.mode)+"</b>"+(j.res?" · "+j.res:"")+(j.ratio?" · "+j.ratio:"")+(j.dur?" · "+j.dur+"s":"");
-    if(feed.play) feed.play().catch(function(){}); renderQueue();
-  }
-  function download(){
-    if(!selId) return; dlBtn.disabled=true; var old=dlBtn.textContent; dlBtn.textContent="保存中…";
-    fetch(API+"/aivideo/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({jobId:selId})})
-      .then(function(r){ return r.json(); })
-      .then(function(d){ if(d&&d.ok){ showToast('已保存到　<span class="mono">'+(d.path||"")+'</span>'); } else { showToast('保存失败：'+((d&&d.error)||"未知错误")); } })
-      .catch(function(e){ showToast('保存失败：'+e.message); })
-      .then(function(){ dlBtn.disabled=false; dlBtn.textContent=old; });
-  }
-  dlBtn.addEventListener("click", download);
-
-  // —— 输入区：加图（点击/拖拽/粘贴，最多 2 张）——
-  function renderDropzone(){
-    dropzone.innerHTML="";
-    images.forEach(function(src,i){
-      var cell=document.createElement("div"); cell.className="av-imgcell";
-      var im=document.createElement("img"); im.src=src; cell.appendChild(im);
-      var r=document.createElement("div"); r.className="role"; r.textContent=images.length===2?(i===0?"首帧":"尾帧"):"参考图"; cell.appendChild(r);
-      var rm=document.createElement("button"); rm.className="rm"; rm.textContent="×"; rm.onclick=function(e){ e.stopPropagation(); images.splice(i,1); renderDropzone(); updateMode(); }; cell.appendChild(rm);
-      dropzone.appendChild(cell);
-    });
-    if(images.length<2){ var add=document.createElement("div"); add.className="av-addcell"; add.innerHTML='<span class="plus">+</span><span>图片</span><small>点击/拖拽/粘贴</small>'; add.onclick=function(){ fileInput.click(); }; dropzone.appendChild(add); }
-  }
-  var hadImages=false;
-  function updateMode(){
-    var m=images.length>=2?"flf":(images.length===1?"image":"text");
-    // 进入图生/首尾帧默认「适配图片」(输出比例跟随上传图)；退回文生时恢复 16:9。仅在边界切换，尊重用户在同一模式内的手动选择
-    if(images.length>0 && !hadImages){ ratioSel.value="adaptive"; }
-    else if(images.length===0 && hadImages && ratioSel.value==="adaptive"){ ratioSel.value="16:9"; }
-    hadImages=images.length>0;
-    modeTag.textContent=modeLabel(m); modeTag.classList.toggle("flf", m==="flf");
-    modeHint.textContent = m==="text" ? "不加图 = 文生视频 · 1 张 = 图生视频 · 2 张 = 首尾帧"
-      : m==="image" ? "已加 1 张参考图 → 图生视频（比例已设为「适配图片」）"
-      : "已加 2 张 → 首尾帧：第 1 张为「首帧」，第 2 张为「尾帧」";
-  }
-  function addImage(src){ if(images.length>=2) return; images.push(src); renderDropzone(); updateMode(); }
-  fileInput.addEventListener("change", function(e){ var f=e.target.files&&e.target.files[0]; if(f){ var rd=new FileReader(); rd.onload=function(){ addImage(String(rd.result||"")); }; rd.readAsDataURL(f); } e.target.value=""; });
-  ["dragenter","dragover"].forEach(function(ev){ dropzone.addEventListener(ev,function(e){ e.preventDefault(); dropzone.classList.add("dragover"); }); });
-  ["dragleave","drop"].forEach(function(ev){ dropzone.addEventListener(ev,function(e){ e.preventDefault(); dropzone.classList.remove("dragover"); }); });
-  dropzone.addEventListener("drop", function(e){ var f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0]; if(f&&f.type.indexOf("image/")===0){ var rd=new FileReader(); rd.onload=function(){ addImage(String(rd.result||"")); }; rd.readAsDataURL(f); } });
-  document.addEventListener("paste", function(e){
-    if(!active) return; var cd=e.clipboardData||window.clipboardData; var items=cd&&cd.items; if(!items) return;
-    for(var i=0;i<items.length;i++){ if(items[i].type.indexOf("image")===0){ var blob=items[i].getAsFile(); var rd=new FileReader(); rd.onload=function(){ addImage(String(rd.result||"")); }; rd.readAsDataURL(blob); e.preventDefault(); break; } }
-  });
-
-  var PROMPT_MIN=46, PROMPT_MAX=160;
-  function autoGrow(){
-    if(!promptInput.clientWidth){ promptInput.style.height=""; return; } // 面板隐藏(宽0)时测量会拿到错误的 scrollHeight，跳过，交给 CSS min-height
-    promptInput.style.height="auto";
-    var b=promptInput.offsetHeight-promptInput.clientHeight;
-    promptInput.style.height=Math.min(PROMPT_MAX, Math.max(PROMPT_MIN, promptInput.scrollHeight+b))+"px";
-  }
-  promptInput.addEventListener("input", function(){ autoGrow(); syncDraft(); });
-
-  // —— 提交生成 ——
-  function submitGenerate(){
-    if(submitting) return;
-    var prompt=(promptInput.value||"").trim();
-    if(!prompt && images.length===0){ composeErr.textContent="请至少输入一段画面描述（或加一张参考图）"; composeErr.hidden=false; return; }
-    composeErr.hidden=true; submitting=true; submitBtn.disabled=true; submitBtn.textContent="提交中…";
-    fetch(API+"/aivideo/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ prompt:prompt, images:images.slice(0,2), ratio:ratioSel.value, resolution:resSel.value, duration:Number(durSel.value)||5 })})
-      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
-      .then(function(res){
-        submitting=false; submitBtn.disabled=false; submitBtn.textContent="生成";
-        if(!res.ok || !res.d || !res.d.ok){ var d=res.d||{}; composeErr.textContent=d.guide||d.error||"提交失败"; composeErr.hidden=false; return; }
-        promptInput.value=""; autoGrow(); images=[]; renderDropzone(); updateMode(); syncDraft(true);
-      })
-      .catch(function(e){ submitting=false; submitBtn.disabled=false; submitBtn.textContent="生成"; composeErr.textContent="网络错误："+e.message; composeErr.hidden=false; });
-  }
-  submitBtn.addEventListener("click", submitGenerate);
-  promptInput.addEventListener("keydown", function(e){ if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){ e.preventDefault(); submitGenerate(); } });
-
-  // —— 打开/关闭 ——
-  function openPanel(configured){
-    setActive(true);
-    hydrateHistory();   // 每次打开都拉一次历史，重建之前生成的视频队列
-    if(configured===false){ composeErr.textContent="尚未配置火山方舟（Seedance）API Key —— 把 key 发给小白龙即可（例如「火山视频 你的APIKey」），配置后就能在这里生成。"; composeErr.hidden=false; }
-    else composeErr.hidden=true;
-    setTimeout(function(){ try{ promptInput.focus(); }catch(e){} },60);
-  }
-  function closePanel(){ setActive(false); try{ feed.pause(); }catch(e){} }
-  newBtn.addEventListener("click", function(){ images=[]; renderDropzone(); updateMode(); promptInput.value=""; autoGrow(); composeErr.hidden=true; syncDraft(true); try{ promptInput.focus(); }catch(e){} });
-  exitBtn.addEventListener("click", closePanel);
-  window.addEventListener("keydown", function(e){ if(!active) return; if(e.key==="Escape"){ if(document.activeElement===promptInput){ promptInput.blur(); return; } e.preventDefault(); closePanel(); } });
-
-  // —— SSE 事件 ——
-  function handle(data){
-    data=data||{}; var action=data.action||"show";
-    if(action==="hide"||action==="close"){ closePanel(); return; }
-    if(action==="open"){ openPanel(data.configured); return; }
-    if(action==="set_prompt"){
-      // agent 在用户确认采用后，把优化好的提示词写回输入框（覆盖草稿）
-      if(!active) setActive(true);
-      promptInput.value=String(data.prompt||""); autoGrow(); syncDraft(true);
-      showToast("已采用优化后的提示词，检查后点「生成」即可");
-      try{ promptInput.focus(); }catch(e){}
-      return;
-    }
-    if(action==="show"){
-      setActive(true);
-      var j=jobById(data.jobId);
-      if(!j){ j={ id:data.jobId, status:"gen", start:Date.now() }; jobs.unshift(j); }
-      j.status="gen"; j.prompt=data.prompt||j.prompt||""; j.mode=data.mode||j.mode||"text";
-      j.res=data.resolution||j.res; j.ratio=data.ratio||j.ratio; j.dur=data.duration||j.dur;
-      if(!j.start) j.start=Date.now();
-      renderQueue(); return;
-    }
-    var job=jobById(data.jobId); if(!job) return;
-    if(action==="progress"){ job.status="gen"; return; }
-    if(action==="ready"){ job.status="done"; job.videoUrl=data.videoUrl; renderQueue(); if(!active) setActive(true); loadPlayer(job); return; }
-    if(action==="error"){ job.status="fail"; job.error=data.message||"生成失败"; renderQueue(); return; }
-  }
-  window.addEventListener("bailongma:aivideo", function(e){ handle(e.detail||{}); });
-  window.bailongmaAIVideo={ handle:handle, open:openPanel, close:closePanel };
-
-  renderDropzone(); updateMode(); renderQueue(); autoGrow();
-  hydrateHistory();   // 初始化即重建一次（覆盖 app 重启/渲染进程重载后的历史恢复）
-})();
+initMediaModes();
+initAIVideoMode();

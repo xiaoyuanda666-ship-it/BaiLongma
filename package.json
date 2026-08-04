@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.616",
+  "version": "2.1.639",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -91,7 +91,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
-    "electron": "^33.2.0",
+    "electron": "33.4.11",
     "electron-builder": "^25.1.8"
   },
   "build": {
@@ -237,7 +237,8 @@
       "category": "public.app-category.productivity",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Bailongma uses the microphone for voice input when you enable voice features.",
-        "NSSpeechRecognitionUsageDescription": "Bailongma may use speech recognition for voice input features."
+        "NSSpeechRecognitionUsageDescription": "Bailongma may use speech recognition for voice input features.",
+        "NSAppleEventsUsageDescription": "Bailongma uses Apple Events only when you ask it to read or control playback in Music.app."
       },
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     },
@@ -281,6 +282,7 @@
         "url": "https://updates.bailongma.ai/stable/${os}/${arch}",
         "channel": "latest"
       }
-    ]
+    ],
+    "afterSign": "./scripts/after-sign-macos.mjs"
   }
 }

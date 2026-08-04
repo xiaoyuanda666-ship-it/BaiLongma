@@ -5,7 +5,7 @@ import {
   TOOL_SCHEMAS,
   buildBuiltinToolSchemas,
 } from './capabilities/builtin-tools.js'
-import { getToolSchemas } from './capabilities/schemas.js'
+import { getToolSchema, getToolSchemas } from './capabilities/schemas.js'
 import { validateToolManifest } from './capabilities/marketplace/index.js'
 
 const builtinNames = Object.keys(TOOL_SCHEMAS)
@@ -23,6 +23,8 @@ assert.deepEqual(
     .map(schema => schema.function.name),
   ['read_file'],
 )
+assert.equal(getToolSchema('read_file')?.function?.name, 'read_file')
+assert.equal(getToolSchema('not_a_real_tool'), null, 'unregistered tools have no callable schema')
 assert.ok([...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS].every(name => TOOL_SCHEMAS[name] === undefined))
 assert.deepEqual(getToolSchemas([...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS]), [])
 assert.ok(REMOVED_WEB_TOOLS.every(name => LEGACY_TOOL_ALIASES.includes(name)),

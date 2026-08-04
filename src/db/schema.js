@@ -1,4 +1,11 @@
 export function initializeSchema(db) {
+  // A full external-content FTS rebuild is linear in all chunks.  Record
+  // whether this virtual table existed before the schema migration so massive
+  // knowledge collections are not rebuilt on every application launch.
+  let knowledgeFtsNeedsRebuild = false
+  try {
+    knowledgeFtsNeedsRebuild = !db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_chunks_fts'`).get()
+  } catch {}
   // 迁移：添加 parent_id 字段（已存在时跳过）
   try { db.exec(`ALTER TABLE memories ADD COLUMN parent_id INTEGER REFERENCES memories(id)`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_parent_id ON memories(parent_id)`) } catch {}
@@ -575,7 +582,121 @@ export function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_extract_audit_from_id    ON extract_audit(from_id);
   `)
 
+  // Knowledge cortex is intentionally separate from memories.  A memory is a
+  // durable fact about an interaction; this group stores versioned source
+  // material and the evidence chunks that can be cited back to that material.
+  // Keeping the two lifecycles apart means memory consolidation can never
+  // merge, hide, or age-out an authoritative document version.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_regions (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      description   TEXT NOT NULL DEFAULT '',
+      scope         TEXT NOT NULL DEFAULT '',
+      owner         TEXT NOT NULL DEFAULT '',
+      status        TEXT NOT NULL DEFAULT 'active',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_regions_name ON knowledge_regions(name);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_regions_status ON knowledge_regions(status);
+
+    CREATE TABLE IF NOT EXISTS knowledge_sources (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      region_id     TEXT NOT NULL REFERENCES knowledge_regions(id),
+      uri           TEXT NOT NULL,
+      source_type   TEXT NOT NULL DEFAULT 'file',
+      display_name  TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(region_id, uri)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_sources_region ON knowledge_sources(region_id);
+
+    CREATE TABLE IF NOT EXISTS knowledge_documents (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_id     INTEGER NOT NULL REFERENCES knowledge_sources(id),
+      title         TEXT NOT NULL DEFAULT '',
+      mime_type     TEXT NOT NULL DEFAULT '',
+      content_hash  TEXT NOT NULL DEFAULT '',
+      version       INTEGER NOT NULL DEFAULT 1,
+      active        INTEGER NOT NULL DEFAULT 1,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(source_id, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_documents_source_active
+      ON knowledge_documents(source_id, active, version DESC);
+    CREATE INDEX IF NOT EXISTS idx_knowledge_documents_hash
+      ON knowledge_documents(source_id, content_hash);
+
+    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      document_id     INTEGER NOT NULL REFERENCES knowledge_documents(id),
+      ordinal         INTEGER NOT NULL,
+      chunk_text      TEXT NOT NULL,
+      context_text    TEXT NOT NULL DEFAULT '',
+      locator_json    TEXT NOT NULL DEFAULT '{}',
+      content_hash    TEXT NOT NULL DEFAULT '',
+      active          INTEGER NOT NULL DEFAULT 1,
+      embedding       BLOB,
+      embedding_dim   INTEGER,
+      embedding_model TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(document_id, ordinal)
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document_active
+      ON knowledge_chunks(document_id, active, ordinal);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+      chunk_text, context_text,
+      content='knowledge_chunks', content_rowid='id',
+      tokenize='trigram'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_ai AFTER INSERT ON knowledge_chunks BEGIN
+      INSERT INTO knowledge_chunks_fts(rowid, chunk_text, context_text)
+      VALUES (new.id, new.chunk_text, new.context_text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_ad AFTER DELETE ON knowledge_chunks BEGIN
+      INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, chunk_text, context_text)
+      VALUES ('delete', old.id, old.chunk_text, old.context_text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS knowledge_chunks_au AFTER UPDATE ON knowledge_chunks BEGIN
+      INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts, rowid, chunk_text, context_text)
+      VALUES ('delete', old.id, old.chunk_text, old.context_text);
+      INSERT INTO knowledge_chunks_fts(rowid, chunk_text, context_text)
+      VALUES (new.id, new.chunk_text, new.context_text);
+    END;
+
+    CREATE TABLE IF NOT EXISTS knowledge_retrieval_audit (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      query_text          TEXT NOT NULL DEFAULT '',
+      region_ids_json     TEXT NOT NULL DEFAULT '[]',
+      matched_chunk_ids   TEXT NOT NULL DEFAULT '[]',
+      selected_citation_ids TEXT NOT NULL DEFAULT '[]',
+      matched_count       INTEGER NOT NULL DEFAULT 0,
+      chosen_count        INTEGER NOT NULL DEFAULT 0,
+      latency_ms          INTEGER,
+      source              TEXT NOT NULL DEFAULT '',
+      metadata_json       TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_knowledge_retrieval_audit_created_at
+      ON knowledge_retrieval_audit(created_at);
+  `)
+
+  // External-content FTS needs an explicit rebuild only on the migration that
+  // first introduces the virtual table.  This affects the derived index, never
+  // source text or memory rows, and avoids O(all chunks) startup work later.
+  if (knowledgeFtsNeedsRebuild) {
+    db.exec(`INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES('rebuild')`)
+  }
+
   // 重建 FTS 索引（覆盖已有数据，确保历史记忆也被索引）
   db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`)
 }
-

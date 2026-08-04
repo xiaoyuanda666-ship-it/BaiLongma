@@ -1,5 +1,6 @@
 import path from 'path'
 import fs from 'fs'
+import { randomUUID } from 'crypto'
 import { spawn, spawnSync } from 'child_process'
 import { Readable, Transform } from 'stream'
 import { pipeline } from 'stream/promises'
@@ -20,6 +21,13 @@ const BG_RETAIN_EXITED_MS = 5 * 60 * 1000
 const BG_MAX_ENTRIES = 50
 // 前台输出在内存中的累积上限：超过则滚动丢弃头部、保留尾部，避免刷屏命令吃光内存
 const FG_BUFFER_MAX = 512 * 1024
+// 命令运行记录是 run_command 的事实源。无论调用方等不等结果，每次执行都有一个
+// 可查询、可等待、可取消的 run_id，而不是把“前台/后台”做成两种不同的语义。
+const commandRuns = new Map()
+const COMMAND_RUN_MAX_ENTRIES = 100
+const COMMAND_RUN_RETAIN_EXITED_MS = 10 * 60 * 1000
+const COMMAND_RUN_OUTPUT_MAX_BYTES = 512 * 1024
+const COMMAND_RUN_OUTPUT_CHUNK_MAX_CHARS = 1000
 
 const IS_WIN = process.platform === 'win32'
 const DOWNLOAD_PROGRESS_INTERVAL_MS = 1500
@@ -261,7 +269,7 @@ export function isFastLaneEligible(command = '') {
   return FAST_LANE_SAFE_HEADS.has(head)
 }
 
-function terminateProcessTree(child, pid = child?.pid) {
+function terminateProcessTree(child, pid = child?.pid, { processGroup = false } = {}) {
   if (!pid) {
     try { child?.kill?.() } catch {}
     return { ok: false, error: 'missing pid' }
@@ -279,7 +287,10 @@ function terminateProcessTree(child, pid = child?.pid) {
     }
   }
   try {
-    child?.kill?.()
+    // 新的 CommandRun 在 POSIX 上以 detached process group 启动，因此可以确实
+    // 终止 shell 和它派生的服务；旧接口仍保留原来的单 child 行为以免误杀宿主组。
+    if (processGroup) process.kill(-pid, 'SIGTERM')
+    else child?.kill?.()
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err.message }
@@ -343,6 +354,269 @@ async function probeLocalUrl(url, timeoutMs = 3000) {
 
 // 仅供测试
 export const __probeInternal = { extractUserFacingLocalUrl, probeLocalUrl }
+
+const COMMAND_RUN_TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled'])
+
+function isCommandRunTerminal(run) {
+  return COMMAND_RUN_TERMINAL_STATES.has(run?.state)
+}
+
+function commandRunId() {
+  return `cmd_${randomUUID().replace(/-/g, '').slice(0, 20)}`
+}
+
+function pruneCommandRuns(maxEntries = COMMAND_RUN_MAX_ENTRIES) {
+  if (commandRuns.size <= maxEntries) return
+  const removable = [...commandRuns.values()]
+    .filter(isCommandRunTerminal)
+    .sort((a, b) => (a.finishedAt || '').localeCompare(b.finishedAt || ''))
+  while (commandRuns.size > maxEntries && removable.length) {
+    commandRuns.delete(removable.shift().runId)
+  }
+}
+
+function appendCommandRunOutput(run, stream, value) {
+  const source = String(value || '')
+  if (!source) return
+  // Split at a stable record size. read_output never advances its cursor past a
+  // partial record, so a caller can consume a long stream without losing bytes.
+  for (let offset = 0; offset < source.length; offset += COMMAND_RUN_OUTPUT_CHUNK_MAX_CHARS) {
+    const text = source.slice(offset, offset + COMMAND_RUN_OUTPUT_CHUNK_MAX_CHARS)
+    const entry = { sequence: run.nextSequence++, stream, text, timestamp: Date.now() }
+    run.output.push(entry)
+    run.outputBytes += Buffer.byteLength(text, 'utf8')
+    while (run.outputBytes > COMMAND_RUN_OUTPUT_MAX_BYTES && run.output.length > 1) {
+      const removed = run.output.shift()
+      run.outputBytes -= Buffer.byteLength(removed.text, 'utf8')
+      run.outputTruncated = true
+    }
+    emitEvent('command_output', {
+      run_id: run.runId,
+      pid: run.pid,
+      sequence: entry.sequence,
+      stream,
+      text: text.slice(0, 500),
+    })
+  }
+}
+
+function completeCommandRun(run, nextState, details = {}) {
+  if (isCommandRunTerminal(run)) return
+  run.state = nextState
+  run.exitCode = details.exitCode ?? run.exitCode
+  run.error = details.error || run.error || null
+  run.finishedAt = nowTimestamp()
+  for (const waiter of run.waiters) waiter()
+  run.waiters.clear()
+  emitEvent('command_run', {
+    run_id: run.runId,
+    state: run.state,
+    pid: run.pid,
+    exit_code: run.exitCode,
+    error: run.error,
+    finished_at: run.finishedAt,
+  })
+  const timer = setTimeout(() => commandRuns.delete(run.runId), COMMAND_RUN_RETAIN_EXITED_MS)
+  timer.unref?.()
+}
+
+function commandRunOutputSince(run, cursor = 0, maxChars = 6000) {
+  const after = Math.max(0, Number(cursor) || 0)
+  const entries = []
+  let chars = 0
+  for (const entry of run.output) {
+    if (entry.sequence <= after) continue
+    const remaining = maxChars - chars
+    if (remaining <= 0) break
+    if (entry.text.length > remaining) break
+    entries.push(entry)
+    chars += entry.text.length
+  }
+  const nextCursor = entries.length ? entries[entries.length - 1].sequence : after
+  const stdout = entries.filter(entry => entry.stream === 'stdout').map(entry => entry.text).join('')
+  const stderr = entries.filter(entry => entry.stream === 'stderr').map(entry => entry.text).join('')
+  return {
+    output: entries,
+    stdout,
+    stderr,
+    output_cursor: nextCursor,
+    output_truncated: run.outputTruncated || (run.output.length > 0 && after < run.output[0].sequence - 1),
+  }
+}
+
+function commandRunSnapshot(run, { cursor = 0, includeOutput = false } = {}) {
+  const base = {
+    ok: run.state !== 'failed',
+    tool: 'run_command',
+    run_id: run.runId,
+    state: run.state,
+    pid: run.pid,
+    command: run.command,
+    cwd: run.cwd,
+    command_profile: run.profile,
+    started_at: run.startedAt,
+    finished_at: run.finishedAt || null,
+    exit_code: run.exitCode,
+    error: run.error,
+  }
+  return includeOutput ? { ...base, ...commandRunOutputSince(run, cursor) } : { ...base, output_cursor: run.nextSequence - 1 }
+}
+
+function waitForCommandRun(run, timeoutMs, signal) {
+  if (isCommandRunTerminal(run)) return Promise.resolve({ terminal: true, timedOut: false, aborted: false })
+  return new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const done = ({ terminal = false, timedOut = false, aborted = false } = {}) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+      run.waiters.delete(onTerminal)
+      resolve({ terminal, timedOut, aborted })
+    }
+    const onTerminal = () => done({ terminal: true })
+    const onAbort = () => done({ aborted: true })
+    run.waiters.add(onTerminal)
+    if (signal?.aborted) return done({ aborted: true })
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+    timer = setTimeout(() => done({ timedOut: true }), timeoutMs)
+  })
+}
+
+function startCommandRun(command, execCwd, profile) {
+  const child = spawnShellCommand(command, {
+    cwd: execCwd,
+    // A detached POSIX process gets its own process group. cancel can then stop
+    // the shell and the server it spawned, rather than only killing the shell.
+    detached: !IS_WIN,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  child.stdout?.setEncoding('utf8')
+  child.stderr?.setEncoding('utf8')
+
+  const run = {
+    runId: commandRunId(),
+    child,
+    pid: child.pid || null,
+    processGroup: !IS_WIN,
+    command,
+    cwd: execCwd,
+    profile: profile.mode,
+    state: child.pid ? 'running' : 'starting',
+    startedAt: nowTimestamp(),
+    finishedAt: null,
+    exitCode: null,
+    error: null,
+    output: [],
+    outputBytes: 0,
+    outputTruncated: false,
+    nextSequence: 1,
+    waiters: new Set(),
+  }
+  commandRuns.set(run.runId, run)
+
+  child.stdout?.on('data', data => appendCommandRunOutput(run, 'stdout', data))
+  child.stderr?.on('data', data => appendCommandRunOutput(run, 'stderr', data))
+  child.on('error', err => completeCommandRun(run, 'failed', { error: err.message }))
+  child.on('close', code => {
+    if (run.state === 'cancelling') completeCommandRun(run, 'cancelled', { exitCode: code })
+    else completeCommandRun(run, code === 0 ? 'completed' : 'failed', {
+      exitCode: code,
+      error: code === 0 ? null : `command exited with code ${code}`,
+    })
+  })
+  emitEvent('command_run', {
+    run_id: run.runId,
+    state: run.state,
+    pid: run.pid,
+    command,
+    cwd: execCwd,
+    command_profile: profile.mode,
+    started_at: run.startedAt,
+  })
+  return run
+}
+
+// Public CommandRun controller. An omitted action keeps the old synchronous
+// run_command contract; explicit action:'start' returns as soon as the process
+// exists, then callers observe the same run by id.
+export async function execRunCommand(args = {}, context = {}) {
+  const action = String(args.action || '').trim().toLowerCase()
+  const legacyStart = !action
+  const normalizedAction = action || 'start'
+  if (!['start', 'status', 'wait', 'read_output', 'cancel'].includes(normalizedAction)) {
+    return toolJson({ ok: false, tool: 'run_command', error: 'action must be start, status, wait, read_output, or cancel' })
+  }
+
+  if (normalizedAction !== 'start') {
+    const runId = String(args.run_id || '').trim()
+    const run = commandRuns.get(runId)
+    if (!run) return toolJson({ ok: false, tool: 'run_command', run_id: runId || null, error: 'command run not found or already expired' })
+    if (normalizedAction === 'status') return toolJson(commandRunSnapshot(run))
+    if (normalizedAction === 'read_output') return toolJson(commandRunSnapshot(run, { cursor: args.cursor, includeOutput: true }))
+    if (normalizedAction === 'wait') {
+      const timeoutMs = resolveProfileTimeout({ timeout: args.timeout }, { defaultTimeoutSec: 30, maxTimeoutSec: 120 })
+      const waited = await waitForCommandRun(run, timeoutMs, context.signal)
+      return toolJson({
+        ...commandRunSnapshot(run, { cursor: args.cursor, includeOutput: true }),
+        waited_ms: timeoutMs,
+        timed_out: waited.timedOut,
+        still_running: !waited.terminal && !isCommandRunTerminal(run),
+      })
+    }
+    if (isCommandRunTerminal(run)) return toolJson({ ...commandRunSnapshot(run), cancelled: run.state === 'cancelled' })
+    run.state = 'cancelling'
+    const stopped = terminateProcessTree(run.child, run.pid, { processGroup: run.processGroup })
+    if (!stopped.ok) {
+      run.state = 'running'
+      return toolJson({ ...commandRunSnapshot(run), ok: false, error: stopped.error })
+    }
+    const waited = await waitForCommandRun(run, 5000, context.signal)
+    return toolJson({
+      ...commandRunSnapshot(run),
+      cancelled: run.state === 'cancelled',
+      cancellation_requested: !waited.terminal,
+    })
+  }
+
+  throwIfAborted(context.signal)
+  const command = String(args.command || args.cmd || '').trim()
+  if (!command) return toolJson({ ok: false, tool: 'run_command', error: 'missing command' })
+  const mode = String(args.mode || 'auto').trim().toLowerCase()
+  if (!['auto', 'quick', 'task', 'background', 'strict'].includes(mode)) {
+    return toolJson({ ok: false, tool: 'run_command', error: 'mode must be auto, quick, task, background, or strict' })
+  }
+  const profile = classifyCommandProfile(command, mode === 'auto' ? '' : mode)
+  let execCwd
+  try {
+    execCwd = resolveExecCwd(args.cwd || '')
+  } catch (err) {
+    return toolJson({ ok: false, tool: 'run_command', error: err.message })
+  }
+  // Never evict a live process merely to make room. Finished runs can be
+  // evicted early because their output has already been retained long enough
+  // for a caller to observe it.
+  pruneCommandRuns(COMMAND_RUN_MAX_ENTRIES - 1)
+  if (commandRuns.size >= COMMAND_RUN_MAX_ENTRIES) {
+    return toolJson({ ok: false, tool: 'run_command', error: 'too many active or retained command runs; wait for or cancel an existing run first' })
+  }
+  const run = startCommandRun(command, execCwd, profile)
+  // Explicit start makes lifecycle visible immediately. Existing calls without
+  // action preserve the former “wait for a normal command” behavior.
+  const waitForExit = args.wait_for_exit === true || args.wait_for_exit === 'true' || legacyStart
+  const legacyBackground = args.background === true || args.background === 'true'
+  if (!waitForExit || mode === 'background' || legacyBackground) return toolJson(commandRunSnapshot(run))
+  const timeoutMs = resolveProfileTimeout(args, profile)
+  const waited = await waitForCommandRun(run, timeoutMs, context.signal)
+  return toolJson({
+    ...commandRunSnapshot(run, { includeOutput: true }),
+    command_mode: mode,
+    timed_out: waited.timedOut,
+    still_running: !waited.terminal && !isCommandRunTerminal(run),
+    timeout_ms: waited.timedOut ? timeoutMs : undefined,
+  })
+}
 
 export async function execCommand(args, context = {}) {
   const result = await execCommandImpl(args, context)

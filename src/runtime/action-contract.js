@@ -10,6 +10,7 @@ import {
   isSystemBrowserRequest,
 } from '../mcp/browser-display.js'
 import { explicitlyKeepsBrowserOpen } from './browser-intent-guards.js'
+import { filterStrictEvaluationTools } from './strict-evaluation.js'
 
 const META_QUESTION_RE = /(?:你(?:有|会|能).{0,18}(?:工具|能力)|(?:多少|哪些|什么).{0,12}(?:工具|命令|能力)|工具.{0,12}(?:多少|哪些|什么)|怎么(?:调用|使用).{0,12}(?:工具|命令))/i
 const BROWSER_NAVIGATION_URL_RE = /(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)/i
@@ -30,6 +31,10 @@ const BROWSER_INTERACTION_TOOLS = [
 const BROWSER_LOGIN_REQUEST_RE = /(?:(?:帮我|请|给我|你(?:来|帮)|现在|直接).{0,18}(?:登录|登入)(?:.{0,20}(?:账号|帐号|网站|网页|x\b|twitter|google|谷歌))?|(?:登录|登入).{0,20}(?:我的|这个|该).{0,16}(?:账号|帐号|网站|网页|x\b|twitter))/i
 const BROWSER_CONTINUATION_RE = /(?:^(?:没有|没).{0,8}(?:被墙|拦住|问题)|^(?:它|这个).{0,8}(?:能(?:走|打开|访问)|可以(?:走|打开|访问))|^(?:继续|再试|重试|接着|那就).{0,18}(?:登录|浏览器|网页|页面|操作)?$|^(?:continue|retry|go\s+on)\b)/i
 const BROWSER_CONTEXT_RE = /(?:浏览器|网页|页面|登录|登入|账号|帐号|验证码|oauth|google|谷歌|\bx\b|twitter)/i
+const MACOS_MUSIC_EXPLICIT_ACTION_RE = /(?:(?:播放|暂停|继续|恢复|停止|切换|打开|关闭|下一首|上一首|切歌|换一首).{0,20}(?:apple\s*music|music\.app|mac(?:os)?.{0,8}music|系统音乐|音乐播放器|音乐|歌曲|这首歌|当前歌曲|\bmusic\b)|(?:apple\s*music|music\.app|mac(?:os)?.{0,8}music|系统音乐|音乐播放器|这首歌|当前歌曲|\bmusic\b).{0,16}(?:播放|暂停|继续|恢复|停止|切换|打开|关闭|下一首|上一首|切歌|换一首)|(?:play|pause|resume|stop|open|next|previous).{0,16}(?:apple\s*music|music\.app|system music|current (?:song|track)))/i
+const MACOS_MUSIC_BARE_CONTROL_RE = /^(?:请|帮我|现在|先|再|那就|好的?|直接|给我|把它|把这首歌|音乐)?\s*(?:暂停|继续|恢复播放|停止播放|播放|下一首|上一首|切歌|换一首|pause|resume|play|next|previous)\s*(?:一下|吧|音乐|这首|这首歌|歌曲|好吗|please)?[。.!！?？]*$/i
+const MACOS_MUSIC_CONTEXT_RE = /(?:apple\s*music|music\.app|mac(?:os)?\s*(?:system\s*)?music|系统音乐|音乐播放器|播放.*(?:歌|音乐)|(?:歌|音乐).*(?:播放|暂停)|current track|playback state)/i
+const MACOS_MUSIC_RUNTIME_RE = /\[macOS System Music\][\s\S]*(?:Music\.app is open|Authoritative playback state:)/i
 
 function browserInteractionContract(label = '检查并继续浏览器交互') {
   return {
@@ -42,6 +47,11 @@ function browserInteractionContract(label = '检查并继续浏览器交互') {
 function hasRecentBrowserContext(conversationWindow = []) {
   return Array.isArray(conversationWindow)
     && conversationWindow.slice(-6).some(item => BROWSER_CONTEXT_RE.test(String(item?.content || '')))
+}
+
+function hasRecentMusicContext(conversationWindow = []) {
+  return Array.isArray(conversationWindow)
+    && conversationWindow.slice(-6).some(item => MACOS_MUSIC_CONTEXT_RE.test(String(item?.content || '')))
 }
 
 function hasAdditionalBrowserCloseTask(text = '') {
@@ -128,7 +138,7 @@ const CONTRACTS = [
   {
     id: 'command',
     label: '执行命令或启动程序',
-    tools: ['exec_command', 'exec_quick_command', 'exec_task_command', 'exec_background_command'],
+    tools: ['run_command'],
     pattern: /(?:请|帮我|给我)?\s*(?:运行|执行|启动|停止|杀掉|关闭).{0,40}(?:命令|程序|进程|服务|脚本|终端|powershell|bash|npm|node|python|server)|(?:run|execute|start|stop|kill)\s+(?:the\s+)?(?:command|process|server|script|npm|node|python)/i,
   },
   {
@@ -166,11 +176,25 @@ const CONTRACTS = [
   },
 ]
 
-export function classifyActionContract(message = '', { conversationWindow = [] } = {}) {
+export function classifyActionContract(message = '', { conversationWindow = [], runtimeContext = '' } = {}) {
   const text = String(message || '').trim()
   if (!text || META_QUESTION_RE.test(text)) return null
   // “怎么/如何做” requests an explanation, not the side effect itself.
   if (/^(?:请问[，,：:]?\s*)?(?:怎么|如何|怎样|能否|可否|what\b|how\b)/i.test(text)) return null
+
+  if (process.platform === 'darwin' && (
+    MACOS_MUSIC_EXPLICIT_ACTION_RE.test(text)
+    || (MACOS_MUSIC_BARE_CONTROL_RE.test(text) && (
+      hasRecentMusicContext(conversationWindow)
+      || MACOS_MUSIC_RUNTIME_RE.test(String(runtimeContext || ''))
+    ))
+  )) {
+    return {
+      id: 'macos_system_music',
+      label: '控制 macOS Music.app 播放状态',
+      requiredTools: ['system_music'],
+    }
+  }
 
   // “没有被墙，它能走”这类承接话没有动作动词，但在一个正在进行的登录/网页任务里
   // 明确要求继续。把它绑定到最近的浏览器上下文，避免模型把想象中的进度当成已发生的操作。
@@ -193,6 +217,20 @@ export function classifyActionContract(message = '', { conversationWindow = [] }
     requiredTools: [...match.tools],
     ...(typeof match.resolve === 'function' ? match.resolve(text) : {}),
   }
+}
+
+// The production turn binds this immediately before routing tools.  Applying
+// strict-mode exclusions here means the evidence gate can never demand a
+// tool that the same turn is forbidden to call.
+export function resolveActionContractForTurn(message = '', {
+  conversationWindow = [],
+  runtimeContext = '',
+  strictEvaluation = null,
+} = {}) {
+  const contract = classifyActionContract(message, { conversationWindow, runtimeContext })
+  if (!contract) return null
+  const requiredTools = filterStrictEvaluationTools(contract.requiredTools, strictEvaluation)
+  return requiredTools.length > 0 ? { ...contract, requiredTools } : null
 }
 
 export function actionContractToolSucceeded(contract, toolName, result) {

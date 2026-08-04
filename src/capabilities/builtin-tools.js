@@ -3,6 +3,7 @@ import { filesystemSchemas } from './schemas/filesystem.js'
 import { shellSchemas } from './schemas/shell.js'
 import { mediaSchemas } from './schemas/media.js'
 import { memorySchemas } from './schemas/memory.js'
+import { knowledgeSchemas } from './schemas/knowledge.js'
 import { uiSchemas } from './schemas/ui.js'
 import { sceneSchemas } from './schemas/scene.js'
 import { taskSchemas } from './schemas/task.js'
@@ -19,6 +20,7 @@ export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
   ['shell', shellSchemas],
   ['media', mediaSchemas],
   ['memory', memorySchemas],
+  ['knowledge', knowledgeSchemas],
   ['ui', uiSchemas],
   ['scene', sceneSchemas],
   ['task', taskSchemas],
@@ -37,6 +39,10 @@ export const LEGACY_TOOL_ALIASES = Object.freeze([
   'web_read',
   'fetch_url',
   'browser_read',
+  'exec_command',
+  'exec_quick_command',
+  'exec_task_command',
+  'exec_background_command',
   'schedule_reminder',
   ...BUILTIN_BROWSER_ALLOWED_TOOLS,
 ])

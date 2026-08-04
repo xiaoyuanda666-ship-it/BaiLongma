@@ -6,7 +6,8 @@ const TOOL_ZH = {
   delete_file: "删除文件",
   make_dir: "创建目录",
   list_dir: "查看目录",
-  exec_command: "执行命令",
+  run_command: "执行命令",
+  exec_command: "执行命令（旧版）",
   exec_quick_command: "快速命令",
   exec_task_command: "任务命令",
   exec_background_command: "后台命令",
@@ -88,6 +89,7 @@ const TOOL_ICON = {
   delete_file: "🗑️",
   make_dir: "📁",
   list_dir: "📂",
+  run_command: "⚡",
   exec_command: "⚡",
   kill_process: "🛑",
   list_processes: "📋",
@@ -466,6 +468,7 @@ export class ThoughtStream {
       case "make_dir":
       case "list_dir":
         return this.shortPath(a.path);
+      case "run_command":
       case "exec_command":
         return this.shortCommand(a.command || parsed?.command);
       case "kill_process":
@@ -668,7 +671,7 @@ export class ThoughtStream {
       return this.formatGenericPermissionDenied(parsed);
     }
 
-    if (name === "exec_command") {
+    if (name === "run_command" || name === "exec_command") {
       if (parsed) return this.formatExecCommandDetail(parsed);
       // JSON 残缺时不展示原文，给个通用兜底
       return "命令已执行（结果过长未展开）。";

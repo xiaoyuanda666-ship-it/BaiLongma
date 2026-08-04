@@ -4,6 +4,15 @@ import { TOOL_SCHEMAS } from './builtin-tools.js'
 
 export { TOOL_SCHEMAS } from './builtin-tools.js'
 
+// One availability check for every tool-loading path.  A name in a routing
+// table is not enough: MCP tools are only callable after their client has
+// connected and supplied a schema.  Returning a name that has no schema makes
+// the model believe it can act while the provider never receives that tool.
+export function getToolSchema(name) {
+  if (typeof name !== 'string' || !name) return null
+  return TOOL_SCHEMAS[name] ?? getInstalledToolSchema(name) ?? getMcpToolSchema(name) ?? null
+}
+
 function normalizeToolPromptHints(toolPromptHints = null) {
   if (!toolPromptHints) return new Map()
   if (toolPromptHints instanceof Map) return toolPromptHints
@@ -53,7 +62,7 @@ export function getToolSchemas(toolNames, { toolPromptHints = null } = {}) {
       return true
     })
     .map(name => {
-      const schema = TOOL_SCHEMAS[name] ?? getInstalledToolSchema(name) ?? getMcpToolSchema(name)
+      const schema = getToolSchema(name)
       return appendToolPromptHints(schema, hintsByTool.get(name) || [])
     })
     .filter(Boolean)

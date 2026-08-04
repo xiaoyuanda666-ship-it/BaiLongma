@@ -45,6 +45,7 @@ const NON_FILE_WRITE_TOOLS = new Set([
   'manage_prefetch_task',
   'install_tool',
   'manage_tool_factory',
+  'run_command',
   'exec_command',
   'exec_quick_command',
   'exec_task_command',

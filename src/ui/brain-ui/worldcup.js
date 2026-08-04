@@ -16,8 +16,10 @@ let closeTimer = null;
 const COLLAPSE_DELAY_MS = 1600;   // 鼠标离开/失焦后缓一拍再折叠，防擦边误触
 const OPEN_GRACE_MS = 3000;       // 刚进世界杯模式先完整亮相一会
 const MESSAGE_PEEK_MS = 6000;     // 新消息先展开给用户看，看完自动收
+const BACKGROUND_RELEASE_MS = 5 * 60 * 1000;
 
 let collapseTimer = null;
+let backgroundReleaseTimer = null;
 
 function consoleEngaged() {
   const el = $('chat-area');
@@ -38,6 +40,20 @@ function scheduleConsoleCollapse(delay = COLLAPSE_DELAY_MS) {
     if (!worldcupActive || consoleEngaged()) return;
     $('chat-area')?.classList.add('wc-collapsed');
   }, delay);
+}
+
+function cancelBackgroundRelease() {
+  if (backgroundReleaseTimer) clearTimeout(backgroundReleaseTimer);
+  backgroundReleaseTimer = null;
+}
+
+function scheduleBackgroundRelease(frame) {
+  if (worldcupActive) return;
+  cancelBackgroundRelease();
+  backgroundReleaseTimer = setTimeout(() => {
+    backgroundReleaseTimer = null;
+    if (!worldcupActive && frame) frame.src = 'about:blank';
+  }, BACKGROUND_RELEASE_MS);
 }
 
 function initConsoleCollapse() {
@@ -94,6 +110,7 @@ export function setWorldcupMode(visible, { source = 'brain-ui' } = {}) {
   if (nextVisible) {
     // 取消可能还在等退场动画的卸载（快速关了又开）
     if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
+    cancelBackgroundRelease();
     // 与其他全屏模式互斥
     setHotspotMode(false, { source: 'worldcup_open' });
     for (const mode of ['video-mode', 'image-mode', 'music-mode']) {
@@ -111,16 +128,15 @@ export function setWorldcupMode(visible, { source = 'brain-ui' } = {}) {
     // 只在球还在自己手里（chat-area）时归位——已被视频等其他模式接管时不抢
     const vp = document.getElementById('voice-panel');
     if (vp && vp.parentElement === document.getElementById('chat-area')) restoreVoicePanel();
-    // 先让 iframe 播退场动画，再淡出面板并卸载页面
-    // （卸载停掉 iframe 内的轮询，避免 viewed 状态被无限续期）
+    // 先让 iframe 播退场动画，再淡出面板；后台未重新展开满 5 分钟后才卸载页面。
     const frameLoaded = !!(frame && frame.src && !frame.src.includes('about:blank'));
     if (frameLoaded) {
       try { frame.contentWindow?.postMessage({ type: 'worldcup-exit' }, '*'); } catch {}
     }
     const finishClose = () => {
       closeTimer = null;
-      if (frame) frame.src = 'about:blank';
       document.body.classList.remove('worldcup-mode');
+      scheduleBackgroundRelease(frame);
     };
     if (frameLoaded) closeTimer = setTimeout(finishClose, EXIT_ANIMATION_MS);
     else finishClose();

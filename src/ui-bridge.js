@@ -29,7 +29,7 @@ export function summarizeToolCall(t = {}) {
     const range = rangeParts.length ? ` ${rangeParts.join(' ')}` : ''
     return `read_file(${pathArg}${range})${status}`
   }
-  if (t.name === 'exec_command') return `exec_command(${String(args.command || '').slice(0, 80)})${status}`
+  if (t.name === 'run_command' || t.name === 'exec_command') return `${t.name}(${String(args.command || '').slice(0, 80)})${status}`
   if (t.name === 'install_software') return `install_software(${String(args.software || args.brew_name || args.url || '').slice(0, 80)})${status}`
   return `${t.name || 'tool'}${status}`
 }

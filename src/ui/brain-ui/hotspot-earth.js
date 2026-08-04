@@ -147,10 +147,12 @@ export class HotspotEarth {
 
     this.animFrame = null;
     this._bound = {};
+    this.disposed = false;
   }
 
   async init() {
     const T = await loadThree();
+    if (this.disposed) return null;
 
     // ── 场景 ──────────────────────────────────────────────
     this.scene = new T.Scene();
@@ -194,6 +196,11 @@ export class HotspotEarth {
       load(TEX.specular),
       load(TEX.clouds),
     ]);
+    // 面板在贴图加载期间被关闭时，不能在后台继续完成场景初始化。
+    if (this.disposed) {
+      [earthTex, normalTex, specTex, cloudTex].forEach((texture) => texture?.dispose?.());
+      return null;
+    }
     [earthTex, cloudTex].forEach((tex) => {
       if (tex && T.SRGBColorSpace) tex.colorSpace = T.SRGBColorSpace;
     });
@@ -284,6 +291,7 @@ export class HotspotEarth {
 
     // ── 开始渲染循环 ──────────────────────────────────────
     this._animate();
+    return this;
   }
 
   _buildHotspots(T) {
@@ -362,6 +370,7 @@ export class HotspotEarth {
   }
 
   _animate() {
+    if (this.disposed || !this.renderer || !this.scene || !this.camera) return;
     this.animFrame = requestAnimationFrame(() => this._animate());
 
     // 入场动画（弹簧效果）
@@ -440,7 +449,10 @@ export class HotspotEarth {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     if (this.animFrame) cancelAnimationFrame(this.animFrame);
+    this.animFrame = null;
     const c = this.canvas;
     const b = this._bound;
     if (b.onDown)  c.removeEventListener('mousedown',  b.onDown);
@@ -451,7 +463,29 @@ export class HotspotEarth {
     if (b.onMove)  c.removeEventListener('touchmove',  b.onMove);
     if (b.onUp)    c.removeEventListener('touchend',   b.onUp);
     if (b.onWheel) c.removeEventListener('wheel',      b.onWheel);
+    this.scene?.traverse((node) => {
+      node.geometry?.dispose?.();
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      for (const material of materials) {
+        if (!material) continue;
+        for (const value of Object.values(material)) {
+          if (value?.isTexture) value.dispose?.();
+        }
+        material.dispose?.();
+      }
+    });
+    this.renderer?.renderLists?.dispose?.();
     this.renderer?.dispose();
+    // WebGLRenderer.dispose() 会清空 three 的缓存；强制丢失 context 可立即归还 GPU 资源。
+    this.renderer?.forceContextLoss?.();
     this.renderer = null;
+    this.scene = null;
+    this.camera = null;
+    this.earth = null;
+    this.clouds = null;
+    this.atmo = null;
+    this.atmo2 = null;
+    this.stars = null;
+    this.hotspots = null;
   }
 }

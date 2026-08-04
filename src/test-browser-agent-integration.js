@@ -22,6 +22,7 @@ import { execBrowserSetDisplayMode } from './capabilities/tools/browser-display.
 import { execBrowserClearData } from './capabilities/tools/browser-data.js'
 import { execSystemBrowserOpen } from './capabilities/tools/system-browser.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from './mcp/browser-data-intent.js'
+import { executeBuiltInChromeTool } from './mcp/client-manager.js'
 
 const EXPECTED_BROWSER_TOOLS = [
   'browser_navigate',
@@ -102,7 +103,10 @@ assert.ok(TOOL_SCHEMAS.system_browser_open,
 assert.deepEqual(BROWSER_DATA_TOOLS, ['browser_clear_data'])
 assert.ok(TOOL_SCHEMAS.browser_clear_data,
   'persistent browser data deletion has a separate high-risk built-in schema')
-assert.deepEqual(findCapabilitiesByQuery('fill form')[0]?.tools, BROWSER_CAPABILITY_TOOLS,
+const browserDiscoveryTools = findCapabilitiesByQuery('fill form')[0]?.tools || []
+assert.equal(browserDiscoveryTools[0], 'browser_set_display_mode',
+  'browser discovery puts the required model-selected display mode before page actions')
+assert.deepEqual([...browserDiscoveryTools].sort(), [...BROWSER_CAPABILITY_TOOLS].sort(),
   'find_tool discovery loads dedicated Chrome plus the presentation-only display switch')
 
 for (const messageBody of [
@@ -112,7 +116,7 @@ for (const messageBody of [
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
   assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
-    `browser size switch injects the complete browser capability: ${messageBody}`)
+    `explicit browser size switch is executable in the first round: ${messageBody}`)
 }
 
 assert.equal(findCapabilitiesByQuery('用大的窗口打开')[0]?.tools[0], 'browser_set_display_mode',
@@ -126,7 +130,7 @@ for (const messageBody of [
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
   assert.ok(routed.includes('system_browser_open'),
-    `computer browser request injects its dedicated tool: ${messageBody}`)
+    `computer browser request exposes its explicit first-round tool: ${messageBody}`)
   assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => !routed.includes(name)),
     `computer browser request does not inject BaiLongma dedicated-Chrome tools: ${messageBody}`)
 }
@@ -140,7 +144,7 @@ for (const messageBody of [
   'browser automation', 'interact with the page', 'take a screenshot',
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
-  assert.ok(BROWSER_TOOLS.every(name => routed.includes(name)), `stateful browser route: ${messageBody}`)
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)), `explicit browser route is executable: ${messageBody}`)
   assert.ok([...FORBIDDEN_BROWSER_TOOLS, ...STATELESS_WEB_TOOLS].every(name => !routed.includes(name)),
     `legacy/unsafe tools excluded: ${messageBody}`)
 }
@@ -164,8 +168,8 @@ for (const messageBody of [
   'read this JavaScript-rendered article content', '用无头浏览器提取动态网页正文',
 ]) {
   const routed = selectTools({ messageBody, isTick: false })
-  assert.ok(BROWSER_TOOLS.every(name => routed.includes(name)),
-    `one-shot body read injects the dedicated Chrome contract: ${messageBody}`)
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `one-shot body read is executable in the first round: ${messageBody}`)
   assert.ok(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !routed.includes(name)),
     `one-shot body read excludes removed tools: ${messageBody}`)
 }
@@ -174,9 +178,9 @@ const combined = selectTools({
   messageBody: 'search online then open website and click the first link',
   isTick: false,
 })
-assert.ok(BROWSER_TOOLS.every(name => combined.includes(name))
+assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => combined.includes(name))
   && REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !combined.includes(name)),
-  'combined search + interaction uses only dedicated Chrome public tools')
+  'combined search + interaction is executable in the first round')
 
 assert.ok(BROWSER_TOOLS.every(name => !selectTools({
   messageBody: 'click',
@@ -188,8 +192,8 @@ const continued = selectTools({
   isTick: false,
   recentActionLog: [{ tool: 'browser_snapshot' }],
 })
-assert.ok(BROWSER_TOOLS.every(name => continued.includes(name)),
-  'a recent dedicated Chrome action restores the complete safe group for a terse follow-up')
+assert.ok(BROWSER_TOOLS.every(name => !continued.includes(name)) && continued.includes('find_tool'),
+  'a terse follow-up remains model-routed even after a browser action')
 assert.ok([...FORBIDDEN_BROWSER_TOOLS, ...STATELESS_WEB_TOOLS].every(name => !continued.includes(name)),
   'browser continuity cannot restore legacy, unsafe, or removed web tools')
 
@@ -315,8 +319,8 @@ for (const text of [
   'clear Bailongma browser data',
 ]) {
   assert.equal(isExplicitAgentBrowserDataDeletionRequest(text), true, `explicit Agent browser deletion recognized: ${text}`)
-  assert.ok(selectTools({ messageBody: text, isTick: false }).includes('browser_clear_data'),
-    `explicit Agent browser deletion injects only-authorized clear tool: ${text}`)
+  assert.equal(selectTools({ messageBody: text, isTick: false }).includes('browser_clear_data'), true,
+    `explicit Agent-browser deletion authority injects the guarded tool: ${text}`)
 }
 for (const text of [
   '关闭你的浏览器',
@@ -386,6 +390,17 @@ assert.equal(switchResult.ok, true)
 assert.equal(switchResult.browser_preview.mode, 'window')
 assert.equal(switchResult.browser_preview.transition, true)
 assert.equal(displayState.mode, 'window', 'mode switching updates the shared per-turn browser state')
+
+const displayRequired = JSON.parse(await executeBuiltInChromeTool(
+  'browser_navigate',
+  { url: 'https://example.com' },
+  { browserDisplayState: { mode: null } },
+))
+assert.equal(displayRequired.ok, false)
+assert.equal(displayRequired.code, 'BROWSER_DISPLAY_MODE_REQUIRED',
+  'browser navigation cannot silently choose a card or window when the model has not selected one')
+assert.match(displayRequired.error, /browser_set_display_mode[\s\S]*retry/i,
+  'the missing-mode error tells the model how to recover in the same tool loop')
 
 const systemLaunches = []
 const systemBrowserResult = JSON.parse(await execSystemBrowserOpen(

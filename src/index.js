@@ -18,8 +18,10 @@ import { startConsolidationLoop } from './memory/consolidation-loop.js'
 import { recordSelfEvolutionFromMemories } from './memory/self-evolution.js'
 import { runRuntimeInjector } from './context/runtime-injector.js'
 import { selectContextSections } from './context/section-gate.js'
+import { runKnowledgeInjector } from './knowledge/injector.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
+import { getToolSchemas } from './capabilities/schemas.js'
 import { pushMessage } from './inbound-message.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
@@ -34,7 +36,6 @@ import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as get
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { startMcpClients } from './mcp/client-manager.js'
-import { inferBrowserDisplayMode } from './mcp/browser-display.js'
 import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
@@ -56,9 +57,8 @@ import { parseMarkers } from './runtime/markers.js'
 import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildAutonomousTickDirections } from './runtime/tick-policy.js'
 import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
-import { extractVerbatimPayload, findRecentVerbatimPayload, hasInlineVerbatimPayload, isVerbatimOutputRequest, isVerbatimSetup, isVerbatimStart } from './runtime/verbatim.js'
+import { resolveActionContractForTurn } from './runtime/action-contract.js'
 import { filterSendMessageForLocalReply, turnNeedsExternalSendMessage } from './runtime/local-reply-tools.js'
-import { classifyActionContract } from './runtime/action-contract.js'
 import { refreshUserProfile } from './profile/infer.js'
 import { isSoftwareInstallRequest } from './software-install-intent.js'
 import { formatTerminalStreamContext } from './terminal-stream.js'
@@ -239,7 +239,6 @@ const state = {
   recentActions: [], // summaries of recent turns, format: { ts, summary }
   thoughtStack: [],  // thought stack, max 3 entries, format: { concept, line }
   startupSelfCheck: null,
-  pendingVerbatimRecital: null,
   pendingConfidenceHint: null,  // 上一轮 refresh-loop 的 confidence，供下次 runInjector 调整召回数量后清空
   tickCounter: 0,             // 累计 TICK 计数（每次进 isTick 路径自增）
   lastTaskRefreshTick: -10,   // 上次 TICK 路径触发 refresh-loop 时的 tickCounter；初值 -10 保证首个 TICK 立刻可触发（差值 = 0 - (-10) = 10 >= 5）
@@ -327,7 +326,7 @@ function summarizeToolCall(t = {}) {
     const range = rangeParts.length ? ` ${rangeParts.join(' ')}` : ''
     return `read_file(${pathArg}${range})${status}`
   }
-  if (t.name === 'exec_command') return `exec_command(${String(args.command || '').slice(0, 80)})${status}`
+  if (t.name === 'run_command' || t.name === 'exec_command') return `${t.name}(${String(args.command || '').slice(0, 80)})${status}`
   if (t.name === 'install_software') return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 80)})${status}`
   return `${t.name || 'tool'}${status}`
 }
@@ -440,6 +439,10 @@ function buildToolContextForProcess(msg, injection, turnId = '') {
     replyTurnId: turnId || null,
     voiceReply,
     currentUserMessage: msg?.content || null,
+    // A presentation is a model decision, not a browser fallback. Every turn
+    // begins unselected; browser_set_display_mode is the only operation that
+    // may set this to card or window before a page operation can run.
+    browserDisplayState: { mode: null },
     // 自我感知信号：传给工具执行层（如 upsert_memory 守门），让"镜像污染"在写入长期记忆前就被拦截
     selfPerception: injection.selfPerception || null,
 
@@ -482,49 +485,6 @@ function throwIfAborted(signal) {
 function getProcessPriority(msg) {
   if (!msg) return PRIORITY.tick
   return typeof msg.priority === 'number' ? msg.priority : PRIORITY.background
-}
-
-function deliverDirectReply(msg, content, finishTurn) {
-  const timestamp = nowTimestamp()
-  deliverFallbackReply(msg, content, timestamp)
-  finishTurn?.(content)
-}
-
-function tryHandleVerbatimTurn(input, msg, { finishTurn, conversationWindow = [] } = {}) {
-  if (!msg || msg.silent === true) return false
-  const text = String(input || '').trim()
-  if (!text) return false
-
-  if (isVerbatimStart(text) && state.pendingVerbatimRecital?.text) {
-    const reply = state.pendingVerbatimRecital.text
-    state.pendingVerbatimRecital = null
-    deliverDirectReply(msg, reply, finishTurn)
-    return true
-  }
-
-  const payload = extractVerbatimPayload(text)
-  if (isVerbatimSetup(text) && payload.length >= 20) {
-    state.pendingVerbatimRecital = {
-      text: payload,
-      sourceTimestamp: msg.timestamp || nowTimestamp(),
-      createdAt: Date.now(),
-    }
-    deliverDirectReply(msg, '收到，准备好了。说"开始"我就读。', finishTurn)
-    return true
-  }
-
-  if (isVerbatimOutputRequest(text)) {
-    const reply = (hasInlineVerbatimPayload(text) && payload.length >= 20)
-      ? payload
-      : (state.pendingVerbatimRecital?.text || findRecentVerbatimPayload(conversationWindow, msg))
-    if (reply) {
-      state.pendingVerbatimRecital = null
-      deliverDirectReply(msg, reply, finishTurn)
-      return true
-    }
-  }
-
-  return false
 }
 
 function isFastUserMessage(msg) {
@@ -828,11 +788,6 @@ async function runTurn(input, label, msg = null) {
 
     if (isTick) awakeningManager.ensureStartupSelfCheckState()
 
-    const earlyConversationWindow = msg ? getRecentConversationTimeline(12, 2, { includeAbsorbed: true }) : []
-    if (isUserTurn && tryHandleVerbatimTurn(semanticInput, msg, { finishTurn, conversationWindow: earlyConversationWindow })) {
-      return
-    }
-
     // Key auto-config: if the user message contains an API key, silently configure it, purge the DB entry, notify frontend, and skip LLM
     let keyConfigFailDir = null
     if (isUserTurn && msg) {
@@ -1012,10 +967,22 @@ async function runTurn(input, label, msg = null) {
       fastUserPath,
       signal: controller.signal,
     })
+    // Knowledge evidence is retrieved independently from memories.  TICK
+    // turns deliberately do not pull documents merely because a region exists;
+    // an explicit question, document signal, or eligible task follow-up does.
+    const knowledgeInjectionPromise = runKnowledgeInjector({
+      query: isTick ? '' : (msg?.content || semanticInput),
+      task: state.task,
+      source: isTick ? 'tick' : 'turn',
+    })
     const weatherSurfacePromise = (isUserTurn && msg && !silentSignal)
       ? projectWeatherSurfaceForTurn(msg.content || semanticInput)
       : Promise.resolve(null)
-    const [runtimeInjection] = await Promise.all([runtimeInjectionPromise, weatherSurfacePromise])
+    const [runtimeInjection, knowledgeInjection] = await Promise.all([
+      runtimeInjectionPromise,
+      knowledgeInjectionPromise,
+      weatherSurfacePromise,
+    ])
     throwIfAborted(controller.signal)
 
     // 天气卡片投影与 runRuntimeInjector 并发;显式城市天气共用 in-flight wttr.in 请求。
@@ -1076,6 +1043,16 @@ async function runTurn(input, label, msg = null) {
         : null,
       userProfile: injection.userProfile || null,
       fastUserPath,
+      knowledge: {
+        reason: knowledgeInjection.reason,
+        regionCount: knowledgeInjection.regions.length,
+        candidateCount: knowledgeInjection.candidates.length,
+        evidence: knowledgeInjection.evidence.map(item => ({
+          citation_id: item.citation_id,
+          document_title: item.document_title || '',
+          source_uri: item.source_uri || '',
+        })),
+      },
     })
 
     // Update thought stack
@@ -1155,6 +1132,7 @@ async function runTurn(input, label, msg = null) {
       hasActiveTask,
       task: state.task || null,
       taskKnowledge: taskKnowledgeText,
+      knowledgeEvidence: knowledgeInjection.evidenceText,
       extraContext: extraContextJoined,
       awakeningTicks: awakeningManager.getAwakeningTicks(),
       threadView: buildThreadView(state),
@@ -1279,41 +1257,26 @@ async function runTurn(input, label, msg = null) {
 
     // 3. Call Jarvis LLM (can be interrupted by a new message)
     const toolContext = buildToolContextForProcess(msg, injection, sessionRef)
-    const browserDisplayMode = inferBrowserDisplayMode(semanticInput || '', {
-      autonomous: isTick || isScheduledTask,
-    })
-    const browserDisplayState = { mode: browserDisplayMode }
-    toolContext.browserDisplayMode = browserDisplayMode
-    toolContext.browserDisplayState = browserDisplayState
-    // Card/window are two presentations of the same live WebContentsView;
-    // browser actions remain attached to its stable DevTools target.
-    toolContext.browserSurface = 'bailongma_chrome'
+    // Intent routing remains model-led.  The narrow action contract below is
+    // not a general intent classifier: it is only an execution guard for a
+    // high-confidence side-effect request.  It prevents a text-only promise
+    // from being released as a completed action.
+    // Use the raw message body: semanticInput can include queue metadata that
+    // must never be interpreted as a second user request.
+    const requestedActionContract = isUserTurn && !silentSignal
+        ? resolveActionContractForTurn(toolContext.currentUserMessage || semanticInput || '', {
+          conversationWindow: injection.conversationWindow || [],
+          runtimeContext: runtimeInjection.macosMusicContextText || '',
+          strictEvaluation,
+        })
+      : null
     const browserModeForEvent = (name, args = {}) => {
       if (name === 'browser_set_display_mode') {
         const requested = String(args?.mode || '').trim().toLowerCase()
         if (requested === 'card' || requested === 'window') return requested
       }
-      return browserDisplayState.mode === 'window' ? 'window' : 'card'
-    }
-    // A reply being delivered is not evidence that a requested side effect
-    // happened.  Keep a narrow action contract for clear imperative requests;
-    // callLLM uses it to require a successful matching tool result before it
-    // accepts a completion-style reply.
-    // semanticInput is the full queue envelope for ordinary user turns
-    // (`[ID] timestamp [channel] body`).  Classify the raw body so envelope
-    // metadata is never mistaken for a second task (notably after browser_close).
-    const actionContract = isUserTurn && !silentSignal
-      ? classifyActionContract(toolContext.currentUserMessage || semanticInput || '', {
-          conversationWindow: injection.conversationWindow || [],
-        })
-      : null
-    if (actionContract) {
-      toolContext.actionContract = actionContract
-      emitEvent('action_contract', {
-        id: actionContract.id,
-        label: actionContract.label,
-        required_tools: actionContract.requiredTools,
-      })
+      const selected = String(toolContext.browserDisplayState?.mode || '').trim().toLowerCase()
+      return selected === 'card' || selected === 'window' ? selected : null
     }
     // Autonomy changes who makes the semantic decision, not the authority
     // boundary. High-risk tools still require an explicit user-driven turn.
@@ -1351,14 +1314,6 @@ async function runTurn(input, label, msg = null) {
     // send_message 才能送达外部平台。省掉 send_message 那一整轮额外 LLM 调用是语音提速的关键。
     localReply = isUserTurn && !!msg?.fromId && !silentSignal && !isExternalChannel(msg?.channel)
     let turnTools = resolveTurnTools(injection.tools, { silentSignal, strictEvaluation })
-    // The router is intentionally sparse.  Once a request is confidently an
-    // action, however, do not make execution depend on the model remembering
-    // to discover the relevant tool via find_tool first.
-    if (actionContract) {
-      for (const name of actionContract.requiredTools) {
-        if (!turnTools.includes(name)) turnTools.push(name)
-      }
-    }
     turnTools = filterSendMessageForLocalReply(turnTools, { localReply, silentSignal, input })
     // 语音轮撤掉 send_message（用户决策）：语音回复直接走纯文本 → runtime 协议兜底 executeTool
     // 投递 + 自动 TTS，模型既不必也不能调 send_message，彻底消除"调工具那一轮"的延迟，也不让它
@@ -1372,6 +1327,29 @@ async function runTurn(input, label, msg = null) {
     if (localReply && turnTools.includes('capability_demo')) {
       turnTools = turnTools.filter(t => t !== 'send_message')
     }
+    // The router is intentionally sparse.  A high-confidence action request
+    // must nevertheless expose its own evidence-producing tools; otherwise
+    // the model can only talk about doing it or spend a round rediscovering an
+    // already-known capability.  Respect strict-evaluation exclusions.
+    const actionTools = requestedActionContract?.requiredTools || []
+    if (actionTools.length > 0) {
+      for (const name of actionTools) {
+        if (!turnTools.includes(name)) turnTools.push(name)
+      }
+      toolContext.actionContract = {
+        ...requestedActionContract,
+        requiredTools: actionTools,
+      }
+    } else {
+      toolContext.actionContract = null
+    }
+    if (toolContext.actionContract) {
+      emitEvent('action_contract', {
+        id: toolContext.actionContract.id,
+        label: toolContext.actionContract.label,
+        required_tools: toolContext.actionContract.requiredTools,
+      })
+    }
     const capabilityDemoTurn = localReply && turnTools.includes('capability_demo')
     const toolPromptHints = formatToolPromptHintsForSchemas(injection.activePolicies || [], turnTools)
     if (Object.keys(toolPromptHints).length > 0) {
@@ -1381,6 +1359,25 @@ async function runTurn(input, label, msg = null) {
         count: Object.values(toolPromptHints).reduce((sum, hints) => sum + (Array.isArray(hints) ? hints.length : 0), 0),
       })
     }
+    // Observability for the execution path: `injector_result.tools` is only
+    // the first pass.  Contracts and capability routing may add tools later,
+    // and names without a schema are not visible to the provider at all.
+    const modelToolNames = getToolSchemas(turnTools, { toolPromptHints })
+      .map(schema => schema?.function?.name)
+      .filter(Boolean)
+    const modelToolSet = new Set(modelToolNames)
+    emitEvent('tool_inventory', {
+      initial_tools: injection.tools || [],
+      final_requested_tools: turnTools,
+      model_visible_tools: modelToolNames,
+      unavailable_tools: turnTools.filter(name => !modelToolSet.has(name)),
+      action_contract: toolContext.actionContract
+        ? {
+            id: toolContext.actionContract.id,
+            required_tools: toolContext.actionContract.requiredTools,
+          }
+        : null,
+    })
     // thinking 不用"消息是否 trivial"的正则判定来开关 reasoning：浅层模式不该替模型决定"这题用不用想"
     // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
     // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
@@ -1465,18 +1462,18 @@ async function runTurn(input, label, msg = null) {
           // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
           emitEvent('stream_start', {
             mode,
-            // For a verified action request, keep draft prose private until a
-            // matching tool result exists. Otherwise “已经做好了” can appear in
-            // TUI/TTS before the runtime has established that anything ran.
-            plainReply: mode === 'text' && localReply && !actionContract,
-            speak: mode === 'text' && voiceTurn && !silentSignal && !actionContract,
+            // A completion-looking draft is not user-visible evidence.  Keep
+            // it private until the action contract has a successful tool
+            // result; callLLM will then deliver the verified final reply.
+            plainReply: mode === 'text' && localReply && !toolContext.actionContract,
+            speak: mode === 'text' && voiceTurn && !silentSignal && !toolContext.actionContract,
             turn_id: sessionRef,
             target_client_id: msg?.clientId || '',
           })
           if (mode === 'text' && voiceTurn) {
             console.log(
               `[voice-route] stream_start turn=${sessionRef}`
-              + ` target=${msg?.clientId || 'missing'} speak=${!silentSignal && !actionContract}`,
+              + ` target=${msg?.clientId || 'missing'} speak=${!silentSignal && !toolContext.actionContract}`,
             )
           }
         } else if (event === 'chunk') {

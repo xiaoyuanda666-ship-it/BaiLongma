@@ -89,10 +89,10 @@ try {
   assert(softwareQuestion.contextText.includes('Do not claim an app is installed unless it appears here.'), 'installed software context includes evidence warning')
 
   const ruleTools = selectTools({ messageBody: '创建一条上下文规则' })
-  assert(ruleTools.includes('manage_rule'), 'rule-management wording exposes manage_rule')
+  assert(!ruleTools.includes('manage_rule') && ruleTools.includes('find_tool'), 'rule-management intent is model-routed through find_tool')
 
   const serverTools = selectTools({ messageBody: '登录我的服务器执行 hostname' })
-  assert(serverTools.includes('exec_command'), 'server-login wording exposes exec_command')
+  assert(!serverTools.includes('exec_command') && serverTools.includes('find_tool'), 'server-login intent is model-routed through find_tool')
 
   const direct = callRule(execManageRule, {
     action: 'propose',

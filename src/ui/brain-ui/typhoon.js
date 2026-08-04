@@ -8,9 +8,11 @@ const EXIT_ANIMATION_MS = 680
 const COLLAPSE_DELAY_MS = 1600
 const OPEN_GRACE_MS = 3000
 const MESSAGE_PEEK_MS = 6000
+const BACKGROUND_RELEASE_MS = 5 * 60 * 1000
 let active = false
 let closeTimer = null
 let collapseTimer = null
+let backgroundReleaseTimer = null
 
 function reportState(visible, source = 'brain-ui') {
   fetch(apiUrl('/typhoon-state'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !!visible, source }) }).catch(() => {})
@@ -22,6 +24,15 @@ function scheduleConsoleCollapse(delay = COLLAPSE_DELAY_MS) {
   if (collapseTimer) clearTimeout(collapseTimer)
   collapseTimer = setTimeout(() => { collapseTimer = null; if (active && !consoleEngaged()) $('chat-area')?.classList.add('ty-collapsed') }, delay)
 }
+function cancelBackgroundRelease() { if (backgroundReleaseTimer) clearTimeout(backgroundReleaseTimer); backgroundReleaseTimer = null }
+function scheduleBackgroundRelease(frame) {
+  if (active) return
+  cancelBackgroundRelease()
+  backgroundReleaseTimer = setTimeout(() => {
+    backgroundReleaseTimer = null
+    if (!active && frame) frame.src = 'about:blank'
+  }, BACKGROUND_RELEASE_MS)
+}
 
 export function setTyphoonMode(visible, { source = 'brain-ui' } = {}) {
   const next = !!visible
@@ -30,6 +41,7 @@ export function setTyphoonMode(visible, { source = 'brain-ui' } = {}) {
   const frame = $('typhoon-frame')
   if (next) {
     if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+    cancelBackgroundRelease()
     setHotspotMode(false, { source: 'typhoon_open' })
     setWorldcupMode(false, { source: 'typhoon_open' })
     for (const mode of ['video-mode', 'image-mode', 'music-mode']) document.body.classList.remove(mode)
@@ -43,7 +55,7 @@ export function setTyphoonMode(visible, { source = 'brain-ui' } = {}) {
     if (voice && voice.parentElement === $('chat-area')) restoreVoicePanel()
     const loaded = !!(frame && frame.src && !frame.src.includes('about:blank'))
     if (loaded) { try { frame.contentWindow?.postMessage({ type: 'typhoon-exit' }, '*') } catch {} }
-    const finish = () => { closeTimer = null; if (frame) frame.src = 'about:blank'; document.body.classList.remove('typhoon-mode') }
+    const finish = () => { closeTimer = null; document.body.classList.remove('typhoon-mode'); scheduleBackgroundRelease(frame) }
     if (loaded) closeTimer = setTimeout(finish, EXIT_ANIMATION_MS); else finish()
   }
   window.dispatchEvent(new CustomEvent('bailongma:typhoon-mode', { detail: { active: next } }))

@@ -35,8 +35,8 @@ function formatSandboxRuntimeStatus(security = null) {
     ? 'file_sandbox: ENABLED. File tools may read/write only inside sandbox/. If the user asks for files outside sandbox, do not retry the same blocked operation; explain that the sandbox is enabled and say it can be disabled if they want outside access.'
     : 'file_sandbox: DISABLED. File tools may access paths outside sandbox when the request calls for it.'
   const execLine = execSandboxEnabled
-    ? 'exec_sandbox: ENABLED. exec_command runs inside sandbox/ and cannot use absolute paths, parent directories, or home-directory references. If the user asks for outside filesystem operations, explain the current limit instead of probing repeatedly.'
-    : 'exec_sandbox: DISABLED. exec_command may run from the full filesystem; still handle destructive operations carefully.'
+    ? 'exec_sandbox: ENABLED. run_command runs inside sandbox/ and cannot use absolute paths, parent directories, or home-directory references. If the user asks for outside filesystem operations, explain the current limit instead of probing repeatedly.'
+    : 'exec_sandbox: DISABLED. run_command may run from the full filesystem; still handle destructive operations carefully.'
   const changedLine = security?.updatedAt
     ? `- changed_at: ${security.updatedAt}`
     : '- changed_at: legacy setting; exact change time was not recorded'
@@ -558,7 +558,7 @@ When the input comes from voice, reply in short, natural sentences because the a
   }
 
   // Music Mode
-  if (shouldInjectMusic(userMessage)) {
+  if (process.platform !== 'darwin' && shouldInjectMusic(userMessage)) {
     prompt += `\n\n${MUSIC_MODE_BLOCK}`
   }
 
@@ -621,6 +621,7 @@ export function buildContextBlock({
   hasActiveTask = false,
   task = null,
   taskKnowledge = '',
+  knowledgeEvidence = '',
   extraContext = '',
   awakeningTicks = 0,
   roundInfo = null,
@@ -905,6 +906,23 @@ ${recentLines.join('\n')}
 (Artifacts already built during the current task. Use as needed; do not reread files unnecessarily.)
 ${taskKnowledge}
 </task-knowledge>`)
+  }
+
+  // Knowledge Cortex is deliberately separate from autobiographical memory.
+  // Its entries are source-backed evidence with a stable citation; source facts
+  // outrank generic memories when the two conflict, while the current user turn
+  // still determines intent and requested action.
+  if (knowledgeEvidence) {
+    // formatKnowledgeEvidence already carries the evidence wrapper.  Accepting
+    // either its complete output or an unwrapped caller string keeps this
+    // boundary reusable without creating nested <knowledge-evidence> blocks.
+    const evidenceBody = String(knowledgeEvidence)
+      .replace(/^\s*<knowledge-evidence>\s*/i, '')
+      .replace(/\s*<\/knowledge-evidence>\s*$/i, '')
+    sections.push(`<knowledge-evidence>
+The following is source-backed material retrieved from the Knowledge Cortex. Use it for factual claims about its sources. Cite the supplied citation id when relying on it. If it conflicts with an ordinary memory, prefer the active source version and mention the discrepancy when it matters.
+${evidenceBody}
+</knowledge-evidence>`)
   }
 
   if (extraContext) {

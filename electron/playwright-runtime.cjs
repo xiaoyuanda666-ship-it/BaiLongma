@@ -64,6 +64,42 @@ function resolveBundledNodeExecutable({
   return existsSync(executable) ? executable : null
 }
 
+function configureBundledNodeRuntime({
+  isPackaged,
+  resourcesPath = process.resourcesPath,
+  projectRoot,
+  platform = process.platform,
+  arch = process.arch,
+  env = process.env,
+  existsSync = fs.existsSync,
+} = {}) {
+  const executable = resolveBundledNodeExecutable({
+    isPackaged,
+    resourcesPath,
+    projectRoot,
+    platform,
+    arch,
+    existsSync,
+  })
+  if (!executable) return null
+
+  // The backend runs inside Electron and command children inherit this env.
+  // Keep the executable contract for MCP, while also making ordinary `node`
+  // shell commands resolve against the bundled runtime.
+  env.BAILONGMA_NODE_RUNTIME_PATH = executable
+  env.BAILONGMA_MCP_NODE_PATH = executable
+  const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path')
+    || (platform === 'win32' ? 'Path' : 'PATH')
+  const delimiter = platform === 'win32' ? ';' : ':'
+  const runtimeDir = path.dirname(executable)
+  const entries = String(env[pathKey] || '').split(delimiter).filter(Boolean)
+  const normalize = value => platform === 'win32' ? value.toLowerCase() : value
+  if (!entries.some(entry => normalize(path.resolve(entry)) === normalize(path.resolve(runtimeDir)))) {
+    env[pathKey] = [runtimeDir, ...entries].join(delimiter)
+  }
+  return executable
+}
+
 function bundledBrowserRoot({
   isPackaged,
   resourcesPath = process.resourcesPath,
@@ -114,6 +150,7 @@ module.exports = {
   bundledBrowserRoot,
   bundledBrowserTarget,
   bundledNodeRuntimeTarget,
+  configureBundledNodeRuntime,
   configurePackagedPlaywright,
   packagedHostPlatform,
   resolveBundledChromiumExecutable,

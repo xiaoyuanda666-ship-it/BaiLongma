@@ -132,6 +132,18 @@ try {
     'built-in dedicated-Chrome snapshot remains model-visible under its native name')
   assert.ok(FORBIDDEN_CHROME_TOOLS.every(name => !tools.some(tool => tool.name === name)),
     'forbidden upstream Chrome tools stay outside the exposed catalog')
+  const browserDiscovery = JSON.parse(await executeTool(
+    'find_tool',
+    { query: '浏览器打开网页' },
+    { source: 'test', currentUserMessage: '打开网页' },
+  ))
+  assert.equal(browserDiscovery.ok, true, JSON.stringify(browserDiscovery))
+  assert.equal(browserDiscovery.loaded[0], 'browser_set_display_mode',
+    'generic browser discovery loads display-mode selection before navigation')
+  assert.ok(browserDiscovery.loaded.includes('browser_navigate'),
+    'generic browser discovery still loads navigation after display-mode selection')
+  assert.ok(browserDiscovery.loaded.length <= 8,
+    'browser discovery respects the find_tool schema-loading limit')
   assert.equal(
     evaluateToolPolicy('browser_navigate', { url: 'https://example.com' }, { autonomous: true }).allowed,
     false,
@@ -152,10 +164,22 @@ try {
     'schema loading replaces removed web tools with the native dedicated-Chrome tool',
   )
 
+  const browserToolContext = {
+    source: 'test',
+    mcpDeps,
+    browserDisplayState: { mode: null },
+  }
+  const modeSelection = JSON.parse(await executeTool(
+    'browser_set_display_mode',
+    { mode: 'card', reason: 'test model explicitly selected compact presentation' },
+    browserToolContext,
+  ))
+  assert.equal(modeSelection.ok, true, JSON.stringify(modeSelection))
+
   const snapshot = JSON.parse(await executeTool(
     'browser_snapshot',
     {},
-    { source: 'test', mcpDeps },
+    browserToolContext,
   ))
   assert.equal(snapshot.ok, true, JSON.stringify(snapshot))
   assert.equal(snapshot.remote_tool, 'browser_snapshot')

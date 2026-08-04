@@ -474,7 +474,8 @@ const PARAM_ALIASES = {
   list_dir: { directory: 'path', dir: 'path', folder: 'path' },
   make_dir: { directory: 'path', dir: 'path', folder: 'path' },
   delete_file: { file: 'path', filename: 'path' },
-  exec_command: { cmd: 'command', shell: 'command', bg: 'background' },
+  run_command: { cmd: 'command', shell: 'command', bg: 'background', profile: 'mode' },
+  exec_command: { cmd: 'command', shell: 'command', bg: 'background' }, // legacy
   web_search: { q: 'query', keyword: 'query', keywords: 'query', search: 'query' },
   web_read: { link: 'url', href: 'url', uri: 'url' },
   fetch_url: { link: 'url', href: 'url', uri: 'url' },
@@ -574,8 +575,9 @@ function summarizeToolCall(name, args = {}) {
       return `delete_file(${args.path || args.filename || args.file_path || '?'})`
     case 'make_dir':
       return `make_dir(${args.path || args.dir || args.directory || '?'})`
+    case 'run_command':
     case 'exec_command':
-      return `exec_command(${String(args.command || args.cmd || '?').slice(0, 80)})`
+      return `${name}(${String(args.command || args.cmd || '?').slice(0, 80)})`
     default: {
       const preview = formatToolArgPreview(args)
       return preview ? `${name}(${preview})` : name
@@ -692,6 +694,7 @@ const TOOL_LOOP_LIMITS = {
 
 const HIGH_RISK_TOOLS = new Set([
   'delete_file',
+  'run_command',
   'exec_command',
   'kill_process',
   'web_search',
@@ -789,7 +792,7 @@ const REPORT_CHANNEL_TOOLS = new Set(['send_message', 'express'])
 // ackSent）。只覆盖真正会让人等的工具；秒回的普通问答不在此列，避免把简单对话变啰嗦。
 const SLOW_ACK_TOOLS = new Set([
   'generate_image', 'generate_music', 'generate_lyrics',
-  'web_search', 'web_read', 'fetch_url', 'browser_read', 'browser_navigate', 'deep_research', 'exec_command',
+  'web_search', 'web_read', 'fetch_url', 'browser_read', 'browser_navigate', 'deep_research', 'run_command', 'exec_command',
 ])
 function isSlowAckTool(name, args) {
   if (name === 'music') return String(args?.action || '').trim() === 'download'  // 仅下载慢；search/list 秒回
@@ -806,7 +809,7 @@ function slowAckText(name, args) {
     const q = String(args?.query || args?.q || args?.url || '').trim()
     return q ? `我查一下「${q.length > 30 ? q.slice(0, 30) + '…' : q}」～` : '我查一下～'
   }
-  if (name === 'exec_command') return '我跑一下～'
+  if (name === 'run_command' || name === 'exec_command') return '我跑一下～'
   return '收到，我处理一下～'
 }
 

@@ -20,7 +20,7 @@
 
 export const CODING_BLOCK = `## Coding Discipline
 You are writing or modifying code. Work in vertical slices, not horizontal ones:
-1. **Skeleton first — run it immediately.** Write the smallest thing that can run (one entry file with stub content), start it, and verify it actually loads (exec_command to run it, BaiLongma dedicated Chrome browser_navigate and inspect the automatic snapshot in its result). Only then add features. Never write the whole project across several files and run it for the first time at the end — by then every bug is buried under four files at once.
+1. **Skeleton first — run it immediately.** Write the smallest thing that can run (one entry file with stub content), start it, and verify it actually loads (run_command to run it, BaiLongma dedicated Chrome browser_navigate and inspect the automatic snapshot in its result). Only then add features. Never write the whole project across several files and run it for the first time at the end — by then every bug is buried under four files at once.
 2. **One slice = one verification.** After each meaningful addition, run/fetch again. One tool call buys you certainty about exactly which change broke what.
 3. **Make state visible.** Demos and prototypes should render their internal state on screen (current phase, key values, sim time) so problems show themselves instead of hiding in silence.
 4. **One command to run.** A single entry (node server.js or one HTML file). No build steps unless the user asked for them.
@@ -29,7 +29,7 @@ You are writing or modifying code. Work in vertical slices, not horizontal ones:
 
 export const DIAGNOSE_BLOCK = `## Debugging Discipline
 Something is broken. Before touching any code:
-1. **Build a feedback loop first.** Construct a repeatable pass/fail check that reproduces the symptom — BaiLongma dedicated Chrome browser_navigate checking the automatic snapshot in its result, exec_command running the entry and reading its output, or re-running the exact failing command. A reliable loop is 90% of the fix: every later step just consumes its signal.
+1. **Build a feedback loop first.** Construct a repeatable pass/fail check that reproduces the symptom — BaiLongma dedicated Chrome browser_navigate checking the automatic snapshot in its result, run_command running the entry and reading its output, or re-running the exact failing command. A reliable loop is 90% of the fix: every later step just consumes its signal.
 2. **Reproduce before you hypothesize.** Run the loop and watch it fail the way the user described. If you cannot reproduce it, say so and ask for the missing artifact (exact error text, what the screen shows) — do not guess-fix.
 3. **List 3 ranked, falsifiable hypotheses.** Each must make a prediction: "if X is the cause, changing Y makes the symptom disappear". A hypothesis without a prediction is a vibe — sharpen it or drop it. Never grab the first plausible idea and start editing.
 4. **Change one variable at a time**, testing against the loop, starting from the top hypothesis.
@@ -62,7 +62,7 @@ const DIAGNOSE_TEXT_RE = /报错|出错|错误|坏了|崩了|崩溃|打不开|�
 function recentActionsLookLikeCoding(recentActionsText) {
   const t = String(recentActionsText || '')
   if (!t) return false
-  return /write_file\(/.test(t) && /(exec_command\(|node |npm )/.test(t)
+  return /write_file\(/.test(t) && /(run_command\(|exec_command\(|node |npm )/.test(t)
 }
 
 /**

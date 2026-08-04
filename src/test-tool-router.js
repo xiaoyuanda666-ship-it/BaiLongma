@@ -1,535 +1,70 @@
-// Tool-router 按需注入纯算法测试（动态上下文记忆池第 4 步）。
-//
-// tool-router.js 不碰 DB / 网络 / LLM，纯函数，直接 import 即可。
-//
+// Directly executable registered capabilities must arrive in the first model
+// round.  Generic capabilities remain discoverable through find_tool.
 // Run: node src/test-tool-router.js
 
+import assert from 'node:assert/strict'
 import { selectTools } from './memory/tool-router.js'
-import { BROWSER_TOOLS } from './capabilities/capability-registry.js'
 
-const REMOVED_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
-const REMOVED_BROWSER_TOOLS = ['browser_sessions', 'browser_open', 'browser_inspect', 'browser_act']
-const REMOVED_WEB_AND_BROWSER_TOOLS = [...REMOVED_WEB_TOOLS, ...REMOVED_BROWSER_TOOLS]
+const CORE = ['send_message', 'recall_memory', 'find_tool', 'ui_set']
+const LOCAL_VISUAL = ['person_card_mode', 'knowledge_cortex_mode']
+const GENERIC_TOOLS = [
+  'read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir',
+  'run_command', 'manage_reminder',
+  'manage_knowledge_region', 'import_knowledge', 'search_knowledge', 'inspect_knowledge_source',
+  'terminal_stream', 'manage_api_capability',
+]
 
-let failed = 0
-function assert(cond, label) {
-  if (!cond) {
-    console.error(`FAIL: ${label}`)
-    failed++
-    process.exitCode = 1
-  } else {
-    console.log(`PASS: ${label}`)
-  }
-}
+const intents = [
+  '请创建知识脑区并导入 30 个 Markdown 文档',
+  '3000 端口被谁占用？',
+  '帮我执行 git status',
+  '明天九点提醒我开会',
+]
 
-function has(tools, name) {
-  return tools.includes(name)
-}
-function hasAll(tools, names) {
-  return names.every(n => tools.includes(n))
-}
-function hasNone(tools, names) {
-  return names.every(n => !tools.includes(n))
+for (const messageBody of intents) {
+  const tools = selectTools({ messageBody, isTick: false, senderId: 'ID:000001' })
+  assert.deepEqual(tools, [...CORE, ...LOCAL_VISUAL], `generic tools remain discoverable: ${messageBody}`)
 }
 
-// ====== 1) Filesystem 触发 ======
-{
-  const tools = selectTools({
-    messageBody: '帮我读一下 D:\\xxx\\README.md',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['read_file', 'write_file', 'list_dir']),
-    `1) filesystem keywords → fs group injected (got: ${tools.join(',')})`)
-  assert(has(tools, 'send_message'), '1) core send_message present')
-  assert(!has(tools, 'search_memory'), '1) ordinary filesystem request does not expose memory diagnostics')
+const web = selectTools({ messageBody: '搜索今天的新闻并打开网页', isTick: false, senderId: 'ID:000001' })
+for (const tool of ['browser_set_display_mode', 'browser_navigate', 'browser_snapshot']) {
+  assert.ok(web.includes(tool), `explicit web intent injects ${tool} in the first round`)
 }
 
-// ====== 2) Web 触发 ======
-{
-  const tools = selectTools({
-    messageBody: '搜一下 vLLM 最新版本',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    `2) web search → only official Playwright MCP injected (got: ${tools.join(',')})`)
-  assert(hasNone(tools, ['exec_command', 'kill_process']),
-    '2) exec group not over-triggered')
+const systemBrowser = selectTools({ messageBody: '用我电脑上的浏览器打开 https://example.com', isTick: false })
+assert.ok(systemBrowser.includes('system_browser_open'), 'explicit system-browser request injects its only valid tool')
+assert.ok(!systemBrowser.includes('browser_navigate'), 'system-browser request does not expose the managed-browser substitute')
+
+const install = selectTools({ messageBody: '帮我安装一个软件', isTick: false, senderId: 'ID:000001' })
+assert.ok(install.includes('install_software'), 'software installation is available in the first round')
+
+if (process.platform === 'darwin') {
+  const pauseMusic = selectTools({ messageBody: '暂停', isTick: false, senderId: 'ID:000001' })
+  assert.ok(pauseMusic.includes('system_music'), 'terse pause exposes macOS system music control immediately')
+  assert.ok(!pauseMusic.includes('music'), 'macOS never exposes Bailongma local music library')
+  const playVideo = selectTools({ messageBody: '播放这个视频', isTick: false, senderId: 'ID:000001' })
+  assert.ok(!playVideo.includes('system_music'), 'video playback does not activate macOS system music control')
 }
 
-// ====== 3) Reminder 触发 ======
-{
-  const tools = selectTools({
-    messageBody: '提醒我明天 9 点开会',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'manage_reminder'),
-    `3) reminder keyword → manage_reminder injected (got: ${tools.join(',')})`)
+const activeTask = selectTools({ messageBody: '继续', hasTask: true })
+for (const tool of ['set_task', 'complete_task', 'update_task_step', 'review_work']) {
+  assert.ok(activeTask.includes(tool), `active task retains runtime control: ${tool}`)
 }
 
-// ====== 4) 短闲聊 → 真正精简基线 ======
-{
-  const tools = selectTools({
-    messageBody: '闲聊两句',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  // 没有强意图关键词时，不应补 web/filesystem；Agent 可经 find_tool 按需发现。
-  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'read_file', 'write_file', 'delete_file', 'make_dir']),
-    `4) sparse msg stays sparse (got: ${tools.join(',')})`)
-  assert(has(tools, 'send_message'), '4) core still present')
-  assert(hasNone(tools, ['set_task', 'search_memory', 'probe_memory', 'voice_retire']),
-    '4) sparse msg excludes task, memory diagnostics, and voice-only tool')
+const tick = selectTools({ messageBody: '', isTick: true })
+for (const tool of ['search_memory', 'probe_memory', 'set_tick_interval']) {
+  assert.ok(tick.includes(tool), `tick retains runtime control: ${tool}`)
 }
+assert.ok(GENERIC_TOOLS.every(tool => !tick.includes(tool)), 'tick does not preselect generic capabilities')
 
-// ====== 5) TICK 精简基线 + 按需发现 ======
-{
-  const tools = selectTools({
-    messageBody: '',
-    isTick: true,
-    senderId: null,
-  })
-  // Tick 只直接拿判断/记忆/节奏能力；业务能力由 find_tool 按判断装载。
-  assert(has(tools, 'send_message'), '5) TICK has core send_message')
-  assert(has(tools, 'find_tool'), '5) TICK has capability discovery')
-  assert(has(tools, 'search_memory'), '5) TICK has search_memory')
-  assert(has(tools, 'set_tick_interval'), '5) TICK has set_tick_interval')
-  assert(tools.length === 7, `5) clean TICK baseline stays compact at 7 tools (got ${tools.length}: ${tools.join(',')})`)
-  assert(hasNone(tools, [
-    ...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS,
-    'read_file', 'manage_reminder', 'manage_prefetch_task',
-    'hotspot_mode', 'exec_command', 'install_tool', 'media_mode',
-  ]), `5) TICK does not pre-decide business capabilities (got: ${tools.join(',')})`)
-}
+const attachment = selectTools({ messageBody: '![screenshot](data:image/png;base64,AAAA)' })
+assert.ok(attachment.includes('analyze_image'), 'an actual attached image remains available to the model')
 
-// ====== 5b) Active-task TICK keeps task controls, not unrelated business schemas ======
-{
-  const tools = selectTools({
-    messageBody: '',
-    isTick: true,
-    senderId: null,
-    hasTask: true,
-  })
-  assert(hasAll(tools, ['complete_task', 'update_task_step', 'review_work', 'focus_banner']),
-    `5b) task TICK keeps explicit task judgment controls (got: ${tools.join(',')})`)
-  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'read_file', 'manage_reminder', 'hotspot_mode']),
-    `5b) task TICK still discovers unrelated capabilities on demand (got: ${tools.join(',')})`)
-}
+const external = selectTools({ messageBody: '请打开知识脑区', localVisualTurn: false })
+assert.ok(LOCAL_VISUAL.every(tool => !external.includes(tool)), 'external channels cannot expose local-only panels')
 
-// ====== 6) hasTask=true → 完整 task 控制组 ======
-{
-  const tools = selectTools({
-    messageBody: '刚才那个任务的进度报一下',
-    isTick: false,
-    senderId: 'ID:000001',
-    hasTask: true,
-  })
-  assert(hasAll(tools, ['set_task', 'complete_task', 'update_task_step']),
-    `6) hasTask=true → full task_ctrl group (got: ${tools.filter(t => t.includes('task')).join(',')})`)
-  // hasTask 还应解锁 focus_banner
-  assert(has(tools, 'focus_banner'),
-    '6) hasTask also unlocks focus_banner')
-}
+const installed = selectTools({ messageBody: 'anything', installedToolNames: ['example_extension'] })
+assert.ok(installed.includes('example_extension'), 'installed tools stay model-selectable')
+assert.ok(GENERIC_TOOLS.every(tool => !installed.includes(tool)), 'installed tools do not restore generic keyword routing')
 
-// ====== 6b) 无任务闲聊不暴露 set_task；明确任务意图才给 ======
-{
-  const tools = selectTools({
-    messageBody: '正常闲聊',
-    isTick: false,
-    senderId: 'ID:000001',
-    hasTask: false,
-  })
-  assert(!has(tools, 'set_task'), '6b) no task + no task intent → set_task omitted')
-  assert(hasNone(tools, ['complete_task', 'update_task_step']),
-    '6b) no task → no complete_task / update_task_step')
-}
-
-{
-  const tools = selectTools({
-    messageBody: '帮我创建一个多步任务，分阶段完成这个项目',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'set_task'), '6c) explicit task intent → set_task injected')
-}
-
-{
-  const tools = selectTools({
-    messageBody: '你还记得我们之前说过的部署方案吗？',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['search_memory', 'probe_memory']), '6d) explicit memory intent → memory tools injected')
-}
-
-{
-  const tools = selectTools({
-    messageBody: '先这样，再见',
-    isTick: false,
-    senderId: 'ID:000001',
-    isVoiceTurn: true,
-  })
-  assert(has(tools, 'voice_retire'), '6e) voice turn → voice_retire injected')
-}
-
-// ====== 7) Installed 工具：用户轮直给，Tick 按需发现 ======
-{
-  const tools = selectTools({
-    messageBody: '随便说点啥',
-    isTick: false,
-    senderId: 'ID:000001',
-    installedToolNames: ['my_custom_tool', 'another_custom'],
-  })
-  assert(hasAll(tools, ['my_custom_tool', 'another_custom']),
-    `7) user turn keeps installed tools directly available (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({
-    messageBody: '',
-    isTick: true,
-    senderId: null,
-    installedToolNames: ['my_custom_tool'],
-  })
-  assert(!has(tools, 'my_custom_tool'), '7b) installed tool is discoverable, not an implicit Tick autonomy grant')
-}
-
-// ====== 8) 中英混合：media 触发 ======
-{
-  const tools = selectTools({
-    messageBody: 'play some music please',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['media_mode', 'music']),
-    `8) "play some music" → media group injected (got: ${tools.join(',')})`)
-  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    '8) media link discovery uses only official Playwright MCP')
-}
-
-// ====== 9) ActionLog 保活（跨轮连贯） ======
-{
-  const tools = selectTools({
-    messageBody: '继续',  // 短到不会命中任何关键词
-    isTick: false,
-    senderId: 'ID:000001',
-    recentActionLog: [
-      { tool: 'web_search', timestamp: '2026-05-19T10:00:00Z' },
-      { tool: 'web_read', timestamp: '2026-05-19T10:01:00Z' },
-    ],
-  })
-  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS) && hasNone(tools, BROWSER_TOOLS),
-    `9) legacy web ActionLog cannot revive removed tools or grant browser continuity (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '继续', isTick: false,
-    recentActionLog: [{ tool: 'web_search' }, { tool: 'web_read' }],
-  })
-  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS) && hasNone(tools, BROWSER_TOOLS),
-    `9b) legacy web ActionLog without timestamps remains suppressed (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '继续',
-    isTick: false,
-    recentActionLog: [{ tool: 'browser_snapshot' }],
-  })
-  assert(hasAll(tools, BROWSER_TOOLS),
-    `9c) 官方 Playwright recent action + 简短追问保活完整安全组 (got: ${tools.join(',')})`)
-  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    '9c) 浏览器连续操作不恢复任何旧 web/浏览器工具')
-}
-{
-  const tools = selectTools({
-    messageBody: '解释一下这个项目的架构',
-    isTick: false,
-    recentActionLog: [{ tool: 'browser_snapshot' }],
-  })
-  assert(hasNone(tools, BROWSER_TOOLS),
-    '9d) recent browser action 不向无关新话题泄漏单个或整组浏览器工具')
-}
-
-// ====== 10) 多模态生成 gate：mmCaps 没配 → 不注入 ======
-{
-  const tools = selectTools({
-    messageBody: '帮我画一张猫的图',
-    isTick: false,
-    senderId: 'ID:000001',
-    mmCaps: [],  // 未配置 image 能力
-  })
-  assert(!has(tools, 'generate_image'),
-    `10a) mmCaps 空 → generate_image NOT injected even with trigger (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '帮我画一张猫的图',
-    isTick: false,
-    senderId: 'ID:000001',
-    mmCaps: ['image'],
-  })
-  assert(has(tools, 'generate_image'),
-    `10b) mmCaps=['image'] + 画关键词 → generate_image 注入 (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '正常聊天，没说画图',
-    isTick: false,
-    senderId: 'ID:000001',
-    mmCaps: ['image', 'tts', 'music', 'lyrics'],
-  })
-  assert(hasNone(tools, ['generate_image', 'speak', 'generate_music', 'generate_lyrics']),
-    `10c) mmCaps 全配但无关键词 → MM 工具仍省掉 (got: ${tools.filter(t => t.startsWith('generate_') || t === 'speak').join(',')})`)
-}
-
-// ====== 11) 启动自检激活 ======
-{
-  const tools = selectTools({
-    messageBody: '',
-    isTick: true,
-    startupSelfCheckActive: true,
-  })
-  assert(hasAll(tools, [
-    'speak', 'complete_startup_self_check', 'read_file', 'write_file',
-    'browser_navigate', 'browser_snapshot', 'browser_close', 'hotspot_mode',
-  ]), '11) startupSelfCheckActive → fixed self-check tool set injected')
-  assert(hasNone(tools, BROWSER_TOOLS.filter(name => !['browser_navigate', 'browser_snapshot', 'browser_close'].includes(name))),
-    '11) startup self-check exposes only its three required Playwright tools')
-  assert(hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    '11) startup self-check exposes no removed web/browser tools')
-}
-
-// ====== 11a) every web route exposes only the official Playwright MCP workflow ======
-for (const messageBody of [
-  'search current news online',
-  '总结这个网页正文 https://example.com/article',
-  '读取这个 JavaScript 动态网页正文',
-  '搜索一下深圳最新天气',
-]) {
-  const tools = selectTools({ messageBody, isTick: false })
-  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    `11a) ${messageBody} → only official Playwright MCP (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({ messageBody: 'search online then open website and click the first link', isTick: false })
-  assert(hasAll(tools, BROWSER_TOOLS) && hasNone(tools, REMOVED_WEB_AND_BROWSER_TOOLS),
-    `11a2) combined search + interaction keeps only Playwright MCP (got: ${tools.join(',')})`)
-}
-
-// ====== 11b) Worldcup / Hotspot 不再被关键词自动注入 ======
-// 设计变更：worldcup_mode / hotspot_mode 不再因关键词命中而自动注入 schema；
-// 改由 Agent 依 prompt 规则自决，需要时调 find_tool 发现并当场装载（TOOL_GROUPS 仍保留触发词供 find_tool 用）。
-{
-  const tools = selectTools({
-    messageBody: '今天世界杯的赛况怎么样了',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(!has(tools, 'worldcup_mode'),
-    `11b) 世界杯关键词不再自动注入 worldcup_mode（改 Agent 经 find_tool 自决, got: ${tools.join(',')})`)
-  assert(has(tools, 'find_tool'),
-    '11b) find_tool 常驻——Agent 可据此发现并装载 worldcup_mode')
-}
-{
-  const tools = selectTools({
-    messageBody: '微博热搜现在有什么',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(!has(tools, 'hotspot_mode'),
-    `11c) 热点关键词不再自动注入 hotspot_mode（非 TICK 轮, got: ${tools.join(',')})`)
-  assert(has(tools, 'find_tool'),
-    '11c) find_tool 常驻——Agent 可据此发现并装载 hotspot_mode')
-}
-
-// ====== 12) Exec 触发 ======
-{
-  const tools = selectTools({
-    messageBody: '帮我执行一下 git status 这个命令',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['exec_command', 'kill_process', 'list_processes']),
-    `12) exec keyword → exec group injected (got: ${tools.join(',')})`)
-}
-
-// ====== 13) Admin 触发 ======
-{
-  const tools = selectTools({
-    messageBody: '装一下这个工具 / 卸载那个旧的',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['install_tool', 'uninstall_tool', 'list_tools']),
-    `13) admin keyword → admin group injected (got: ${tools.join(',')})`)
-}
-
-// ====== 14) Person card 由模型语义意图触发 ======
-// 路由器不再读消息文本猜人物意图。本地用户轮始终给模型同一 schema，
-// 是否真正打开卡片只取决于模型是否调用 person_card_mode。
-{
-  const tools = selectTools({
-    messageBody: '介绍一下周杰伦是个什么人',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'person_card_mode'),
-    `14) local user turn exposes person_card_mode for semantic intent (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '帮我写一个项目介绍',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'person_card_mode'),
-    `14b) schema availability is independent of person keywords (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '马云是谁',
-    isTick: false,
-    senderId: 'ID:000001',
-    localVisualTurn: false,
-  })
-  assert(!has(tools, 'person_card_mode'),
-    `14c) external turn cannot open a local person card (got: ${tools.join(',')})`)
-}
-{
-  const tools = selectTools({
-    messageBody: '马云是谁',
-    isTick: true,
-    senderId: 'ID:000001',
-    recentActionLog: [{ tool: 'person_card_mode' }],
-  })
-  assert(!has(tools, 'person_card_mode'),
-    `14d) Tick and ActionLog continuity cannot reactivate person_card_mode (got: ${tools.join(',')})`)
-}
-
-// ====== 14e) Terminal stream / progress window ======
-{
-  const tools = selectTools({
-    messageBody: 'please show a terminal stream progress window while writing files',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'terminal_stream'),
-    `14e) terminal stream intent -> terminal_stream injected (got: ${tools.join(',')})`)
-}
-
-// ====== 15) RECALL 路径 ======
-{
-  const tools = selectTools({
-    messageBody: '',
-    isTick: false,
-    senderId: null,
-    hasRecall: true,
-  })
-  assert(has(tools, 'search_memory'), '15) hasRecall → search_memory injected')
-}
-
-// ====== 16) Schema 数量对比（仅观察，不强制断言）======
-{
-  const tools = selectTools({
-    messageBody: '帮我安装剪映，最好下载官方安装包',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasAll(tools, ['install_software', 'find_tool']),
-    `16) software install intent -> dedicated install tool injected (got: ${tools.join(',')})`)
-  assert(hasNone(tools, [...REMOVED_WEB_AND_BROWSER_TOOLS, ...BROWSER_TOOLS, 'download_file', 'exec_command']),
-    `16) software install intent does not expose manual web/shell fallback before install_software (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({
-    messageBody: '现在请你帮我安装一个 QQ',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'install_software'),
-    `16b) natural app install request -> install_software injected (got: ${tools.join(',')})`)
-  assert(hasAll(tools, ['install_tool', 'list_tools']),
-    '16b) admin tools may also be present, but software install tools must not be missed')
-}
-
-{
-  const tools = selectTools({
-    messageBody: '安装一个工具市场里的自定义工具',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(hasNone(tools, ['exec_command', 'exec_task_command', 'download_file']),
-    `16c) marketplace/tool-factory install request does not over-trigger software installer tools (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({
-    messageBody: 'please install QQ for me',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'install_software'),
-    `16b-en) English app install request -> install_software injected (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({
-    messageBody: 'https://docs.example.test/vision-api\n\nsk-testVisionRouterKey1234567890',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  assert(has(tools, 'manage_api_capability'),
-    `17) API docs plus key -> manage_api_capability injected (got: ${tools.join(',')})`)
-}
-
-{
-  const tools = selectTools({
-    messageBody: '\u662f\u7684',
-    isTick: false,
-    senderId: 'ID:000001',
-    recentActionLog: [
-      {
-        tool: 'analyze_image',
-        status: 'error',
-        result_preview: '{"ok":false,"tool":"analyze_image","error":"not_configured"}',
-      },
-    ],
-  })
-  assert(has(tools, 'manage_api_capability'),
-    `18) confirm after unconfigured vision -> manage_api_capability injected (got: ${tools.join(',')})`)
-}
-
-{
-  const fullSetTools = selectTools({
-    messageBody: '帮我读 D:\\readme.md，搜下 https://google.com，运行命令，提醒我，画张图，听首歌',
-    isTick: true,
-    senderId: 'ID:000001',
-    hasTask: true,
-    hasRecall: true,
-    mmCaps: ['tts', 'image', 'music', 'lyrics'],
-    installedToolNames: ['custom_x'],
-  })
-  const minimalTools = selectTools({
-    messageBody: '嗯',
-    isTick: false,
-    senderId: 'ID:000001',
-  })
-  console.log(`\n[INFO] worst-case tool count: ${fullSetTools.length}`)
-  console.log(`[INFO] minimal-case tool count: ${minimalTools.length}`)
-  assert(fullSetTools.length > minimalTools.length,
-    `worst-case (${fullSetTools.length}) > minimal-case (${minimalTools.length})`)
-  // 官方 Playwright MCP 的安全白名单比旧无状态 web 工具更完整；即使最坏场景
-  // 展开整组，仍应保持在 50 以内，不能退回无界全量注入。
-  assert(fullSetTools.length <= 50,
-    `worst-case (${fullSetTools.length}) stays bounded`)
-}
-
-if (failed === 0) {
-  console.log('\nAll tool-router sanity checks complete.')
-} else {
-  console.log(`\n${failed} check(s) failed.`)
-}
+console.log('test-tool-router ok')
