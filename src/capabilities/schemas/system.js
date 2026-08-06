@@ -153,7 +153,7 @@ export const systemSchemas = {
           },
           browser_private_network: {
             type: 'boolean',
-            description: 'Grant or revoke the interactive browser\'s access to localhost, loopback, and private-network addresses. Default false. This is independent of backend LAN listening.'
+            description: 'Grant or revoke the interactive browser\'s access to localhost, loopback, and private-network addresses. Default true. This is independent of backend LAN listening.'
           },
           reason: {
             type: 'string',

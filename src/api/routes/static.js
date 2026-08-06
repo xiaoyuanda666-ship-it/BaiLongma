@@ -67,9 +67,46 @@ function serveAsset(req, res, assetRoot, relativePrefix) {
       res.end('asset not found')
       return
     }
+    const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || '').trim())
+    if (rangeMatch) {
+      const requestedStart = rangeMatch[1] === '' ? null : Number(rangeMatch[1])
+      const requestedEnd = rangeMatch[2] === '' ? null : Number(rangeMatch[2])
+      let start = requestedStart
+      let end = requestedEnd
+
+      if (start === null && end !== null) {
+        start = Math.max(0, stat.size - end)
+        end = stat.size - 1
+      } else {
+        start ??= 0
+        end = Math.min(end ?? stat.size - 1, stat.size - 1)
+      }
+
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+        || start < 0 || end < start || start >= stat.size) {
+        res.writeHead(416, {
+          'Content-Range': `bytes */${stat.size}`,
+          'Accept-Ranges': 'bytes',
+        })
+        res.end()
+        return
+      }
+
+      res.writeHead(206, {
+        'Content-Type': contentTypeFor(assetPath),
+        'Content-Length': end - start + 1,
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache',
+      })
+      fs.createReadStream(assetPath, { start, end }).pipe(res)
+      return
+    }
+
     res.writeHead(200, {
       'Content-Type': contentTypeFor(assetPath),
       'Content-Length': stat.size,
+      'Accept-Ranges': 'bytes',
       'Cache-Control': 'no-cache',
     })
     fs.createReadStream(assetPath).pipe(res)
@@ -145,7 +182,7 @@ export async function handleStaticRoutes(req, res, url) {
   }
 
   if (req.method === 'GET' && (url.pathname === '/brain-ui' || url.pathname === '/brain-ui.html')) {
-    if (config.needsActivation) {
+    if (config.needsActivation && !url.searchParams.has('intro-preview')) {
       res.writeHead(302, { Location: '/activation' })
       res.end()
       return true

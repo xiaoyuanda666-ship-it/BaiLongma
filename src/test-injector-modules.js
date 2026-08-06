@@ -32,6 +32,15 @@ function testMessageInputParsing() {
     senderId: null,
     messageBody: '裸消息也应该保留正文',
   })
+
+  assert.deepEqual(
+    parseMessageInput('[ID:000001 via wechat:clawbot:user-42] 2026-06-21T10:00:00+08:00 [WECHAT] 外部渠道消息'),
+    {
+      isTick: false,
+      senderId: 'ID:000001',
+      messageBody: '外部渠道消息',
+    }
+  )
 }
 
 function testStateHintConsumption() {

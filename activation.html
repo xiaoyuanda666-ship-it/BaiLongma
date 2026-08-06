@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bailongma 激活</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@1,600;1,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     html, body {
       margin: 0;
@@ -254,9 +257,558 @@
       font-size: 13px;
       color: #7a90a8;
     }
+
+    /* ── Activation arrival film ──
+       The timeline is scrubbed with the narration audio's currentTime in JS.
+       Each scene is paused and receives a negative delay, so animation remains
+       aligned even when audio playback briefly stalls. */
+    #activation-intro {
+      --bg0: #111821;
+      --bg1: #172231;
+      --bg-deep: #0d141d;
+      --ink: #f3f5fb;
+      --ink2: #a2adbd;
+      --dim: #778397;
+      --line: rgba(150, 169, 198, 0.13);
+      --line-strong: rgba(164, 183, 214, 0.32);
+      --panel: rgba(20, 28, 40, 0.78);
+      --panel-raised: rgba(26, 36, 50, 0.70);
+      --cool: #4f8cff;
+      --warm: #ff9f1c;
+      --ok: #39d98a;
+      --glow-tint1: rgba(255, 159, 28, 0.12);
+      --glow-tint2: rgba(79, 140, 255, 0.08);
+      position: fixed;
+      z-index: 30;
+      inset: 0;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 42%, var(--glow-tint1), transparent 30%),
+        radial-gradient(circle at 10% 88%, var(--glow-tint2), transparent 38%),
+        linear-gradient(145deg, var(--bg1) 0%, var(--bg0) 52%, var(--bg-deep) 100%);
+      color: var(--ink);
+      font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      transition: opacity .22s ease, visibility .22s step-end;
+    }
+    #activation-intro.active { opacity: 1; visibility: visible; pointer-events: auto; }
+    #activation-intro::before,
+    #activation-intro::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    #activation-intro::before {
+      opacity: .34;
+      background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: radial-gradient(circle at 50% 50%, black, transparent 74%);
+    }
+    #activation-intro::after {
+      opacity: .22;
+      background: repeating-linear-gradient(0deg, transparent 0 3px, rgba(164, 183, 214, .022) 3px 4px);
+    }
+    #activation-intro [data-intro-anim] {
+      animation-duration: 12.768s;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-play-state: paused;
+      will-change: transform, opacity, clip-path, filter, width;
+    }
+    .intro-kicker {
+      position: absolute;
+      top: 24px;
+      left: 30px;
+      font: 600 11px/1.2 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .2em;
+      color: var(--ink2);
+    }
+    .intro-kicker i { color: var(--warm); font-style: normal; }
+    .intro-orb-wrap {
+      position: absolute;
+      left: 50%; top: 50%;
+      width: min(440px, 82vw); aspect-ratio: 1;
+      transform: translate(-50%, -50%) scale(.035);
+      animation-name: intro-orb-arrival;
+      contain: layout paint size;
+    }
+    #activation-intro .intro-orb-wrap { animation-timing-function: cubic-bezier(.2, .82, .24, 1); }
+    #activation-intro-voice-canvas {
+      display: block;
+      width: 100%; height: 100%;
+      border: 0;
+      background: transparent;
+      image-rendering: auto;
+    }
+    @keyframes intro-orb-arrival {
+      0% { transform: translate(-50%, -50%) scale(.035); opacity: 0; filter: blur(10px); }
+      .8% { transform: translate(-50%, -50%) scale(.035); opacity: .08; filter: blur(9px); }
+      2.35% { transform: translate(-50%, -50%) scale(.45); opacity: .76; filter: blur(4px); }
+      4.7% { transform: translate(-50%, -50%) scale(1.12); opacity: 1; filter: blur(0); }
+      6.25% { transform: translate(-50%, -50%) scale(1); opacity: 1; filter: blur(0); }
+      9.5% { left: 50%; top: 50%; transform: translate(-50%, -50%) scale(1); opacity: 1; filter: blur(0); }
+      12.2%, 40% { left: 50%; top: 30%; transform: translate(-50%, -50%) scale(1); opacity: 1; filter: blur(0); }
+      43% { left: 50%; top: 50%; transform: translate(-50%, -50%) scale(1); opacity: 1; filter: blur(0); }
+      92% { left: 50%; top: 50%; transform: translate(-50%, -50%) scale(1); opacity: 1; filter: blur(0); }
+      94.5% { left: 14%; top: 38%; transform: translate(-50%, -50%) scale(.36); opacity: 1; filter: blur(0); }
+      98% { left: 14%; top: 38%; transform: translate(-50%, -50%) scale(.36); opacity: .84; filter: blur(0); }
+      100% { left: 14%; top: 38%; transform: translate(-50%, -50%) scale(.36); opacity: 0; filter: blur(1px); }
+    }
+    .intro-name {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: min(780px, 88vw);
+      transform: translate(-50%, -10%);
+      text-align: center;
+      pointer-events: none;
+      animation-name: intro-name-exit;
+    }
+    @keyframes intro-name-exit {
+      0%, 26.15% { opacity: 1; filter: blur(0); }
+      27.3% { opacity: .94; filter: blur(.3px) brightness(1.18); }
+      30.35%, 100% { opacity: 0; filter: blur(7px) brightness(1.5); }
+    }
+    .intro-name-letters {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      justify-content: center;
+      align-items: baseline;
+      gap: .015em;
+      font-family: "Exo 2", "Inter", sans-serif;
+      font-size: clamp(48px, 8vw, 112px);
+      font-style: italic;
+      font-weight: 700;
+      line-height: 1.08;
+      letter-spacing: .025em;
+      perspective: 900px;
+    }
+    .intro-name-particles {
+      position: absolute;
+      z-index: 0;
+      left: 50%;
+      top: -.18em;
+      width: min(720px, 88vw);
+      height: clamp(72px, 10vw, 132px);
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .intro-name-particles i {
+      position: absolute;
+      left: var(--x);
+      top: var(--y);
+      width: var(--size, 3px);
+      height: var(--size, 3px);
+      border-radius: 50%;
+      background: var(--warm);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--warm) 58%, transparent);
+      opacity: 0;
+      animation-name: intro-name-particle;
+      will-change: transform, opacity;
+    }
+    .intro-name-particles i:nth-child(even) {
+      background: var(--cool);
+      box-shadow: 0 0 8px color-mix(in srgb, var(--cool) 55%, transparent);
+    }
+    .intro-name-particles i:nth-child(3n) {
+      width: 8px;
+      height: 1px;
+      border-radius: 99px;
+    }
+    .intro-name-letter {
+      display: inline-block;
+      line-height: 1.08;
+      padding: .04em 0 .18em;
+      margin: -.04em 0 -.18em;
+      color: transparent;
+      background-image:
+        radial-gradient(circle, rgba(255, 255, 255, .96) 0 1px, transparent 1.35px),
+        radial-gradient(circle, var(--warm) 0 .82px, transparent 1.12px),
+        radial-gradient(circle, var(--cool) 0 .76px, transparent 1.08px);
+      background-size: 5px 5px, 13px 11px, 17px 13px;
+      background-position: 18px -12px, -14px 8px, 12px 16px;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-stroke: .35px rgba(243, 245, 251, .2);
+      clip-path: inset(-18% 100% -34% 0);
+      transform-origin: 50% 70%;
+      text-shadow: none;
+      filter: blur(8px) drop-shadow(-5px 4px 12px rgba(79, 140, 255, .28));
+      animation-name: intro-name-letter;
+    }
+    @keyframes intro-name-letter {
+      0%, 11.7% {
+        opacity: 0;
+        clip-path: inset(-18% 100% -34% 0);
+        transform: translate3d(-.16em, .42em, -80px) rotateY(-24deg) skewX(-12deg) scaleX(.42);
+        filter: blur(8px) drop-shadow(-5px 4px 12px rgba(79, 140, 255, .24));
+        background-position: 18px -12px, -14px 8px, 12px 16px;
+      }
+      13.8% {
+        opacity: 1;
+        clip-path: inset(-18% 0 -34% 0);
+        transform: translate3d(.035em, -.025em, 8px) rotateY(3deg) skewX(-4deg) scaleX(1.055);
+        filter: blur(0) drop-shadow(0 0 18px var(--glow-tint1));
+        background-position: 6px -3px, -4px 4px, 5px 8px;
+      }
+      15.2%, 26.2% {
+        opacity: 1;
+        clip-path: inset(-18% 0 -34% 0);
+        transform: translate3d(0, 0, 0) rotateY(0) skewX(-4deg) scaleX(1);
+        filter: blur(0) drop-shadow(0 0 10px rgba(255, 159, 28, .12));
+        background-position: 0 0, 2px 1px, 1px 3px;
+      }
+      26.8% {
+        opacity: .96;
+        clip-path: inset(-18% 0 -34% 0);
+        transform: translate3d(0, -.025em, 0) skewX(-4deg) scaleX(1.008);
+        filter: blur(0) brightness(1.45) drop-shadow(0 0 20px rgba(79, 140, 255, .22));
+        background-position: -3px -2px, 5px -3px, -4px 5px;
+      }
+      29.4% {
+        opacity: .12;
+        clip-path: inset(-18% 0 -34% 0);
+        transform: translate3d(.14em, -.22em, -20px) rotateY(5deg) skewX(-7deg) scaleX(.96);
+        filter: blur(4px) brightness(1.8) drop-shadow(12px -8px 18px rgba(79, 140, 255, .18));
+        background-position: -24px -18px, 28px -12px, -19px 24px;
+      }
+      31%, 100% {
+        opacity: 0;
+        clip-path: inset(-18% 0 -34% 0);
+        transform: translate3d(.22em, -.34em, -45px) rotateY(9deg) skewX(-9deg) scaleX(.9);
+        filter: blur(8px) brightness(1.5);
+        background-position: -42px -34px, 46px -25px, -36px 39px;
+      }
+    }
+    @keyframes intro-name-particle {
+      0%, 11.8% {
+        opacity: 0;
+        transform: translate3d(0, 0, 0) scale(.2);
+      }
+      12.6% {
+        opacity: .86;
+        transform: translate3d(0, 0, 0) scale(1);
+      }
+      14.2% {
+        opacity: .58;
+      }
+      17%, 100% {
+        opacity: 0;
+        transform: translate3d(var(--dx), var(--dy), 0) scale(.15);
+      }
+      26.2% {
+        opacity: 0;
+        transform: translate3d(0, 0, 0) scale(.2);
+      }
+      26.8% {
+        opacity: .9;
+        transform: translate3d(0, 0, 0) scale(1.15);
+      }
+      30.4%, 100% {
+        opacity: 0;
+        transform: translate3d(var(--dx), var(--dy), 0) scale(.08);
+      }
+    }
+    .intro-capabilities {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: min(1080px, 98vw);
+      height: min(680px, 92vh);
+      transform: translate(-50%, -50%);
+      perspective: 1200px;
+      pointer-events: none;
+      animation-name: intro-capabilities-scene;
+    }
+    .intro-capability {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: clamp(190px, 22vw, 232px);
+      opacity: 0;
+      transform-style: preserve-3d;
+      animation-name: intro-capability-orbit;
+      will-change: transform, opacity;
+    }
+    .intro-capability:nth-child(1) { --stack-x:-8px; --stack-y:-5px; --wind-x:16px; --wind-y:10px; --wind-tilt:.7deg; --mid-x:-244px; --mid-y:-96px; --over-x:-339px; --over-y:-154px; --over-tilt:-3.7deg; --corner-x:-322px; --corner-y:-142px; --tilt:-3.2deg; z-index:1; }
+    .intro-capability:nth-child(2) { --stack-x:-2px; --stack-y:1px; --wind-x:-17px; --wind-y:11px; --wind-tilt:-.5deg; --mid-x:222px; --mid-y:-81px; --over-x:321px; --over-y:-141px; --over-tilt:2.8deg; --corner-x:304px; --corner-y:-128px; --tilt:2.4deg; z-index:2; }
+    .intro-capability:nth-child(3) { --stack-x:4px; --stack-y:5px; --wind-x:17px; --wind-y:-11px; --wind-tilt:-.4deg; --mid-x:-227px; --mid-y:108px; --over-x:-323px; --over-y:159px; --over-tilt:2.1deg; --corner-x:-306px; --corner-y:146px; --tilt:1.8deg; z-index:3; }
+    .intro-capability:nth-child(4) { --stack-x:10px; --stack-y:9px; --wind-x:-18px; --wind-y:-12px; --wind-tilt:.6deg; --mid-x:252px; --mid-y:124px; --over-x:344px; --over-y:179px; --over-tilt:-3.1deg; --corner-x:326px; --corner-y:164px; --tilt:-2.7deg; z-index:4; }
+    .intro-capability-flipper {
+      position: relative;
+      transform-origin: 50% 50%;
+      transform-style: preserve-3d;
+      animation-name: intro-capability-flip;
+      will-change: transform, opacity;
+    }
+    #activation-intro .intro-capability,
+    #activation-intro .intro-capability-flipper { will-change: transform, opacity; }
+    .intro-capability-face, .intro-capability-back {
+      box-sizing: border-box;
+      min-height: 148px;
+      padding: 17px;
+      border: 1px solid var(--line-strong);
+      border-radius: 16px;
+      background: linear-gradient(150deg, var(--panel-raised), var(--panel));
+      box-shadow: inset 0 1px rgba(255, 255, 255, .045), 0 14px 40px rgba(0, 0, 0, .18);
+      backface-visibility: visible;
+      -webkit-backface-visibility: visible;
+    }
+    .intro-capability-face { position: relative; transform: rotateX(0deg); animation-name:intro-capability-front-visibility; }
+    .intro-capability-back {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      transform: rotateX(180deg);
+      animation-name: intro-capability-back-visibility;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(255,159,28,.13), transparent 32%),
+        linear-gradient(145deg, #1a2432, #111821);
+      text-align: center;
+    }
+    .intro-capability-back::before, .intro-capability-back::after { content:''; position:absolute; pointer-events:none; }
+    .intro-capability-back::before { inset:11px; border:1px solid rgba(164,183,214,.12); border-radius:10px; }
+    .intro-capability-back::after { left:50%; top:50%; width:58px; height:1px; background:linear-gradient(90deg,transparent,var(--warm),transparent); transform:translate(-50%,30px); box-shadow:0 0 12px var(--warm); }
+    .intro-capability-back b { display:block; color:var(--ink); font:700 25px/1 "Exo 2",sans-serif; font-style:italic; letter-spacing:.12em; }
+    .intro-capability-back small { display:block; margin-top:8px; color:var(--ink2); font:500 8px/1 "JetBrains Mono",monospace; letter-spacing:.2em; }
+    .intro-cap-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: var(--warm); background: var(--glow-tint1); font-size: 17px; }
+    .intro-capability h3 { margin: 21px 0 4px; font-size: 16px; font-weight: 600; color: var(--ink); } .intro-capability p { margin: 0; color: var(--ink2); font-size: 12px; }
+    .intro-code { display: flex; gap: 4px; margin-top: 13px; } .intro-code b { display:block; height: 3px; flex: 1; border-radius: 4px; background: var(--cool); opacity: .65; } .intro-code b:nth-child(2) { flex: .62; background: var(--warm); } .intro-code b:nth-child(3) { flex: .82; }
+    @keyframes intro-capabilities-scene {
+      0%, 54.2% { opacity: 1; filter: blur(0); }
+      57.2%, 100% { opacity: 0; filter: blur(5px); }
+    }
+    @keyframes intro-capability-flip {
+      0%, 26.15% {
+        opacity: 0;
+        transform: translateZ(-105px) rotateX(-360deg) scale(.82);
+      }
+      26.55% {
+        opacity: .45;
+        transform: translateZ(-72px) rotateX(-340deg) scale(.86);
+        animation-timing-function: cubic-bezier(.16, .76, .16, 1);
+      }
+      27.75% {
+        opacity: 1;
+        transform: translateZ(10px) rotateX(-220deg) scale(.96);
+      }
+      28.85% {
+        opacity: 1;
+        transform: translateZ(24px) rotateX(-92deg) scale(1.018);
+      }
+      29.75% {
+        opacity: 1;
+        transform: translateZ(8px) rotateX(8deg) scale(1.028);
+        animation-timing-function: cubic-bezier(.2, .78, .24, 1);
+      }
+      30.35%, 100% {
+        opacity: 1;
+        transform: translateZ(0) rotateX(0deg) scale(1);
+      }
+    }
+    @keyframes intro-capability-front-visibility {
+      0%,26.15% { opacity:0; }
+      26.55%,27.2% { opacity:1; }
+      27.55%,28.95% { opacity:0; }
+      29.3%,100% { opacity:1; }
+    }
+    @keyframes intro-capability-back-visibility {
+      0%,27.2% { opacity:0; }
+      27.55%,28.95% { opacity:1; }
+      29.3%,100% { opacity:0; }
+    }
+    @keyframes intro-capability-orbit {
+      0%, 26.15% {
+        opacity: 0;
+        transform: translate3d(calc(-50% + var(--stack-x)), calc(-50% + var(--stack-y)), 0) scale(1);
+      }
+      26.3%, 30.35% {
+        opacity: 1;
+        transform: translate3d(calc(-50% + var(--stack-x)), calc(-50% + var(--stack-y)), 0) rotateZ(0deg) scale(1);
+        animation-timing-function: cubic-bezier(.62, 0, .82, .22);
+      }
+      30.92% {
+        opacity: 1;
+        transform: translate3d(calc(-50% + var(--wind-x)), calc(-50% + var(--wind-y)), -3px) rotateZ(var(--wind-tilt)) scale(.985);
+        animation-timing-function: cubic-bezier(.07, .82, .14, 1);
+      }
+      32.55% {
+        opacity: 1;
+        transform: translate3d(calc(-50% + var(--mid-x)), calc(-50% + var(--mid-y)), 10px) rotateZ(0deg) scale(1.012);
+        animation-timing-function: cubic-bezier(.12, .76, .18, 1);
+      }
+      33.72% {
+        opacity: 1;
+        transform: translate3d(calc(-50% + var(--over-x)), calc(-50% + var(--over-y)), 5px) rotateZ(var(--over-tilt)) scale(1.022);
+        animation-timing-function: cubic-bezier(.18, .76, .22, 1);
+      }
+      34.75%, 100% {
+        opacity: 1;
+        transform: translate3d(calc(-50% + var(--corner-x)), calc(-50% + var(--corner-y)), 0) rotateZ(var(--tilt)) scale(1);
+      }
+    }
+    .intro-week, .intro-clock, .intro-progress { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); opacity: 0; }
+    .intro-week {
+      width: min(720px, 92vw);
+      height: min(430px, 70vh);
+      perspective: 1100px;
+      perspective-origin: 50% 34%;
+      transform-style: preserve-3d;
+      pointer-events: none;
+      animation-name: intro-week-scene;
+    }
+    .intro-day-card {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: min(460px, 78vw);
+      aspect-ratio: 2 / 1;
+      box-sizing: border-box;
+      overflow: hidden;
+      padding: clamp(20px, 4vw, 34px);
+      border: 1px solid color-mix(in srgb, var(--cool) 30%, var(--line-strong));
+      border-radius: 18px;
+      background:
+        linear-gradient(90deg, transparent 0 68%, rgba(79, 140, 255, .07) 68% 69%, transparent 69%),
+        linear-gradient(100deg, rgba(26,36,50,.88) 0 54%, rgba(21,30,42,.72) 74%, rgba(17,24,33,.58) 100%);
+      box-shadow: inset 0 1px rgba(255,255,255,.055), 0 18px 54px rgba(0,0,0,.28), 0 0 34px rgba(79,140,255,.05);
+      opacity: 0;
+      transform-origin: 50% 16%;
+      transform-style: preserve-3d;
+      animation-name: intro-day-card;
+      will-change: transform, opacity, filter;
+    }
+    .intro-day-card::before, .intro-day-card::after { content:''; position:absolute; pointer-events:none; }
+    .intro-day-card::before { inset:14px; border:1px solid rgba(164,183,214,.1); border-radius:10px; clip-path:polygon(0 0,18% 0,18% 1px,1px 1px,1px 24%,0 24%,0 0,82% 0,100% 0,100% 24%,calc(100% - 1px) 24%,calc(100% - 1px) 1px,82% 1px); }
+    .intro-day-card::after { right:clamp(20px,4vw,34px); bottom:clamp(20px,4vw,34px); width:88px; height:3px; border-radius:99px; background:linear-gradient(90deg,var(--warm) 0 24%,transparent 24% 30%,var(--cool) 30% 100%); opacity:.8; }
+    .intro-day-index { display:block; margin-bottom:20px; color:var(--warm); font:600 10px/1 "JetBrains Mono",monospace; letter-spacing:.24em; }
+    .intro-day-card b { display:block; color:var(--ink); font-size:clamp(28px,5vw,44px); line-height:1; letter-spacing:.12em; }
+    .intro-day-card em { display:block; margin-top:10px; color:var(--ink2); font:600 clamp(11px,1.8vw,15px)/1 "JetBrains Mono",monospace; letter-spacing:.28em; }
+    .intro-day-card:nth-child(1) { --day-z:-330px; --day-y:-24px; --day-opacity:.26; z-index:1; }
+    .intro-day-card:nth-child(2) { --day-z:-275px; --day-y:-16px; --day-opacity:.32; z-index:2; }
+    .intro-day-card:nth-child(3) { --day-z:-220px; --day-y:-8px; --day-opacity:.4; z-index:3; }
+    .intro-day-card:nth-child(4) { --day-z:-165px; --day-y:0px; --day-opacity:.49; z-index:4; }
+    .intro-day-card:nth-child(5) { --day-z:-110px; --day-y:8px; --day-opacity:.6; z-index:5; }
+    .intro-day-card:nth-child(6) { --day-z:-55px; --day-y:16px; --day-opacity:.75; z-index:6; }
+    .intro-day-card:nth-child(7) { --day-z:0px; --day-y:24px; --day-opacity:1; z-index:7; }
+    @keyframes intro-week-scene { 0%,51.5% { opacity:0; } 52.2%,62.2% { opacity:1; } 64%,100% { opacity:0; } }
+    @keyframes intro-day-card {
+      0%,51.7% { opacity:0; transform:translate3d(-50%,calc(-50% + var(--day-y)),-520px) rotateX(11deg) scale(.88); filter:blur(7px) brightness(1.45); }
+      52.9% { opacity:1; transform:translate3d(-50%,calc(-50% + var(--day-y)),var(--day-z)) rotateX(6deg) scale(1.018); filter:blur(0) brightness(1.14); }
+      53.6%,100% { opacity:var(--day-opacity); transform:translate3d(-50%,calc(-50% + var(--day-y)),var(--day-z)) rotateX(7deg) scale(1); filter:blur(0) brightness(1); }
+    }
+    .intro-clock { width: min(580px, 82vw); text-align: center; animation-name: intro-clock; }
+    .intro-clock b { display:flex; justify-content:center; align-items:center; font:700 clamp(72px,13vw,155px)/.9 "JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.03em; color:var(--ink); text-shadow:0 0 28px var(--glow-tint1); font-variant-numeric:tabular-nums; }
+    .intro-clock b span { display:inline-block; min-width:2.05ch; }
+    .intro-clock b i { margin:0 .04em; color:var(--warm); font-style:normal; transform:translateY(-.07em); }
+    .intro-clock small { display:block; margin-top:18px; color:var(--ink2); letter-spacing:.24em; }
+    @keyframes intro-clock { 0%,61.8% { opacity:0; transform:translate(-50%,-50%) scale(.78); filter:blur(8px); } 63.4% { opacity:1; transform:translate(-50%,-50%) scale(1); filter:blur(0); } 79.5% { opacity:1; transform:translate(-50%,-50%) scale(1); filter:blur(0); } 86%,100% { opacity:0; transform:translate(-50%,-50%) scale(1.045); filter:blur(4px); } }
+    .intro-progress { top:72%; width:min(500px,72vw); animation-name:intro-progress; } .intro-progress-label { display:flex; justify-content:space-between; margin-bottom:12px; color:var(--ink2); font:600 12px ui-monospace, monospace; letter-spacing:.12em; } .intro-progress-track { height:8px; overflow:hidden; border-radius:99px; background:color-mix(in srgb,#247cff 12%,var(--line)); box-shadow:inset 0 0 8px rgba(36,124,255,.12); } .intro-progress-track b { display:block; height:100%; width:100%; transform:scaleX(.6); transform-origin:left; border-radius:inherit; background:linear-gradient(90deg,#247cff 0%,#55a8ff 58%,#3488ff 100%); box-shadow:0 0 8px rgba(62,145,255,.78),0 0 20px rgba(36,124,255,.32); animation-name:intro-progress-fill; }
+    @keyframes intro-progress { 0%,65.8% { opacity:0; transform:translate(-50%,-42%) scale(.96); } 67% { opacity:1; transform:translate(-50%,-50%) scale(1); } 92.8% { opacity:1; transform:translate(-50%,-50%) scale(1); } 95%,100% { opacity:0; transform:translate(-50%,-54%) scale(1.02); } }
+    @keyframes intro-progress-fill { 0%,66.2% { transform:scaleX(.6); } 76.4%,100% { transform:scaleX(1); } }
+    .intro-skip { position:absolute; right:24px; bottom:20px; border:0; padding:7px 10px; background:transparent; color:var(--dim); font-size:11px; cursor:pointer; letter-spacing:.08em; }
+    .intro-skip:hover { color:var(--ink2); }
+    @media (max-width: 620px) {
+      .intro-capability { width: min(42vw, 190px); }
+      .intro-capability-face, .intro-capability-back { min-height: 96px; padding: 12px; }
+      .intro-capability h3 { margin-top: 10px; }
+      .intro-capability:nth-child(1) { --mid-x:-22vw; --mid-y:-14vh; --over-x:-27vw; --over-y:-23vh; --corner-x:-25vw; --corner-y:-22vh; }
+      .intro-capability:nth-child(2) { --mid-x:20vw; --mid-y:-12vh; --over-x:26vw; --over-y:-19vh; --corner-x:24vw; --corner-y:-18vh; }
+      .intro-capability:nth-child(3) { --mid-x:-21vw; --mid-y:13vh; --over-x:-27vw; --over-y:21vh; --corner-x:-25vw; --corner-y:20vh; }
+      .intro-capability:nth-child(4) { --mid-x:21vw; --mid-y:15vh; --over-x:26vw; --over-y:24vh; --corner-x:24vw; --corner-y:23vh; }
+      .intro-day-card { width:min(430px,84vw); padding:18px; border-radius:14px; }
+      .intro-day-index { margin-bottom:13px; }
+      .intro-day-card::after { right:18px; bottom:18px; width:64px; }
+    }
+    @media (prefers-reduced-motion: reduce) { #activation-intro [data-intro-anim] { animation-duration: .01ms !important; } }
   </style>
 </head>
 <body>
+  <section id="activation-intro" aria-hidden="true">
+    <div class="intro-kicker">BAILONGMA <i>•</i> INITIALIZING</div>
+    <div class="intro-orb-wrap" data-intro-anim>
+      <canvas id="activation-intro-voice-canvas" aria-label="Bailongma 语音球"></canvas>
+    </div>
+    <div class="intro-name" data-intro-anim>
+      <div class="intro-name-particles" aria-hidden="true">
+        <i data-intro-anim data-intro-offset="0" style="--x:4%;--y:58%;--dx:-24px;--dy:-31px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".018" style="--x:9%;--y:23%;--dx:-13px;--dy:-38px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".055" style="--x:16%;--y:72%;--dx:-18px;--dy:27px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".078" style="--x:21%;--y:31%;--dx:9px;--dy:-33px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".11" style="--x:29%;--y:18%;--dx:-5px;--dy:-35px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".136" style="--x:33%;--y:66%;--dx:13px;--dy:31px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".165" style="--x:39%;--y:38%;--dx:-12px;--dy:-27px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".19" style="--x:43%;--y:78%;--dx:8px;--dy:24px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".22" style="--x:49%;--y:16%;--dx:-7px;--dy:-39px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".246" style="--x:54%;--y:61%;--dx:17px;--dy:28px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".275" style="--x:60%;--y:76%;--dx:-11px;--dy:30px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".3" style="--x:65%;--y:27%;--dx:16px;--dy:-32px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".33" style="--x:71%;--y:20%;--dx:-4px;--dy:-37px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".355" style="--x:76%;--y:68%;--dx:18px;--dy:29px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".385" style="--x:83%;--y:75%;--dx:-5px;--dy:27px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".408" style="--x:87%;--y:26%;--dx:14px;--dy:-36px;--size:3px"></i>
+        <i data-intro-anim data-intro-offset=".44" style="--x:94%;--y:57%;--dx:22px;--dy:-22px;--size:2px"></i>
+        <i data-intro-anim data-intro-offset=".462" style="--x:98%;--y:30%;--dx:28px;--dy:-31px;--size:3px"></i>
+      </div>
+      <div class="intro-name-letters" aria-label="Bailongma">
+        <span class="intro-name-letter" data-intro-anim data-intro-offset="0">B</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".055">a</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".11">i</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".165">l</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".22">o</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".275">n</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".33">g</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".385">m</span>
+        <span class="intro-name-letter" data-intro-anim data-intro-offset=".44">a</span>
+      </div>
+    </div>
+    <div class="intro-capabilities" data-intro-anim>
+      <article class="intro-capability" data-intro-anim data-intro-offset="0">
+        <div class="intro-capability-flipper" data-intro-anim data-intro-offset="0">
+          <div class="intro-capability-face" data-intro-anim data-intro-offset="0"><div class="intro-cap-icon">⌘</div><h3>执行任务</h3><p>理解目标，拆解并完成工作</p><div class="intro-code"><b></b><b></b><b></b></div></div>
+          <div class="intro-capability-back" data-intro-anim data-intro-offset="0" aria-hidden="true"><div><b>BLM</b><small>CAPABILITY CORE</small></div></div>
+        </div>
+      </article>
+      <article class="intro-capability" data-intro-anim data-intro-offset=".46">
+        <div class="intro-capability-flipper" data-intro-anim data-intro-offset=".46">
+          <div class="intro-capability-face" data-intro-anim data-intro-offset=".46"><div class="intro-cap-icon">▣</div><h3>创建文件</h3><p>文档、表格、代码与内容创作</p><div class="intro-code"><b></b><b></b><b></b></div></div>
+          <div class="intro-capability-back" data-intro-anim data-intro-offset=".46" aria-hidden="true"><div><b>BLM</b><small>CAPABILITY CORE</small></div></div>
+        </div>
+      </article>
+      <article class="intro-capability" data-intro-anim data-intro-offset=".92">
+        <div class="intro-capability-flipper" data-intro-anim data-intro-offset=".92">
+          <div class="intro-capability-face" data-intro-anim data-intro-offset=".92"><div class="intro-cap-icon">◌</div><h3>探索网络</h3><p>检索信息，理解页面与数据</p><div class="intro-code"><b></b><b></b><b></b></div></div>
+          <div class="intro-capability-back" data-intro-anim data-intro-offset=".92" aria-hidden="true"><div><b>BLM</b><small>CAPABILITY CORE</small></div></div>
+        </div>
+      </article>
+      <article class="intro-capability" data-intro-anim data-intro-offset="1.38">
+        <div class="intro-capability-flipper" data-intro-anim data-intro-offset="1.38">
+          <div class="intro-capability-face" data-intro-anim data-intro-offset="1.38"><div class="intro-cap-icon">✦</div><h3>持续陪伴</h3><p>记录上下文，随时响应你的需要</p><div class="intro-code"><b></b><b></b><b></b></div></div>
+          <div class="intro-capability-back" data-intro-anim data-intro-offset="1.38" aria-hidden="true"><div><b>BLM</b><small>CAPABILITY CORE</small></div></div>
+        </div>
+      </article>
+    </div>
+    <div class="intro-week" data-intro-anim>
+      <span class="intro-day-card" data-intro-anim data-intro-offset="0"><i class="intro-day-index">DAY 01 / 07</i><b>星期一</b><em>MONDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".11"><i class="intro-day-index">DAY 02 / 07</i><b>星期二</b><em>TUESDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".22"><i class="intro-day-index">DAY 03 / 07</i><b>星期三</b><em>WEDNESDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".33"><i class="intro-day-index">DAY 04 / 07</i><b>星期四</b><em>THURSDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".44"><i class="intro-day-index">DAY 05 / 07</i><b>星期五</b><em>FRIDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".55"><i class="intro-day-index">DAY 06 / 07</i><b>星期六</b><em>SATURDAY</em></span>
+      <span class="intro-day-card" data-intro-anim data-intro-offset=".66"><i class="intro-day-index">DAY 07 / 07</i><b>星期日</b><em>SUNDAY</em></span>
+    </div>
+    <div class="intro-clock" data-intro-anim><b><span id="intro-clock-hours">00</span><i>:</i><span id="intro-clock-minutes">00</span></b><small>一天 24 小时 · 24 HOURS A DAY</small></div>
+    <div class="intro-progress" data-intro-anim><div class="intro-progress-label"><span>SYS.LOAD</span><span id="intro-progress-value">60%</span></div><div class="intro-progress-track"><b data-intro-anim></b></div></div>
+    <button class="intro-skip" id="intro-skip" type="button">跳过介绍</button>
+    <audio id="activation-intro-audio" preload="auto" src="/src/ui/brain-ui/assets/activation-intro.mp3"></audio>
+  </section>
   <main>
     <h1>激活 Bailongma</h1>
     <p class="subtitle">输入 API Key，Bailongma 会自动识别官方模型厂商。</p>
@@ -337,9 +889,11 @@
     </div>
   </main>
 
-  <script>
+  <script type="module">
     const ACTIVATION_WARMUP_KEY = 'bailongma_activation_warmup_until'
     const ACTIVATION_WARMUP_MS = 2500
+    const BRAIN_UI_ARRIVAL_KEY = 'bailongma_brain_ui_arrival_at'
+    const isIntroPreview = new URLSearchParams(window.location.search).has('intro-preview')
 
     const apiKeyInput = document.getElementById('apiKey')
     const agentNameInput = document.getElementById('agentName')
@@ -349,6 +903,20 @@
     let autoDetectTimer = null
     let activationRequestSeq = 0
     let activationState = { status: 'idle', key: '', agentName: '', token: '', info: null, promise: null }
+
+    function enterBrainUiWithIntro({ preview = false } = {}) {
+      try {
+        sessionStorage.setItem(BRAIN_UI_ARRIVAL_KEY, JSON.stringify({
+          at: Date.now(),
+          source: preview ? 'preview' : 'activation',
+        }))
+      } catch {}
+      window.location.replace(preview ? '/brain-ui?intro-preview=1' : '/brain-ui')
+    }
+
+    // Keep the original preview URL as a stable entry point while the actual
+    // film now runs inside the real brain-ui document.
+    if (isIntroPreview) enterBrainUiWithIntro({ preview: true })
 
     const AGENT_NAME_RE = /^[一-龥A-Za-z0-9 _-]+$/
     function readAgentName() {
@@ -361,7 +929,7 @@
 
     fetch('/activation-status')
       .then(r => r.json())
-      .then(data => { if (data.activated) window.location.replace('/brain-ui') })
+      .then(data => { if (data.activated && !isIntroPreview) window.location.replace('/brain-ui') })
       .catch(() => {})
 
     function setStatus(text, kind) {
@@ -466,7 +1034,11 @@
         id: 'doubao', label: '豆包 TTS',
         primaryField: 'doubaoKey',
         ttsProvider: 'doubao',
-        defaults: { doubaoResourceId: 'seed-tts-2.0' },
+        defaults: {
+          doubaoResourceId: 'seed-tts-2.0',
+          ttsVoiceId: 'zh_male_m191_uranus_bigtts',
+          doubaoSpeechRate: 20,
+        },
         extra: []
       }
       return null
@@ -675,7 +1247,7 @@
         const voiceNote = [sttCfg && '语音识别', ttsCfg && '语音合成'].filter(Boolean)
         const suffix = voiceNote.length ? `，已保存 ${voiceNote.join('+')} 配置` : ''
         setStatus(`激活成功：${data.provider} · ${data.model}${suffix}`, 'ok')
-        setTimeout(() => window.location.replace('/brain-ui'), 350)
+        enterBrainUiWithIntro()
       } catch (err) {
         setStatus('网络错误：' + err.message, 'err')
         syncButtonState()
@@ -745,7 +1317,7 @@
           return
         }
         setCustomStatus(`激活成功：${data.model}`, 'ok')
-        setTimeout(() => window.location.replace('/brain-ui'), 700)
+        enterBrainUiWithIntro()
       } catch (err) {
         setCustomStatus('网络错误：' + err.message, 'err')
         syncCustomButtonState()

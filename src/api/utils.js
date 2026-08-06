@@ -118,6 +118,10 @@ export function contentTypeFor(filePath) {
       return 'image/jpeg'
     case '.webp':
       return 'image/webp'
+    case '.mp3':
+      return 'audio/mpeg'
+    case '.wav':
+      return 'audio/wav'
     case '.cer':
     case '.crt':
       return 'application/x-x509-ca-cert'

@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.639",
+  "version": "2.1.647",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -43,6 +43,7 @@
     "test:config-upgrade": "node ./src/test-config-upgrade.js",
     "test:media-modules": "node ./src/test-media-modules.js",
     "test:db-schema-module": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-db-schema-module.js\"",
+    "test:activation-intro": "node ./src/test-activation-intro-gate.js",
     "test:voice-continuous": "node ./src/test-voice-continuous.js",
     "test:voice-ptt": "node ./src/test-voice-ptt.js",
     "test:voice-reply-routing": "node ./src/test-voice-reply-routing.js",

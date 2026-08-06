@@ -22,7 +22,19 @@ export async function handleActivationRoutes(req, res, url, {
   getPreparedActivation,
   clearPreparedActivation,
   onActivated,
+  onActivationIntroComplete,
 } = {}) {
+  if (req.method === 'POST' && url.pathname === '/activation/intro-complete') {
+    try {
+      if (typeof onActivationIntroComplete === 'function') onActivationIntroComplete()
+      jsonResponse(res, 200, { ok: true })
+    } catch (err) {
+      console.error('[API] activation intro completion callback error:', err)
+      jsonResponse(res, 500, { ok: false, error: err.message || 'intro completion failed' })
+    }
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname === '/activation-status') {
     jsonResponse(res, 200, getActivationStatus())
     return true

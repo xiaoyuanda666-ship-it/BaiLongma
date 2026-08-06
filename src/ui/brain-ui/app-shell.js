@@ -629,8 +629,8 @@ const createSettingsModal = () => `
               </div>
               <div class="tts-fx-srow" style="margin-bottom:8px;">
                 <label for="tts-doubao-rate">语速</label>
-                <input type="range" id="tts-doubao-rate" min="-50" max="100" step="5">
-                <span id="tts-doubao-rate-val"></span>
+                <input type="range" id="tts-doubao-rate" min="-50" max="100" step="5" value="20">
+                <span id="tts-doubao-rate-val">+20</span>
               </div>
               <p class="settings-hint">在<a href="https://console.volcengine.com/speech/new/" target="_blank" style="color:var(--cool)">豆包语音合成控制台</a>获取 API Key。2.0 音色使用 seed-tts-2.0；1.0/moon/BV 音色使用 seed-tts-1.0 或控制台对应资源。</p>
             </div>
@@ -772,7 +772,7 @@ const createSettingsModal = () => `
             <div class="settings-row">
               <label class="settings-label" for="security-file-sandbox">启用文件沙箱</label>
               <label class="settings-toggle">
-                <input type="checkbox" id="security-file-sandbox" checked>
+                <input type="checkbox" id="security-file-sandbox">
                 <span class="settings-toggle-track"></span>
               </label>
             </div>
@@ -783,7 +783,7 @@ const createSettingsModal = () => `
             <div class="settings-row">
               <label class="settings-label" for="security-exec-sandbox">启用执行沙箱</label>
               <label class="settings-toggle">
-                <input type="checkbox" id="security-exec-sandbox" checked>
+                <input type="checkbox" id="security-exec-sandbox">
                 <span class="settings-toggle-track"></span>
               </label>
             </div>

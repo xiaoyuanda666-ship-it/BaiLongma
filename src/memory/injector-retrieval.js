@@ -8,24 +8,8 @@ import { searchMemories, getMemoriesByDateRange } from '../db.js'
 import { extractKeywords } from './keywords.js'
 import { parseTemporalHints } from './temporal-parser.js'
 
-// 消息格式解析
-// 格式：[ID:xxxxxx] 2026-04-13 10:00:00 [渠道] 内容
-// 或：  TICK 2026-04-13-10:00:00
-export function parseMessageInput(message) {
-  if (/^TICK\s/i.test(message.trim())) {
-    return { isTick: true, senderId: null, messageBody: '' }
-  }
-  const match = message.match(/^\[([^\]]+)\]\s*[\d\-T:+]+\s*\[[^\]]*\]\s*(.*)$/s)
-  // queue.js 把输入头编码成 `[canonicalId via externalPartyId]`（外部渠道才有 ` via ...`）。
-  // 这里必须对称地只取 canonicalId——否则带 " via wechat:clawbot:..." 的复合串会污染 senderId，
-  // 使 getRecentConversation(WHERE from_id=?) 永远查空、conversationWindow 丢失逐字历史。
-  const rawId = match ? match[1] : null
-  return {
-    isTick: false,
-    senderId: rawId ? rawId.split(/\s+via\s+/i)[0].trim() : null,
-    messageBody: match ? match[2].trim() : message,
-  }
-}
+// 旧导出路径兼容；解析实现只有一个真相源，避免外部渠道 canonicalId 规则再次漂移。
+export { parseMessageInput } from './injector/message-input.js'
 
 // 桶内重排：salience >= 4 的提到前面（按 salience 高到低），
 // 同 boost 组内 timestamp 距今超过 365 天的下沉到该组末尾，

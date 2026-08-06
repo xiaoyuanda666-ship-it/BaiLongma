@@ -1,4 +1,5 @@
 import { executeTool } from '../src/capabilities/executor.js'
+import { config } from '../src/config.js'
 
 const checks = []
 
@@ -22,6 +23,10 @@ function parseJsonResult(value) {
 const testPath = `smoke/verifiable-${Date.now()}.txt`
 const testContent = 'hello verifiable completion'
 
+assert(config.security.fileSandbox === false, 'file sandbox defaults to disabled')
+assert(config.security.execSandbox === false, 'command sandbox defaults to disabled')
+assert(config.security.browserPrivateNetwork === true, 'browser localhost/private-network access defaults to enabled')
+
 const writeResultText = await executeTool('write_file', {
   path: testPath,
   content: testContent,
@@ -33,14 +38,19 @@ assert(writeResult?.bytes === Buffer.byteLength(testContent, 'utf-8'), 'write_fi
 const readResult = await executeTool('read_file', { path: testPath }, { source: 'smoke-test' })
 assert(readResult === testContent, 'read_file reads back exact content', readResult)
 
+config.security.fileSandbox = true
 const outsideRead = await executeTool('read_file', { path: '../package.json' }, { source: 'smoke-test' })
 assert(/^执行失败：访问被拒绝/.test(String(outsideRead)), 'read_file rejects sandbox escape', outsideRead)
 
+config.security.execSandbox = true
 const deniedCommandText = await executeTool('run_command', {
   command: 'type ..\\package.json',
 }, { source: 'smoke-test' })
 const deniedCommand = parseJsonResult(deniedCommandText)
 assert(deniedCommand?.ok === false && deniedCommand?.error === 'permission denied', 'run_command rejects parent directory access', deniedCommandText)
+
+config.security.fileSandbox = false
+config.security.execSandbox = false
 
 const quickCommandText = await executeTool('run_command', {
   command: 'node -e "console.log(\'quick-ok\')"',

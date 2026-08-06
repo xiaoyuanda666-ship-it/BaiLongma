@@ -1753,12 +1753,23 @@ try {
     data: { action: 'show', active: true, region_id: 'smoke-docs', query: '发布验证', document_id: '1' },
     ts: new Date().toISOString(),
   })
-  await page.waitForFunction(() => (
-    document.body.classList.contains('knowledge-cortex-mode')
-    && document.querySelector('#kc-region-list')?.textContent.includes('发布资料')
-    && document.querySelector('#kc-result-list')?.textContent.includes('签名、安装和回归验证')
-    && document.querySelector('#kc-detail')?.textContent.includes('file:///smoke/release.md')
-  ))
+  try {
+    await page.waitForFunction(() => (
+      document.body.classList.contains('knowledge-cortex-mode')
+      && document.querySelector('#kc-region-list')?.textContent.includes('发布资料')
+      && document.querySelector('#kc-result-list')?.textContent.includes('签名、安装和回归验证')
+      && document.querySelector('#kc-detail')?.textContent.includes('file:///smoke/release.md')
+    ))
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => ({
+      bodyClass: document.body.className,
+      status: document.querySelector('#kc-status')?.textContent,
+      regions: document.querySelector('#kc-region-list')?.textContent,
+      results: document.querySelector('#kc-result-list')?.textContent,
+      detail: document.querySelector('#kc-detail')?.textContent,
+    }))
+    throw new Error(`knowledge cortex did not finish loading: ${JSON.stringify(diagnostic)}`, { cause: error })
+  }
   const knowledgeSurface = await page.evaluate(() => ({
     visible: document.querySelector('#knowledge-cortex-panel')?.getAttribute('aria-hidden') === 'false',
     regionCount: document.querySelector('#kc-region-count')?.textContent,

@@ -3,6 +3,7 @@
 // 统一返回 Node.js Readable stream，供 api.js pipe 到 HTTP 响应
 import '../network-proxy.js'
 import { Readable, Transform } from 'stream'
+import { DEFAULT_DOUBAO_SPEECH_RATE, DEFAULT_DOUBAO_VOICE_ID } from './tts-defaults.js'
 
 export const TTS_PROVIDERS = [
   { id: 'doubao',      label: '豆包（方舟）',   streaming: true  },
@@ -14,12 +15,12 @@ export const TTS_PROVIDERS = [
 
 export const TTS_VOICES = {
   doubao: [
+    { id: 'zh_male_m191_uranus_bigtts',              label: '云舟 2.0（男声，通用）' },
     { id: 'zh_female_xiaohe_uranus_bigtts',          label: '小何 2.0（女声，通用）' },
     { id: 'zh_female_vv_uranus_bigtts',              label: 'Vivi 2.0（女声，通用/多语种）' },
     { id: 'zh_female_shuangkuaisisi_uranus_bigtts',  label: '爽快思思 2.0（女声，活泼）' },
     { id: 'zh_female_cancan_uranus_bigtts',          label: '知性灿灿 2.0（女声，角色）' },
     { id: 'zh_female_tianmeixiaoyuan_uranus_bigtts', label: '甜美小源 2.0（女声，甜美）' },
-    { id: 'zh_male_m191_uranus_bigtts',              label: '云舟 2.0（男声，通用）' },
     { id: 'zh_male_taocheng_uranus_bigtts',          label: '小天 2.0（男声，通用）' },
     { id: 'zh_female_kefunvsheng_uranus_bigtts',     label: '暖阳女声 2.0（客服）' },
   ],
@@ -192,13 +193,13 @@ function decodeDoubaoStream(webStream, context = {}) {
 
 async function streamDoubao({
   text,
-  voiceId = 'zh_female_xiaohe_uranus_bigtts',
+  voiceId = DEFAULT_DOUBAO_VOICE_ID,
   apiKey,
   resourceId,
-  speechRate,
+  speechRate = DEFAULT_DOUBAO_SPEECH_RATE,
 }) {
   if (!apiKey) throw new Error('豆包 TTS: 缺少 API Key，请在设置中填写豆包语音凭证')
-  const speaker = voiceId || 'zh_female_xiaohe_uranus_bigtts'
+  const speaker = voiceId || DEFAULT_DOUBAO_VOICE_ID
   const resolvedResourceId = resolveDoubaoResourceId(speaker, resourceId)
   const headers = {
     'X-Api-Resource-Id': resolvedResourceId,

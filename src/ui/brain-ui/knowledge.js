@@ -64,16 +64,16 @@ function renderDocuments(documents = []) {
   if (!target) return
   target.replaceChildren()
   if (!documents.length) return empty(target, '这个区域还没有可浏览的当前版本文档。')
-  for (const document of documents) {
+  for (const documentRecord of documents) {
     const button = document.createElement('button')
     button.type = 'button'
-    button.className = `kc-document${String(document.id) === state.documentId ? ' is-active' : ''}`
+    button.className = `kc-document${String(documentRecord.id) === state.documentId ? ' is-active' : ''}`
     const title = document.createElement('strong')
-    title.textContent = document.title || '未命名文档'
+    title.textContent = documentRecord.title || '未命名文档'
     const meta = document.createElement('span')
-    meta.textContent = `v${document.version || 1} · ${document.mime_type || 'text'}`
+    meta.textContent = `v${documentRecord.version || 1} · ${documentRecord.mime_type || 'text'}`
     button.append(title, meta)
-    button.addEventListener('click', () => loadDocument(document.id))
+    button.addEventListener('click', () => loadDocument(documentRecord.id))
     target.appendChild(button)
   }
 }
@@ -101,18 +101,18 @@ function renderResults(hits = []) {
   }
 }
 
-function renderDocument(document) {
+function renderDocument(documentRecord) {
   const target = $('kc-detail')
   if (!target) return
   target.replaceChildren()
-  if (!document) return empty(target, '选择一份文档或检索结果以查看来源和版本。')
+  if (!documentRecord) return empty(target, '选择一份文档或检索结果以查看来源和版本。')
   const title = document.createElement('h2')
-  title.textContent = document.title || '未命名文档'
+  title.textContent = documentRecord.title || '未命名文档'
   const items = [
-    ['知识区域', document.region_name || document.region_id || '--'],
-    ['版本', `v${document.version || 1}`],
-    ['格式', document.mime_type || 'text'],
-    ['来源', document.source_uri || '--'],
+    ['知识区域', documentRecord.region_name || documentRecord.region_id || '--'],
+    ['版本', `v${documentRecord.version || 1}`],
+    ['格式', documentRecord.mime_type || 'text'],
+    ['来源', documentRecord.source_uri || '--'],
   ]
   const list = document.createElement('dl')
   for (const [label, value] of items) {

@@ -3,6 +3,11 @@
 // Run: node src/test-key-auto-config.js
 
 import { detectAllKeyInfos } from './key-auto-config.js'
+import {
+  DEFAULT_DOUBAO_SPEECH_RATE,
+  DEFAULT_DOUBAO_VOICE_ID,
+  normalizeDoubaoSpeechRate,
+} from './voice/tts-defaults.js'
 
 let failed = 0
 
@@ -68,8 +73,14 @@ function findTtsProvider(infos, provider) {
   const infos = detectAllKeyInfos('配置豆包 TTS 0f9a6c2b-8d91-4f2b-92b0-531c357b24da')
   const doubao = findTtsProvider(infos, 'doubao')
   assert(!!doubao, 'explicit Doubao TTS key is detected')
+  assert(doubao.configUpdates?.ttsVoiceId === DEFAULT_DOUBAO_VOICE_ID, 'Doubao TTS auto-config selects Yunzhou 2.0 by default')
+  assert(doubao.configUpdates?.doubaoSpeechRate === DEFAULT_DOUBAO_SPEECH_RATE, 'Doubao TTS auto-config selects +20 speech rate by default')
   assert(doubao.configUpdates?.doubaoResourceId === 'seed-tts-2.0', 'Doubao TTS auto-config sets default 2.0 resource')
   assert(doubao.streamKeys?.doubaoResourceId === 'seed-tts-2.0', 'Doubao TTS probe uses default 2.0 resource')
 }
+
+assert(normalizeDoubaoSpeechRate(undefined) === 20, 'missing Doubao speech rate defaults to +20')
+assert(normalizeDoubaoSpeechRate(0) === 0, 'explicit normal speech rate remains 0')
+assert(normalizeDoubaoSpeechRate(-25) === -25, 'explicit slower speech rate is preserved')
 
 if (failed > 0) process.exit(1)

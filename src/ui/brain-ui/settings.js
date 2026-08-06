@@ -215,7 +215,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     if (doubaoResourceEl && tts?.doubaoResourceId) doubaoResourceEl.value = tts.doubaoResourceId;
     const rateEl = document.getElementById("tts-doubao-rate");
     if (rateEl) {
-      const r = Number(tts?.doubaoSpeechRate || 0) || 0;
+      const receivedRate = Number(tts?.doubaoSpeechRate ?? 20);
+      const r = Number.isFinite(receivedRate) ? receivedRate : 20;
       rateEl.value = r;
       const rv = document.getElementById("tts-doubao-rate-val");
       if (rv) rv.textContent = r === 0 ? "正常" : (r > 0 ? "+" + r : String(r));
@@ -924,8 +925,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   async function loadSecuritySettings() {
     try {
       const { security, network } = await fetch(`${API}/settings/security`).then(r => r.json());
-      if (fileSandboxToggle) fileSandboxToggle.checked = security.fileSandbox !== false;
-      if (execSandboxToggle) execSandboxToggle.checked = security.execSandbox !== false;
+      if (fileSandboxToggle) fileSandboxToggle.checked = security.fileSandbox === true;
+      if (execSandboxToggle) execSandboxToggle.checked = security.execSandbox === true;
       applyLanNetworkSettings(network);
       restartSecurityBtn?.classList.add("hidden");
       document.querySelectorAll(".security-blocked-tool").forEach(cb => {
@@ -943,8 +944,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         .filter(cb => cb.checked)
         .map(cb => cb.value);
       const body = {
-        fileSandbox: fileSandboxToggle ? fileSandboxToggle.checked : true,
-        execSandbox: execSandboxToggle ? execSandboxToggle.checked : true,
+        fileSandbox: fileSandboxToggle ? fileSandboxToggle.checked : false,
+        execSandbox: execSandboxToggle ? execSandboxToggle.checked : false,
         allowLanAccess: lanAccessToggle ? lanAccessToggle.checked : false,
         blockedTools,
       };

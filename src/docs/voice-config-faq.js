@@ -105,11 +105,12 @@ export const DOC_TOPICS = {
 ■ doubaoAccessKey — 火山引擎平台 Access Key（与 doubaoKey 二选一）
 ■ doubaoAppId — 应用 App ID（可选）
 ■ doubaoResourceId — 语音资源 ID（可选，留空自动根据音色判断）
-■ ttsVoiceId — 音色 ID（可选，默认：zh_female_xiaohe_uranus_bigtts）
+■ ttsVoiceId — 音色 ID（可选，默认：zh_male_m191_uranus_bigtts）
+■ doubaoSpeechRate — 语速（-50~100，默认：+20）
 
 常用音色：
-→ zh_female_xiaohe_uranus_bigtts（小何 2.0，女声，通用）
 → zh_male_m191_uranus_bigtts（云舟 2.0，男声，通用）
+→ zh_female_xiaohe_uranus_bigtts（小何 2.0，女声，通用）
 → zh_female_shuangkuaisisi_uranus_bigtts（爽快思思 2.0，活泼）
 
 申请步骤：

@@ -5,6 +5,11 @@ import path from 'path'
 import { paths } from './paths.js'
 import { nowTimestamp } from './time.js'
 import { getPrivateLanAddresses } from './lan-access.js'
+import {
+  DEFAULT_DOUBAO_VOICE_ID,
+  DEFAULT_TTS_PROVIDER,
+  normalizeDoubaoSpeechRate,
+} from './voice/tts-defaults.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
 export const MINIMAX_PROVIDER = 'minimax'
@@ -1063,9 +1068,9 @@ export const config = {
     toolCallLimit: DEFAULT_CONTEXT_TOOL_LIMIT,
   },
   security: {
-    fileSandbox: true,
-    execSandbox: true,
-    browserPrivateNetwork: false,
+    fileSandbox: false,
+    execSandbox: false,
+    browserPrivateNetwork: true,
     blockedTools: [],
     updatedAt: null,
   },
@@ -1865,12 +1870,12 @@ export function getTTSConfig() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
   return {
-    ttsProvider:     stored.ttsProvider  || 'doubao',
-    ttsVoiceId:      stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
+    ttsProvider:     stored.ttsProvider  || DEFAULT_TTS_PROVIDER,
+    ttsVoiceId:      stored.ttsVoiceId   || DEFAULT_DOUBAO_VOICE_ID,
     minimaxKey:      { configured: !!(stored.minimaxKey || process.env.MINIMAX_API_KEY || getMinimaxKey()) },
     doubaoKey:       { configured: !!(stored.doubaoKey), value: stored.doubaoKey || '' },
     doubaoResourceId: stored.doubaoResourceId || '',
-    doubaoSpeechRate: Number(stored.doubaoSpeechRate || 0) || 0,
+    doubaoSpeechRate: normalizeDoubaoSpeechRate(stored.doubaoSpeechRate),
     openaiTtsBaseURL: stored.openaiTtsBaseURL || '',
     openaiTtsKey:    { configured: !!(stored.openaiTtsKey) },
     elevenLabsKey:   { configured: !!(stored.elevenLabsKey) },
@@ -1884,11 +1889,13 @@ export function getTTSCredentials() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
   return {
-    provider:       stored.ttsProvider  || 'doubao',
-    voiceId:        stored.ttsVoiceId   || 'zh_female_xiaohe_uranus_bigtts',
+    provider:       stored.ttsProvider  || DEFAULT_TTS_PROVIDER,
+    voiceId:        stored.ttsVoiceId   || DEFAULT_DOUBAO_VOICE_ID,
     doubaoKey:      stored.doubaoKey    || process.env.DOUBAO_TTS_API_KEY || '',
     doubaoResourceId: stored.doubaoResourceId || process.env.DOUBAO_TTS_RESOURCE_ID || '',
-    doubaoSpeechRate: Number(stored.doubaoSpeechRate ?? process.env.DOUBAO_TTS_SPEECH_RATE ?? 0) || 0,
+    doubaoSpeechRate: normalizeDoubaoSpeechRate(
+      stored.doubaoSpeechRate ?? process.env.DOUBAO_TTS_SPEECH_RATE,
+    ),
     minimaxKey:     process.env.MINIMAX_API_KEY || stored.minimaxKey || getMinimaxKey() || (config.provider === 'minimax' ? config.apiKey : '') || '',
     openaiKey:      stored.openaiTtsKey  || '',
     openaiBaseURL:  stored.openaiTtsBaseURL || '',

@@ -317,8 +317,13 @@ function attachWebSocketUpgrades(server, port, { sceneWss, cloudWss }) {
   })
 }
 
-export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = null } = {}) {
+export function startAPI(port = 3721, {
+  getStateSnapshot = null,
+  onActivated = null,
+  onActivationIntroComplete = null,
+} = {}) {
   const onActivatedCallback = onActivated
+  const onActivationIntroCompleteCallback = onActivationIntroComplete
   const host = getApiHost()
   const tlsOptions = getTlsOptions()
   const protocol = tlsOptions ? 'https' : 'http'
@@ -362,6 +367,7 @@ export function startAPI(port = 3721, { getStateSnapshot = null, onActivated = n
     getPreparedActivation,
     clearPreparedActivation,
     onActivated: onActivatedCallback,
+    onActivationIntroComplete: onActivationIntroCompleteCallback,
   }
 
   const requestHandler = async (req, res) => {

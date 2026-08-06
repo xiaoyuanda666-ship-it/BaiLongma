@@ -3,8 +3,7 @@ import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.j
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
 import { enqueueTurnForRecognition, configureRecognizerScheduler } from './memory/recognizer-scheduler.js'
-import { runInjector, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatPrefetchedItems, formatSceneManifest, formatTemporalRecall, formatAIVideoPanel } from './memory/injector.js'
-import { formatToolPromptHintsForSchemas } from './memory/active-policies.js'
+import { runInjector, finalizeToolInjection, commitInformationConsumption, buildSupplementalInformationContext, formatMemoriesForPrompt, formatActivePoliciesForPrompt, formatTaskKnowledge, formatTemporalRecall } from './memory/injector.js'
 import { sceneStore } from './scene/scene-store.js'
 import {
   ensureThreadState, attributeUserMessage, buildThreadView, getForegroundThread,
@@ -21,7 +20,6 @@ import { selectContextSections } from './context/section-gate.js'
 import { runKnowledgeInjector } from './knowledge/injector.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
-import { getToolSchemas } from './capabilities/schemas.js'
 import { pushMessage } from './inbound-message.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
@@ -36,7 +34,7 @@ import { getCustomIntervalMs, consumeTick as consumeTickerTick, getStatus as get
 import { seedSandboxOnce, seedMusicOnce, rescueDataFromInstallDir } from './paths.js'
 import { loadInstalledTools } from './capabilities/marketplace/index.js'
 import { startMcpClients } from './mcp/client-manager.js'
-import { resumePendingVideoJobs, getAIVideoPanelState } from './capabilities/tools/media.js'
+import { resumePendingVideoJobs } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
 import { getFeishuStatusBlock } from './social/feishu-ws.js'
@@ -49,19 +47,17 @@ import { collectTrending } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationDiscoveryContext } from './agents/registry.js'
 import { refreshSkills, selectSkillsForMessage, formatSkillsForContext } from './skills/registry.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
-import { PRIMARY_USER_ID, formatPresenceForPrompt, normalizeChannel, isExternalChannel, isVoiceChannel } from './identity.js'
+import { PRIMARY_USER_ID, normalizeChannel, isExternalChannel, isVoiceChannel } from './identity.js'
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { hasVerifiedScheduledDelivery } from './runtime/scheduled-tasks.js'
 import { parseMarkers } from './runtime/markers.js'
 import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildAutonomousTickDirections } from './runtime/tick-policy.js'
-import { buildStrictEvaluationContext, filterStrictEvaluationTools, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
+import { buildStrictEvaluationContext, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
 import { resolveActionContractForTurn } from './runtime/action-contract.js'
-import { filterSendMessageForLocalReply, turnNeedsExternalSendMessage } from './runtime/local-reply-tools.js'
 import { refreshUserProfile } from './profile/infer.js'
 import { isSoftwareInstallRequest } from './software-install-intent.js'
-import { formatTerminalStreamContext } from './terminal-stream.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
@@ -461,13 +457,6 @@ function buildToolContextForProcess(msg, injection, turnId = '') {
       state.prev_recall = query
     },
   }
-}
-
-function resolveTurnTools(injectedTools = [], { silentSignal = false, strictEvaluation = null } = {}) {
-  if (silentSignal) return []
-  const tools = Array.isArray(injectedTools) ? injectedTools.filter(Boolean) : []
-  if (!tools.includes('send_message')) tools.unshift('send_message')
-  return filterStrictEvaluationTools(tools, strictEvaluation)
 }
 
 const MAX_MESSAGE_RETRIES = 3
@@ -958,7 +947,6 @@ async function runTurn(input, label, msg = null) {
     const temporalRecallText = formatTemporalRecall(injection.temporalRecall)
 
     // Real-time user messages take the fast path: skip heavy context gathering to avoid slowdowns from task background.
-    const prefetchText = formatPrefetchedItems(injection.prefetchedItems)
     const runtimeInjectionPromise = runRuntimeInjector({
       message: semanticInput,
       task: state.task,
@@ -987,9 +975,6 @@ async function runTurn(input, label, msg = null) {
 
     // 天气卡片投影与 runRuntimeInjector 并发;显式城市天气共用 in-flight wttr.in 请求。
     // 不使用启动期 IP geo-weather 作为天气卡兜底,避免 VPN 出口城市污染结果。
-
-    // 用户跨渠道可达性快照（让 L2 主动消息能选对渠道：用户在外面就发微信，在电脑前就发本地）
-    const presenceText = formatPresenceForPrompt(PRIMARY_USER_ID)
 
     if (runtimeInjection.taskExtraContextItems.length > 0) {
       console.log(`[context] Added ${runtimeInjection.taskExtraContextItems.length} context item(s)`)
@@ -1072,8 +1057,12 @@ async function runTurn(input, label, msg = null) {
       ? (state.recentActions || []).slice(-toolContextLimit)
       : []
     const hasActiveTask = !!state.task
-    const terminalStreamContext = formatTerminalStreamContext()
-    const extraContextJoined = [presenceText, runtimeInjection.contextText, terminalStreamContext, prefetchText, injection.uiSignalSummary, formatSceneManifest(sceneStore.manifest()), formatAIVideoPanel(getAIVideoPanelState())].filter(Boolean).join('\n\n')
+    const supplementalInformation = buildSupplementalInformationContext({
+      information: injection.categories?.information || injection,
+      runtimeInformation: runtimeInjection,
+      userId: PRIMARY_USER_ID,
+    })
+    const extraContextJoined = supplementalInformation.contextText
     const skillSelection = selectSkillsForMessage(semanticInput || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
     if (skillSelection.active.length > 0 || skillSelection.catalogRequested) {
@@ -1313,36 +1302,24 @@ async function runTurn(input, label, msg = null) {
     // runtime 协议兜底会替它真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）才必须
     // send_message 才能送达外部平台。省掉 send_message 那一整轮额外 LLM 调用是语音提速的关键。
     localReply = isUserTurn && !!msg?.fromId && !silentSignal && !isExternalChannel(msg?.channel)
-    let turnTools = resolveTurnTools(injection.tools, { silentSignal, strictEvaluation })
-    turnTools = filterSendMessageForLocalReply(turnTools, { localReply, silentSignal, input })
-    // 语音轮撤掉 send_message（用户决策）：语音回复直接走纯文本 → runtime 协议兜底 executeTool
-    // 投递 + 自动 TTS，模型既不必也不能调 send_message，彻底消除"调工具那一轮"的延迟，也不让它
-    // 在 UI 里显式出现。例外：消息意图明显要往外部/社交渠道发（"发到我微信"等）时保留，否则模型
-    // 够不到外发通道。撤的只是模型的工具入口——本地投递通道（fallback / slow-ack）不受影响。
-    if (voiceTurn && !silentSignal && !turnNeedsExternalSendMessage(input)) {
-      turnTools = turnTools.filter(t => t !== 'send_message')
-    }
-    // 能力展示是本地可视化动作。若 capability_demo 已按需注入，保留 send_message 会让模型
-    // 走成"只发一句看屏幕"的普通回复；本地轮次最终文字本来就能用 plain text 投递。
-    if (localReply && turnTools.includes('capability_demo')) {
-      turnTools = turnTools.filter(t => t !== 'send_message')
-    }
-    // The router is intentionally sparse.  A high-confidence action request
-    // must nevertheless expose its own evidence-producing tools; otherwise
-    // the model can only talk about doing it or spend a round rediscovering an
-    // already-known capability.  Respect strict-evaluation exclusions.
-    const actionTools = requestedActionContract?.requiredTools || []
-    if (actionTools.length > 0) {
-      for (const name of actionTools) {
-        if (!turnTools.includes(name)) turnTools.push(name)
-      }
-      toolContext.actionContract = {
-        ...requestedActionContract,
-        requiredTools: actionTools,
-      }
-    } else {
-      toolContext.actionContract = null
-    }
+    const finalizedToolInjection = finalizeToolInjection({
+      initialTools: injection.tools,
+      silentSignal,
+      strictEvaluation,
+      localReply,
+      input,
+      voiceTurn,
+      actionContract: requestedActionContract,
+      activePolicies: injection.activePolicies || [],
+    })
+    const {
+      turnTools,
+      toolPromptHints,
+      modelToolNames,
+      unavailableTools,
+      capabilityDemoTurn,
+    } = finalizedToolInjection
+    toolContext.actionContract = finalizedToolInjection.actionContract
     if (toolContext.actionContract) {
       emitEvent('action_contract', {
         id: toolContext.actionContract.id,
@@ -1350,8 +1327,6 @@ async function runTurn(input, label, msg = null) {
         required_tools: toolContext.actionContract.requiredTools,
       })
     }
-    const capabilityDemoTurn = localReply && turnTools.includes('capability_demo')
-    const toolPromptHints = formatToolPromptHintsForSchemas(injection.activePolicies || [], turnTools)
     if (Object.keys(toolPromptHints).length > 0) {
       toolContext.toolPromptHints = toolPromptHints
       emitEvent('tool_prompt_hints', {
@@ -1362,15 +1337,11 @@ async function runTurn(input, label, msg = null) {
     // Observability for the execution path: `injector_result.tools` is only
     // the first pass.  Contracts and capability routing may add tools later,
     // and names without a schema are not visible to the provider at all.
-    const modelToolNames = getToolSchemas(turnTools, { toolPromptHints })
-      .map(schema => schema?.function?.name)
-      .filter(Boolean)
-    const modelToolSet = new Set(modelToolNames)
     emitEvent('tool_inventory', {
       initial_tools: injection.tools || [],
       final_requested_tools: turnTools,
       model_visible_tools: modelToolNames,
-      unavailable_tools: turnTools.filter(name => !modelToolSet.has(name)),
+      unavailable_tools: unavailableTools,
       action_contract: toolContext.actionContract
         ? {
             id: toolContext.actionContract.id,
@@ -1514,6 +1485,9 @@ async function runTurn(input, label, msg = null) {
       },
     })
     throwIfAborted(controller.signal)
+    // 消费型信息必须等到模型确实接收了本轮 messages 后再确认。若调用被中断或失败，
+    // UI 信号留给重试轮重新注入，避免 read 阶段提前吞掉。
+    commitInformationConsumption(injection.categories?.information || injection)
   } catch (err) {
     if (err.name === 'AbortError') {
       console.log('[system] LLM processing interrupted (new message arrived)')
@@ -1723,6 +1697,28 @@ const consciousnessLoop = createConsciousnessLoop({
 })
 markCurrentTickAborted = consciousnessLoop.markLastTickAborted
 const startConsciousnessLoop = consciousnessLoop.start
+const ACTIVATION_INTRO_SELF_CHECK_FALLBACK_MS = 60_000
+let activationIntroFallbackTimer = null
+let activationIntroPending = false
+
+function releaseConsciousnessAfterActivationIntro(reason = 'completed') {
+  if (!activationIntroPending) return
+  activationIntroPending = false
+  if (activationIntroFallbackTimer) clearTimeout(activationIntroFallbackTimer)
+  activationIntroFallbackTimer = null
+  console.log(`[system] Activation intro ${reason}; starting consciousness loop and startup self-check`)
+  startConsciousnessLoop({ runImmediateTick: true })
+    .catch(err => console.error('[system] Main loop failed to start:', err))
+}
+
+function deferConsciousnessUntilActivationIntro() {
+  activationIntroPending = true
+  if (activationIntroFallbackTimer) clearTimeout(activationIntroFallbackTimer)
+  activationIntroFallbackTimer = setTimeout(() => {
+    releaseConsciousnessAfterActivationIntro('fallback timeout')
+  }, ACTIVATION_INTRO_SELF_CHECK_FALLBACK_MS)
+  activationIntroFallbackTimer.unref?.()
+}
 
 async function main() {
   console.log('Jarvis starting...')
@@ -1769,8 +1765,9 @@ async function main() {
     onActivated: () => {
       console.log(`[LLM] Activated: ${config.provider} (${config.model})`)
       registerMinimaxIfAvailable()
-      startConsciousnessLoop({ runImmediateTick: true }).catch(err => console.error('[system] Main loop failed to start:', err))
+      deferConsciousnessUntilActivationIntro()
     },
+    onActivationIntroComplete: () => releaseConsciousnessAfterActivationIntro('completed'),
   })
   // 仅在配置了正式预警 API 与目标地区时启用；避免把普通路径数据当作安全预警。
   startTyphoonAlertMonitor()

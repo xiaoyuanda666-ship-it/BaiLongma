@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
+<script>
+try {
+  if (new URLSearchParams(location.search).has('intro-preview')
+    || sessionStorage.getItem('bailongma_brain_ui_arrival_at')) {
+    document.documentElement.classList.add('brain-ui-intro-pending')
+  }
+} catch {}
+</script>
 <style id="critical-first-paint">
 html, body {
   margin: 0;
@@ -11,6 +19,9 @@ html, body {
   height: 100%;
   background: #0b0b0e;
   color-scheme: dark;
+}
+html.brain-ui-intro-pending body > :not(#activation-intro) {
+  visibility: hidden !important;
 }
 </style>
 <title>Longma · Cognitive Surface</title>

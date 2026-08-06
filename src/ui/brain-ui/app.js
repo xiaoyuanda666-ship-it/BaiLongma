@@ -28,6 +28,76 @@ import {
   semanticChildTargets as getSemanticChildTargets,
   shuffleGraphItems,
 } from "./memory-graph-data.js";
+import { playBrainUiIntro } from "./brain-ui-intro.js";
+
+const BRAIN_UI_ARRIVAL_KEY = "bailongma_brain_ui_arrival_at";
+
+function consumeBrainUiArrival() {
+  try {
+    const rawArrival = sessionStorage.getItem(BRAIN_UI_ARRIVAL_KEY);
+    sessionStorage.removeItem(BRAIN_UI_ARRIVAL_KEY);
+    if (!rawArrival) return { requested: false, releaseSelfCheck: false };
+    let arrivalAt = Number(rawArrival);
+    let source = "activation";
+    try {
+      const parsed = JSON.parse(rawArrival);
+      arrivalAt = Number(parsed?.at ?? arrivalAt);
+      source = String(parsed?.source || source);
+    } catch {}
+    const requested = Number.isFinite(arrivalAt) && Date.now() - arrivalAt < 30_000;
+    return {
+      requested,
+      releaseSelfCheck: requested && source === "activation",
+    };
+  } catch {
+    return { requested: false, releaseSelfCheck: false };
+  }
+}
+
+function playBrainUiArrival(enabled) {
+  if (!enabled) return Promise.resolve();
+  const targets = [
+    document.getElementById("panel-l1"),
+    ...document.querySelectorAll("#panel-l2 .l2-module"),
+    document.getElementById("chat-area"),
+  ].filter(Boolean);
+  if (!targets.length) return Promise.resolve();
+
+  document.body.classList.add("brain-ui-arrival");
+  targets.forEach((element, index) => {
+    element.classList.add("brain-ui-arrival-card");
+    element.style.setProperty("--brain-ui-arrival-delay", `${index * 135}ms`);
+    element.style.setProperty("--brain-ui-arrival-x", index === 0 ? "-18px" : index === targets.length - 1 ? "0px" : "18px");
+  });
+
+  return new Promise((resolve) => {
+    let cleared = false;
+    const lastTarget = targets[targets.length - 1];
+    const clearArrival = () => {
+      if (cleared) return;
+      cleared = true;
+      lastTarget.removeEventListener("animationend", handleArrivalEnd);
+      document.body.classList.remove("brain-ui-arrival");
+      targets.forEach((element) => {
+        element.classList.remove("brain-ui-arrival-card");
+        element.style.removeProperty("--brain-ui-arrival-delay");
+        element.style.removeProperty("--brain-ui-arrival-x");
+      });
+      resolve();
+    };
+    const handleArrivalEnd = (event) => {
+      if (event.target !== lastTarget || event.animationName !== "brain-ui-card-glitch-in") return;
+      clearArrival();
+    };
+    lastTarget.addEventListener("animationend", handleArrivalEnd);
+    window.setTimeout(clearArrival, 2200);
+  });
+}
+
+const brainUiArrival = consumeBrainUiArrival();
+const isBrainUiIntroPreview = new URLSearchParams(window.location.search).has("intro-preview");
+const brainUiIntroRequested = brainUiArrival.requested || isBrainUiIntroPreview;
+document.documentElement.classList.toggle("brain-ui-intro-pending", brainUiIntroRequested);
 const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
 document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
 if (hasWindowsTitleBarOverlay) {
@@ -38,6 +108,24 @@ if (hasWindowsTitleBarOverlay) {
   window.bailongma.isFullScreen?.().then(setFullScreenClass).catch(() => {});
 }
 renderBrainUiApp(document.body);
+if (brainUiIntroRequested) {
+  void (async () => {
+    try {
+      await playBrainUiIntro();
+    } finally {
+      await playBrainUiArrival(true);
+      if (brainUiArrival.releaseSelfCheck && !isBrainUiIntroPreview) {
+        fetch("/activation/intro-complete", { method: "POST" })
+          .then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          })
+          .catch((error) => {
+            console.warn("[brain-ui] could not release startup self-check:", error?.message || error);
+          });
+      }
+    }
+  })();
+}
 const THEME_KEY = "jarvis-brain-ui-theme";
 const PHYSICS_STORAGE_KEY = "jarvis-brain-ui-physics";
 const ACTIVATION_WARMUP_KEY = "bailongma_activation_warmup_until";

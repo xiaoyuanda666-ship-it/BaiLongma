@@ -226,6 +226,69 @@ body {
   overflow: visible;
 }
 
+/* One-shot handoff from the activation film into the real cognitive surface. */
+.brain-ui-arrival-card {
+  animation: brain-ui-card-glitch-in 760ms linear var(--brain-ui-arrival-delay, 0ms) both !important;
+  transform-origin: 50% 50%;
+  will-change: transform, opacity, clip-path, filter;
+}
+
+@keyframes brain-ui-card-glitch-in {
+  0% {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+    transform: translate3d(var(--brain-ui-arrival-x, 0), 10px, 0) scale(.985);
+    filter: brightness(2.2) contrast(1.7) saturate(.55) blur(4px);
+  }
+  14% {
+    opacity: .88;
+    clip-path: inset(0 0 42% 0);
+    transform: translate3d(0, 2px, 0) scale(1.006);
+    filter: brightness(1.85) contrast(1.45) saturate(.72) blur(0);
+  }
+  25% {
+    opacity: .3;
+    clip-path: inset(57% 0 18% 0);
+    transform: translate3d(-6px, -1px, 0) scaleX(1.018);
+    filter: brightness(.72) contrast(1.9) hue-rotate(18deg);
+  }
+  39% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(5px, 0, 0) scale(1.004);
+    filter: brightness(1.7) contrast(1.2);
+  }
+  49% {
+    opacity: .58;
+    clip-path: inset(8% 0 66% 0);
+    transform: translate3d(-3px, 1px, 0) scaleX(.994);
+    filter: brightness(.9) contrast(1.55) hue-rotate(-12deg);
+  }
+  62% {
+    opacity: .9;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(2px, 0, 0) scale(1);
+    filter: brightness(1.28) contrast(1.08);
+  }
+  76% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(-1px, 0, 0) scale(1);
+    filter: brightness(.96) contrast(1.06);
+  }
+  88% { opacity: .92; filter: brightness(1.18); }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brain-ui-arrival-card { animation-duration: .01ms !important; animation-delay: 0ms !important; }
+}
+
 #panel-l2 .heartbeat-stats {
   gap: 12px;
   padding: 0 0 12px;

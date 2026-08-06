@@ -568,7 +568,7 @@ BaiLongma 的工具系统由 schema、执行器、沙箱、安全策略、行动
 
 非 persistent 浏览器会话关闭后 cookie 与 storage 全部丢失。persistent profile 以当前用户/任务作用域、初始站点 origin 和显式 profile 名隔离，可在正常关闭、TTL 回收、应用退出与重启后复用站点允许持久化的 cookie 与 storage；session-only cookie 仍遵循站点与 Chromium 的会话规则，在浏览器进程退出时失效。崩溃恢复只能复用最后已经落盘的状态，不承诺恢复尚未 flush 的最近写入。旧版未隔离的扁平 profile 不会被自动复用。`browser_sessions(include_profiles=true)` 可列出当前作用域的可复用 profile；`browser_close(clear_profile=true)` 可在关闭活动会话时清理，或通过显式 profile + 同 origin URL 清理已关闭 profile。
 
-交互浏览器默认拒绝 localhost、环回地址与私网地址；只有独立的 `security.browserPrivateNetwork` 权限经用户明确确认后才开放。该权限与后端是否监听 LAN 无关。
+交互浏览器默认允许 localhost、环回地址与私网地址，以便直接访问本机开发服务；用户可以通过独立的 `security.browserPrivateNetwork` 权限撤销访问。该权限与后端是否监听 LAN 无关。
 
 Web 能力适合查询实时资料、打开文档、获取网页正文和处理静态 fetch 无法解析的页面。
 

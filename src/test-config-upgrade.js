@@ -121,7 +121,8 @@ async function loadFresh(json) {
   assert(config.provider === 'deepseek', 'B: provider 正确')
   assert(config.model === 'deepseek-some-retired-model', 'B: official provider preserves unknown model names for manual entry')
   assert(config.security.execSandbox === false, 'B: 激活路径下 security 同样保留')
-  assert(config.security.browserPrivateNetwork === false, 'B: 旧配置缺字段时 browserPrivateNetwork 默认 false')
+  assert(config.security.fileSandbox === false, 'B: 旧配置缺字段时文件沙箱默认关闭')
+  assert(config.security.browserPrivateNetwork === true, 'B: 旧配置缺字段时默认允许内置浏览器访问本机/私网')
 }
 
 // ── 场景 C：custom provider（baseURL + model 齐全）正常激活 ──
@@ -170,6 +171,12 @@ async function loadFresh(json) {
 // conversation/Tick split, and enforce toolCallLimit < chatMessageLimit atomically.
 {
   const defaults = await loadFresh({})
+  assert(defaults.getSecurity().fileSandbox === false,
+    'SEC: file sandbox defaults to disabled')
+  assert(defaults.getSecurity().execSandbox === false,
+    'SEC: command sandbox defaults to disabled')
+  assert(defaults.getSecurity().browserPrivateNetwork === true,
+    'SEC: built-in browser allows localhost/private-network access by default')
   assert(defaults.getContextWindowConfig().chatMessageLimit === 20,
     'CTX: chat context defaults to 20 messages')
   assert(defaults.getContextWindowConfig().toolCallLimit === 5,

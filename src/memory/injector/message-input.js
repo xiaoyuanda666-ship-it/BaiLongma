@@ -8,9 +8,12 @@ export function parseMessageInput(message) {
     return { isTick: true, senderId: null, messageBody: '' }
   }
   const match = message.match(/^\[([^\]]+)\]\s*[\d\-T:+]+\s*\[[^\]]*\]\s*(.*)$/s)
+  // 外部渠道头可能是 `[canonicalId via externalPartyId]`。记忆、画像和最近对话
+  // 都以 canonicalId 为键，不能让渠道侧 ID 污染 senderId。
+  const rawId = match ? match[1] : null
   return {
     isTick: false,
-    senderId: match ? match[1] : null,
+    senderId: rawId ? rawId.split(/\s+via\s+/i)[0].trim() : null,
     messageBody: match ? match[2].trim() : message,
   }
 }

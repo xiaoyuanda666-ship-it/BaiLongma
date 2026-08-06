@@ -3,6 +3,7 @@
 // 支持单条消息包含多个 key（如"百炼语音识别 sk-xxx 豆包语音发声 uuid-xxx"）
 import { setVoiceConfig, setTTSConfig, setSeedanceConfig } from './config.js'
 import { streamTTS } from './voice/tts-providers.js'
+import { DEFAULT_DOUBAO_SPEECH_RATE, DEFAULT_DOUBAO_VOICE_ID } from './voice/tts-defaults.js'
 
 // 提取文本中所有候选 key 字符串（20~120 字符的字母数字 token）
 function extractCandidateKeys(text) {
@@ -41,7 +42,13 @@ const PROVIDER_RULES = [
     skip: /asr|识别/,
     service: 'tts', provider: 'doubao', label: '豆包 TTS',
     makeConfig: (key) => ({
-      configUpdates: { ttsProvider: 'doubao', doubaoKey: key, doubaoResourceId: 'seed-tts-2.0' },
+      configUpdates: {
+        ttsProvider: 'doubao',
+        ttsVoiceId: DEFAULT_DOUBAO_VOICE_ID,
+        doubaoSpeechRate: DEFAULT_DOUBAO_SPEECH_RATE,
+        doubaoKey: key,
+        doubaoResourceId: 'seed-tts-2.0',
+      },
       streamKeys: { doubaoKey: key, doubaoResourceId: 'seed-tts-2.0' },
     }),
   },
