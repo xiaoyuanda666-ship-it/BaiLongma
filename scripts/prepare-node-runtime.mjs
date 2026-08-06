@@ -82,6 +82,17 @@ function executableName(platform) {
   return platform === 'win32' ? 'node.exe' : 'node'
 }
 
+export function resolveNodeLicense(source) {
+  const executableDir = path.dirname(source)
+  const candidates = [
+    path.join(executableDir, 'LICENSE'),
+    path.join(executableDir, 'LICENSE.txt'),
+    path.resolve(executableDir, '..', 'LICENSE'),
+    path.resolve(executableDir, '..', 'LICENSE.txt'),
+  ]
+  return candidates.find(existsSync) || null
+}
+
 function validateRuntime(executable, target) {
   if (!existsSync(executable)) return null
   const metadata = inspectNodeForTarget(executable, target)
@@ -131,10 +142,19 @@ function stageTarget(target) {
     spawnSync('xattr', ['-c', temporary], { stdio: 'ignore' })
   }
   renameSync(temporary, destination)
-  const sourceLicense = path.resolve(path.dirname(source), '..', 'LICENSE')
-  if (existsSync(sourceLicense)) copyFileSync(sourceLicense, destinationLicense)
+  const sourceLicense = resolveNodeLicense(source)
+  if (!sourceLicense) {
+    throw new Error(
+      `Cannot find the Node license beside ${source}. `
+      + `Use an official Node distribution (LICENSE or LICENSE.txt must accompany the executable).`,
+    )
+  }
+  copyFileSync(sourceLicense, destinationLicense)
   const staged = validateRuntime(destination, target)
   console.log(`[node-runtime] staged Node ${staged.version} for ${target.key}`)
 }
 
-for (const target of parseTargets()) stageTarget(target)
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) {
+  for (const target of parseTargets()) stageTarget(target)
+}

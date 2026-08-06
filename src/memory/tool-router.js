@@ -52,7 +52,7 @@ const MEDIA_TOOLS       = process.platform === 'darwin'
   ? ['media_mode']
   : ['media_mode', 'music']
 const REMINDER_TOOLS    = ['manage_reminder']
-const PREFETCH_TOOLS    = ['manage_prefetch_task']
+const PREFETCH_TOOLS    = ['manage_prefetch_task', 'manage_information_subscription']
 const TICKER_TOOLS      = ['set_tick_interval']
 // Startup self-check is a deterministic, local-only three-step flow. Keep its
 // schemas available in its first turn so the fixed validation cannot be skipped
@@ -76,6 +76,7 @@ const ADMIN_TOOLS       = [
   'manage_tool_factory', 'install_tool', 'uninstall_tool', 'list_tools',
   'set_security', 'connect_wechat', 'connect_feishu',
   'set_location', 'set_agent_name', 'manage_rule',
+  'manage_information_subscription',
   'manage_api_capability',
 ]
 

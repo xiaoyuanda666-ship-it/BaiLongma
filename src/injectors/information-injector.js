@@ -31,19 +31,53 @@ import {
   formatSceneManifest,
   formatAIVideoPanel,
 } from '../memory/injector-format.js'
+import {
+  commitScheduledInformationDeliveries,
+  resolveInformationSubscriptions,
+} from './information-subscription-engine.js'
 
-export function runInformationInjector() {
+export {
+  registerInformationProvider,
+  listInformationProviders,
+} from './information-providers.js'
+
+export async function runInformationInjector({
+  message = '',
+  userId = PRIMARY_USER_ID,
+  isTick = false,
+  signal = null,
+  nowMs = Date.now(),
+} = {}) {
   const { uiSignalIds, uiSignalSummary } = readInjectorUISignals(60_000)
+  const subscribedInformation = await resolveInformationSubscriptions({
+    message,
+    userId,
+    isTick,
+    signal,
+    nowMs,
+  })
   return {
     constraints: getActiveConstraints(),
     prefetchedItems: getValidPrefetchCache(),
     uiSignalSummary,
     uiSignalIds,
+    subscribedInformation,
+    informationContextText: subscribedInformation.contextText,
+    informationProviderIds: subscribedInformation.providerIds,
+    scheduledSubscriptionIds: subscribedInformation.scheduledSubscriptionIds,
   }
 }
 
 export function commitInformationConsumption(information = {}) {
-  return commitInjectorUISignals(information.uiSignalIds || [])
+  const ui = commitInjectorUISignals(information.uiSignalIds || [])
+  const scheduledSubscriptions = commitScheduledInformationDeliveries(
+    information.scheduledSubscriptionIds || [],
+  )
+  return {
+    committed: ui.committed,
+    uiSignals: ui.committed,
+    scheduledSubscriptions,
+  }
 }
 
 export function buildSupplementalInformationContext({
@@ -57,6 +91,7 @@ export function buildSupplementalInformationContext({
     terminal: formatTerminalStreamContext(),
     prefetch: formatPrefetchedItems(information.prefetchedItems || []),
     uiSignals: information.uiSignalSummary || '',
+    subscriptions: information.informationContextText || information.subscribedInformation?.contextText || '',
     scene: formatSceneManifest(sceneStore.manifest()),
     aiVideoPanel: formatAIVideoPanel(getAIVideoPanelState()),
   }
@@ -72,6 +107,7 @@ export async function runRuntimeInformationInjector({
   taskKnowledge = '',
   memories = '',
   fastUserPath = false,
+  excludedInformationProviders = [],
   signal = null,
 } = {}) {
   const text = String(message || '')
@@ -94,7 +130,7 @@ export async function runRuntimeInformationInjector({
     capPrefeed,
     taskExtraContextItemsRaw,
   ] = await Promise.all([
-    buildKeywordRuntimeContext(text),
+    buildKeywordRuntimeContext(text, { excludedProviders: excludedInformationProviders }),
     runCapabilityPrefeed(capCtx),
     gatherContextPromise,
   ])

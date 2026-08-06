@@ -9,6 +9,7 @@ import {
   capabilityToolsFor,
   capabilityContextBlocks,
   findCapabilitiesByQuery,
+  isDeviceMonitoringSubscriptionIntent,
   listCapabilities,
 } from './capabilities/capability-registry.js'
 
@@ -65,7 +66,7 @@ function ctx(rawText, isTick = false) {
 {
   const caps = listCapabilities()
   const ids = caps.map(c => c.id)
-  assert(['system-browser', 'interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install'].every(id => ids.includes(id))
+  assert(['system-browser', 'interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install', 'device-information-subscription'].every(id => ids.includes(id))
     && !ids.includes('web'),
     `1) listCapabilities 含台风在内的 v1 能力 (got: ${ids.join(',')})`)
   assert(caps.every(c => c.label && c.summary), '1) 每个能力都有 label + summary（自感知用）')
@@ -142,6 +143,16 @@ function ctx(rawText, isTick = false) {
   assert(BROWSER_TOOLS.every(name => has(t, name)) && none(t, FORBIDDEN_BROWSER_TOOLS),
     `2f) 天气 → 仅 Playwright MCP (got: ${t.join(',')})`)
 }
+{
+  const phrase = '我希望你关注我的鼠标键盘的电量信息，电量比较低的时候你提醒我充电'
+  const t = capabilityToolsFor(ctx(phrase))
+  assert(isDeviceMonitoringSubscriptionIntent(phrase)
+    && has(t, 'manage_information_subscription')
+    && !has(t, 'manage_reminder'),
+  `2g) 自然语言设备关注请求 → 信息订阅工具 (got: ${t.join(',')})`)
+  assert(!isDeviceMonitoringSubscriptionIntent('我的键盘是什么型号？'),
+    '2h) 一次性设备问题不误判为持续订阅')
+}
 
 // ===== 3) 工作流块注入（context）=====
 {
@@ -166,6 +177,11 @@ function ctx(rawText, isTick = false) {
     '3f) 浏览器工作流不再提示自研会话/profile/epoch 模型')
   assert(capabilityContextBlocks(ctx('随便聊两句')).length === 0,
     '3g) 中性消息 → 无能力工作流块')
+  const deviceSubscriptionContext = capabilityContextBlocks(ctx('请持续关注鼠标电量，低了提醒我'))
+    .find(block => block.includes('Device Information Subscription')) || ''
+  assert(deviceSubscriptionContext.includes('provider_id="device_peripherals"')
+    && deviceSubscriptionContext.includes('subscriber="agent"'),
+  '3h) 设备关注请求 → 订阅工作流块，指定设备 provider 与 Agent 所有权')
 }
 
 // ===== 4) find_tool 能力发现（自感知按需激活）=====
@@ -192,6 +208,9 @@ function ctx(rawText, isTick = false) {
       `4d) ${query} → 仅发现 Playwright MCP 白名单`)
   }
   assert(findCapabilitiesByQuery('').length === 0, '4e) 空 query → 无发现')
+  const device = findCapabilitiesByQuery('关注鼠标键盘电量').find(c => c.id === 'device-information-subscription')
+  assert(device?.tools.includes('manage_information_subscription'),
+    '4f) 设备电量关注 → 可发现信息订阅能力')
 }
 
 if (failed === 0) console.log('\nAll capability-registry checks complete.')

@@ -24,12 +24,15 @@ try {
     "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
   ).all().map(row => row.name)
 
-  for (const required of ['conversations', 'memories', 'reminders', 'thread_state']) {
+  for (const required of ['conversations', 'memories', 'reminders', 'thread_state', 'information_subscriptions']) {
     assert.ok(tables.includes(required), `missing table: ${required}`)
   }
+  const subscriptionColumns = db.prepare('PRAGMA table_info(information_subscriptions)').all().map(row => row.name)
+  assert.ok(subscriptionColumns.includes('instruction'), 'information_subscriptions missing instruction column')
 } finally {
   closeDBForTest()
   fs.rmSync(resolvedTempRoot, { recursive: true, force: true })
 }
 
 console.log('db schema module tests passed')
+process.exit(process.exitCode || 0)

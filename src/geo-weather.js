@@ -27,6 +27,13 @@ const LOCATION_REFRESH_MS = 7 * 24 * 60 * 60 * 1000  // 位置信息兜底 7d �
 
 let _cached = null
 
+function loadStoredGeoWeather() {
+  if (!_cached && fs.existsSync(GEO_WEATHER_FILE)) {
+    _cached = safe(() => JSON.parse(fs.readFileSync(GEO_WEATHER_FILE, 'utf8')))
+  }
+  return _cached
+}
+
 // ─── 工具函数 ──────────────────────────────────────────────────────────────────
 
 function safe(fn, fallback = null) {
@@ -207,7 +214,7 @@ export async function collectGeoWeather() {
  * 供工具层（如 media_mode 视频平台决策）快速判断用户地区，无需走 prompt。
  */
 export function getCountryCode() {
-  const cc = _cached?.location?.country_code
+  const cc = loadStoredGeoWeather()?.location?.country_code
   return cc ? String(cc).toUpperCase() : null
 }
 
@@ -216,9 +223,7 @@ export function getCountryCode() {
  * 不包含公网 IP、运营商、精确坐标或完整地址。
  */
 export function getGeoWeatherSnapshot() {
-  if (!_cached && fs.existsSync(GEO_WEATHER_FILE)) {
-    _cached = safe(() => JSON.parse(fs.readFileSync(GEO_WEATHER_FILE, 'utf8')))
-  }
+  loadStoredGeoWeather()
 
   const loc = _cached?.location
   const weather = _cached?.weather

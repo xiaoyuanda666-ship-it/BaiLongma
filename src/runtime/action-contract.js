@@ -35,6 +35,8 @@ const MACOS_MUSIC_EXPLICIT_ACTION_RE = /(?:(?:播放|暂停|继续|恢复|停止
 const MACOS_MUSIC_BARE_CONTROL_RE = /^(?:请|帮我|现在|先|再|那就|好的?|直接|给我|把它|把这首歌|音乐)?\s*(?:暂停|继续|恢复播放|停止播放|播放|下一首|上一首|切歌|换一首|pause|resume|play|next|previous)\s*(?:一下|吧|音乐|这首|这首歌|歌曲|好吗|please)?[。.!！?？]*$/i
 const MACOS_MUSIC_CONTEXT_RE = /(?:apple\s*music|music\.app|mac(?:os)?\s*(?:system\s*)?music|系统音乐|音乐播放器|播放.*(?:歌|音乐)|(?:歌|音乐).*(?:播放|暂停)|current track|playback state)/i
 const MACOS_MUSIC_RUNTIME_RE = /\[macOS System Music\][\s\S]*(?:Music\.app is open|Authoritative playback state:)/i
+const NEGATED_ACTION_START_RE = /^(?:(?:但(?:是)?|不过|然而|而是|而要|然后|接着|同时|并且|也|再|先|请|务必|千万|我(?:要求|希望|让)你)\s*)*(?:不要|别|无需|不用|请勿|禁止|不得)(?:再)?/iu
+const NEGATED_ACTION_START_EN_RE = /^(?:(?:but|however|and|then|please|also)\s+)*(?:do\s+not|don't|never|must\s+not)\b/i
 
 function browserInteractionContract(label = '检查并继续浏览器交互') {
   return {
@@ -74,6 +76,28 @@ function isExplicitBrowserNavigationRequest(text = '') {
     || BROWSER_OPEN_TARGET_RE.test(value)
     || BROWSER_OPEN_TARGET_EN_RE.test(value)
   )
+}
+
+// Action contracts describe work the user wants performed. Explicitly
+// forbidden work must not be turned into a mandatory tool call. Split only at
+// strong clause boundaries and before an explicit negator, so a mixed request
+// such as “不要删除旧文件，但创建新文件” still retains its positive action.
+// This stays deliberately local to user intent classification; it does not
+// scan assistant prose or guess missing tools from arbitrary keywords.
+export function stripExplicitlyNegatedActionClauses(text = '') {
+  const segmented = String(text || '')
+    .replace(/[，,。！？!?；;\n]+/gu, '\n')
+    .replace(/\s+(?=(?:but|however|then)\b)/giu, '\n')
+    .replace(/(?=(?:但是|但|不过|然而|而是|而要|然后|接着|同时要))/gu, '\n')
+    .replace(/([^\n])(?=(?:请\s*)?(?:不要|别|无需|不用|请勿|禁止|不得)(?:再)?)/gu, '$1\n')
+    .replace(/([^\n])(?=(?:please\s+)?(?:do\s+not|don't|never|must\s+not)\b)/giu, '$1\n')
+
+  return segmented
+    .split('\n')
+    .map(clause => clause.trim())
+    .filter(Boolean)
+    .filter(clause => !NEGATED_ACTION_START_RE.test(clause) && !NEGATED_ACTION_START_EN_RE.test(clause))
+    .join('，')
 }
 
 const CONTRACTS = [
@@ -181,10 +205,12 @@ export function classifyActionContract(message = '', { conversationWindow = [], 
   if (!text || META_QUESTION_RE.test(text)) return null
   // “怎么/如何做” requests an explanation, not the side effect itself.
   if (/^(?:请问[，,：:]?\s*)?(?:怎么|如何|怎样|能否|可否|what\b|how\b)/i.test(text)) return null
+  const actionText = stripExplicitlyNegatedActionClauses(text)
+  if (!actionText) return null
 
   if (process.platform === 'darwin' && (
-    MACOS_MUSIC_EXPLICIT_ACTION_RE.test(text)
-    || (MACOS_MUSIC_BARE_CONTROL_RE.test(text) && (
+    MACOS_MUSIC_EXPLICIT_ACTION_RE.test(actionText)
+    || (MACOS_MUSIC_BARE_CONTROL_RE.test(actionText) && (
       hasRecentMusicContext(conversationWindow)
       || MACOS_MUSIC_RUNTIME_RE.test(String(runtimeContext || ''))
     ))
@@ -198,24 +224,24 @@ export function classifyActionContract(message = '', { conversationWindow = [], 
 
   // “没有被墙，它能走”这类承接话没有动作动词，但在一个正在进行的登录/网页任务里
   // 明确要求继续。把它绑定到最近的浏览器上下文，避免模型把想象中的进度当成已发生的操作。
-  if (BROWSER_CONTINUATION_RE.test(text) && hasRecentBrowserContext(conversationWindow)) {
+  if (BROWSER_CONTINUATION_RE.test(actionText) && hasRecentBrowserContext(conversationWindow)) {
     return browserInteractionContract('继续当前浏览器交互')
   }
 
   const match = CONTRACTS.find(contract => (
     typeof contract.match === 'function'
-      ? contract.match(text)
-      : contract.pattern.test(text)
+      ? contract.match(actionText)
+      : contract.pattern.test(actionText)
   ))
   if (!match) return null
-  if (match.id === 'software_install' && /(?:工具|插件|plugin|npm|依赖|扩展)/i.test(text)) return null
-  if (match.id === 'memory_write' && /(?:你|能).{0,12}记住.*[？?]$/i.test(text)) return null
+  if (match.id === 'software_install' && /(?:工具|插件|plugin|npm|依赖|扩展)/i.test(actionText)) return null
+  if (match.id === 'memory_write' && /(?:你|能).{0,12}记住.*[？?]$/i.test(actionText)) return null
 
   return {
     id: match.id,
     label: match.label,
     requiredTools: [...match.tools],
-    ...(typeof match.resolve === 'function' ? match.resolve(text) : {}),
+    ...(typeof match.resolve === 'function' ? match.resolve(actionText) : {}),
   }
 }
 

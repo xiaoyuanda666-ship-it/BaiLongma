@@ -17,6 +17,7 @@ const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const lock = JSON.parse(readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
 const mainSource = readFileSync(path.join(root, 'electron', 'main.cjs'), 'utf8')
 const macBuildSource = readFileSync(path.join(root, 'scripts', 'build-mac.mjs'), 'utf8')
+const winBuildSource = readFileSync(path.join(root, 'scripts', 'build-win.mjs'), 'utf8')
 const gitignore = readFileSync(path.join(root, '.gitignore'), 'utf8')
 const require = createRequire(import.meta.url)
 const packagedRuntime = require('../electron/playwright-runtime.cjs')
@@ -24,7 +25,7 @@ const mcpRuntime = resolveMcpRuntime(root)
 
 assert.equal(pkg.devDependencies.electron, lock.packages['node_modules/electron'].version,
   'Electron must be pinned exactly so native modules are rebuilt for the installed ABI')
-for (const name of ['build', 'build:win', 'build:linux', 'publish']) {
+for (const name of ['build', 'build:linux', 'publish']) {
   assert.match(pkg.scripts[name], new RegExp(`-v ${pkg.devDependencies.electron.replaceAll('.', '\\.')}(?:\\s|$)`),
     `${name} must rebuild native modules for the pinned Electron version`)
 }
@@ -58,13 +59,19 @@ assert.deepEqual(pkg.build.extraResources, [
     filter: ['**/*'],
   },
 ])
-for (const name of ['build', 'build:win', 'publish']) {
+for (const name of ['build', 'publish']) {
   const script = pkg.scripts[name]
   assert.ok(script.indexOf('prebuild-clean.mjs') < script.indexOf('prepare-playwright-browsers.mjs'), `${name} must clean before staging`)
   assert.ok(script.indexOf('prepare-playwright-browsers.mjs') < script.indexOf('electron-builder'), `${name} must stage before electron-builder`)
 }
 assert.ok(macBuildSource.indexOf('prebuild-clean.mjs') < macBuildSource.indexOf('prepare-playwright-browsers.mjs'))
 assert.ok(macBuildSource.indexOf('prepare-playwright-browsers.mjs') < macBuildSource.indexOf('electron-builder'))
+assert.equal(pkg.scripts['build:win'], 'node scripts/build-win.mjs')
+assert.ok(winBuildSource.indexOf('prebuild-clean.mjs') < winBuildSource.indexOf('prepare-playwright-browsers.mjs'))
+assert.ok(winBuildSource.indexOf('prepare-playwright-browsers.mjs') < winBuildSource.indexOf('@electron/rebuild'))
+assert.ok(winBuildSource.indexOf('@electron/rebuild') < winBuildSource.indexOf('electron-builder'))
+assert.match(winBuildSource, /'-a', 'x64'/)
+assert.match(winBuildSource, /electronVersion/)
 assert.match(mainSource, /createBrowserEmbedHost/)
 assert.match(mainSource, /remote-debugging-port/)
 assert.match(gitignore, /^build\/playwright-browsers\/$/m)

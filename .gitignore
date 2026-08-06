@@ -98,6 +98,10 @@ web_modules/
 .env.production.local
 .env.local
 
+# Local LLM provider credentials. Commit redacted examples only.
+llm/*.json
+!llm/*.example.json
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

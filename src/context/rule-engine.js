@@ -42,15 +42,17 @@ function shouldDedupeProvider(provider = '') {
   return ['local_resources', 'installed_software', 'weather'].includes(provider)
 }
 
-export async function runContextRuleEngine(message = '') {
+export async function runContextRuleEngine(message = '', { excludedProviders = [] } = {}) {
   const text = String(message || '')
   if (!text.trim()) return ''
 
   const matchedBlocks = []
   const seenProviders = new Set()
+  const excluded = new Set((Array.isArray(excludedProviders) ? excludedProviders : []).map(String))
 
   for (const rule of loadContextRules()) {
     if (!rule.enabled || rule.status === 'draft') continue
+    if (excluded.has(rule.provider)) continue
     if (!ruleMatches(rule, text)) continue
     if (shouldDedupeProvider(rule.provider) && seenProviders.has(rule.provider)) continue
     const block = await providerBlock(rule, text)

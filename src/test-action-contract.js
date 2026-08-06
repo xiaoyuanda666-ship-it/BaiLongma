@@ -28,6 +28,34 @@ try {
   assert.equal(classifyActionContract('怎么创建一个 txt 文件？'), null, 'how-to is ordinary Q&A, not an execution contract')
   assert.equal(classifyActionContract('你有多少执行命令工具？'), null, 'tool meta questions must not trigger execution')
   assert.equal(classifyActionContract('帮我安装一个 npm 插件'), null, 'plugin installation is not OS software installation')
+  for (const phrase of [
+    '只读验收，不要创建或修改任何文件',
+    '不要删除任何文件',
+    '别运行命令或启动程序',
+    '请勿安装任何软件',
+    '不用设置提醒',
+    '禁止打开热点面板',
+    'do not run the command',
+    'never install this app',
+  ]) {
+    assert.equal(classifyActionContract(phrase), null,
+      `explicitly forbidden work must not become an action contract: ${phrase}`)
+  }
+  assert.equal(
+    classifyActionContract('不要删除旧文件，但创建一个新的 txt 文件')?.id,
+    'file_write',
+    'a negated clause must not erase a separate positive action',
+  )
+  assert.equal(
+    classifyActionContract('创建一个新的 txt 文件时不要覆盖旧文件')?.id,
+    'file_write',
+    'a trailing negative constraint must preserve the positive action',
+  )
+  assert.equal(
+    resolveActionContractForTurn('这次只读取现有文件，不要创建或修改任何文件'),
+    null,
+    'the live read-only verification wording must not force write_file',
+  )
   const displayContract = classifyActionContract('切换到大浏览器')
   assert.equal(displayContract?.id, 'browser_display_mode')
   assert.deepEqual(displayContract.requiredTools, ['browser_set_display_mode'])
@@ -301,10 +329,13 @@ try {
           toolCalls: [{ id: 'write-social', name: 'write_file', arguments: JSON.stringify({ path: 'sandbox/hello.txt', content: 'hello' }) }],
         }
       }
-      return {
-        content: '', reasoningContent: '', aborted: false,
-        toolCalls: [{ id: 'final-send', name: 'send_message', arguments: JSON.stringify({ target_id: 'ID:000001', content: '文件已创建：sandbox/hello.txt。' }) }],
+      if (socialRounds === 3) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'final-send', name: 'send_message', arguments: JSON.stringify({ target_id: 'ID:000001', content: '文件已创建：sandbox/hello.txt。' }) }],
+        }
       }
+      return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
     },
     _executeToolForTest: async (name) => {
       socialExecuted.push(name)
@@ -313,7 +344,7 @@ try {
       return JSON.stringify({ ok: false, error: 'unexpected tool' })
     },
   })
-  assert.equal(socialRounds, 3)
+  assert.equal(socialRounds, 4, 'ordinary final delivery gets a non-terminal reconsideration round')
   assert.deepEqual(socialExecuted, ['write_file', 'send_message'], 'premature social completion was suppressed, not delivered')
   assert.equal(social.delivered, true)
 

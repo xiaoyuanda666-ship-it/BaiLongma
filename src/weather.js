@@ -127,6 +127,49 @@ async function fetchWeeklyData(lat, lon) {
   return res.json()
 }
 
+async function resolveOpenMeteoLocation(location) {
+  const direct = parseCoordinateLocation(location)
+  if (direct) return { ...direct, label: WEATHER_LOCATION_LABELS.get(location) || location }
+
+  const url = new URL('https://geocoding-api.open-meteo.com/v1/search')
+  url.searchParams.set('name', location)
+  url.searchParams.set('count', '1')
+  url.searchParams.set('language', 'zh')
+  url.searchParams.set('format', 'json')
+  const res = await globalThis.fetch(url, {
+    headers: { 'User-Agent': 'Bailongma/1.0 (+https://localhost)' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (!res.ok) throw new Error(`Open-Meteo geocoding HTTP ${res.status}`)
+  const data = await res.json()
+  const place = data?.results?.[0]
+  const lat = Number(place?.latitude)
+  const lon = Number(place?.longitude)
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('Open-Meteo location not found')
+  return {
+    lat,
+    lon,
+    label: WEATHER_LOCATION_LABELS.get(location) || place.name || location,
+  }
+}
+
+async function fetchOpenMeteoData(location, mode) {
+  const place = await resolveOpenMeteoLocation(location)
+  const url = new URL('https://api.open-meteo.com/v1/forecast')
+  url.searchParams.set('latitude', String(place.lat))
+  url.searchParams.set('longitude', String(place.lon))
+  url.searchParams.set('current', 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,visibility')
+  url.searchParams.set('daily', 'weather_code,temperature_2m_max,temperature_2m_min')
+  url.searchParams.set('forecast_days', mode === 'week' ? '7' : '3')
+  url.searchParams.set('timezone', 'auto')
+  const res = await globalThis.fetch(url, {
+    headers: { 'User-Agent': 'Bailongma/1.0 (+https://localhost)' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (!res.ok) throw new Error(`Open-Meteo weather HTTP ${res.status}`)
+  return { data: await res.json(), label: place.label }
+}
+
 const WEATHER_DESC_ZH = {
   'Sunny': '晴',
   'Clear': '晴',
@@ -204,6 +247,13 @@ function weatherCodeDesc(code) {
   return '多云'
 }
 
+function windDirectionLabel(degrees) {
+  const value = Number(degrees)
+  if (!Number.isFinite(value)) return ''
+  const labels = ['北', '东北偏北', '东北', '东北偏东', '东', '东南偏东', '东南', '东南偏南', '南', '西南偏南', '西南', '西南偏西', '西', '西北偏西', '西北', '西北偏北']
+  return labels[Math.round(((value % 360) + 360) % 360 / 22.5) % 16]
+}
+
 function dayLabel(date = '', index = 0, mode = 'compact') {
   if (index === 0) return '今天'
   if (index === 1) return '明天'
@@ -279,6 +329,52 @@ function parseWeatherData(data, location, { mode = 'compact', weekly = null } = 
   return { formatted, cardProps }
 }
 
+function parseOpenMeteoData(data, location, label, mode = 'compact') {
+  const cur = data?.current
+  const daily = data?.daily || {}
+  if (!cur || !Array.isArray(daily.time) || daily.time.length === 0) return null
+
+  const tempC = Number(cur.temperature_2m)
+  const feelsC = Number(cur.apparent_temperature)
+  const humidity = Number(cur.relative_humidity_2m)
+  const windKmph = Number(cur.wind_speed_10m)
+  const windDir = windDirectionLabel(cur.wind_direction_10m)
+  const visibilityKm = Number(cur.visibility) / 1000
+  const desc = weatherCodeDesc(cur.weather_code)
+  const forecastDays = daily.time.slice(0, mode === 'week' ? 7 : 3).map((date, i) => ({
+    day: dayLabel(date, i, mode),
+    condition: weatherCodeDesc(daily.weather_code?.[i]),
+    high: Math.round(Number(daily.temperature_2m_max?.[i])),
+    low: Math.round(Number(daily.temperature_2m_min?.[i])),
+  })).filter(day => Number.isFinite(day.high) && Number.isFinite(day.low))
+  if (!Number.isFinite(tempC) || forecastDays.length === 0) return null
+
+  const displayLocation = label || WEATHER_LOCATION_LABELS.get(location) || location
+  const today = forecastDays[0]
+  const formatted = [
+    `📍 ${displayLocation} 实时天气`,
+    `天气：${desc}  气温：${tempC}°C（体感 ${Number.isFinite(feelsC) ? feelsC : tempC}°C）`,
+    `今日：${today.low}～${today.high}°C  湿度：${Number.isFinite(humidity) ? humidity : '--'}%  风：${windDir ? `${windDir} ` : ''}${Number.isFinite(windKmph) ? windKmph : '--'} km/h`,
+    ...(Number.isFinite(visibilityKm) && visibilityKm < 10 ? [`能见度：${visibilityKm.toFixed(1)} km`] : []),
+    `未来预报：\n${forecastDays.map(day => `  ${day.day}  ${day.low}～${day.high}°C  ${day.condition}`).join('\n')}`,
+  ].join('\n')
+
+  return {
+    formatted,
+    cardProps: {
+      variant: mode === 'week' && forecastDays.length >= 7 ? 'week' : 'compact',
+      city: displayLocation,
+      temp: tempC,
+      condition: desc,
+      feel: Number.isFinite(feelsC) ? feelsC : tempC,
+      high: today.high,
+      low: today.low,
+      wind: `${windDir ? `${windDir} ` : ''}${Number.isFinite(windKmph) ? windKmph : '--'} km/h`,
+      forecast: forecastDays,
+    },
+  }
+}
+
 /* ── 公开 API ── */
 
 // Wave 1：in-flight promise dedup —— runRuntimeInjector 并发后 buildWeatherRuntimeContext
@@ -287,19 +383,42 @@ function parseWeatherData(data, location, { mode = 'compact', weekly = null } = 
 const inflight = new Map()
 
 async function fetchWeatherBundle(location, mode) {
-  const data = await fetchWeatherData(location)
-  let weekly = null
-  if (mode === 'week') {
-    const coords = coordsFromWttrData(data, location)
-    if (coords) {
-      try {
-        weekly = await fetchWeeklyData(coords.lat, coords.lon)
-      } catch (err) {
-        console.warn(`[天气] 7天预报拉取失败：${err.message}`)
+  try {
+    const data = await fetchWeatherData(location)
+    let weekly = null
+    if (mode === 'week') {
+      const coords = coordsFromWttrData(data, location)
+      if (coords) {
+        try {
+          weekly = await fetchWeeklyData(coords.lat, coords.lon)
+        } catch (err) {
+          console.warn(`[天气] 7天预报拉取失败：${err.message}`)
+        }
       }
     }
+    return parseWeatherData(data, location, { mode, weekly })
+  } catch (primaryError) {
+    console.warn(`[天气] wttr.in 失败，改用 Open-Meteo：${primaryError.message}`)
+    const fallback = await fetchOpenMeteoData(location, mode)
+    return parseOpenMeteoData(fallback.data, location, fallback.label, mode)
   }
-  return parseWeatherData(data, location, { mode, weekly })
+}
+
+function withHardTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback(value)
+    }
+    const timer = setTimeout(() => finish(reject, new Error(`hard timeout ${ms}ms`)), ms)
+    Promise.resolve(promise).then(
+      value => finish(resolve, value),
+      error => finish(reject, error),
+    )
+  })
 }
 
 export async function fetchAndCacheWeather(location, { mode = 'compact' } = {}) {
@@ -314,11 +433,7 @@ export async function fetchAndCacheWeather(location, { mode = 'compact' } = {}) 
   const promise = (async () => {
     try {
       console.log(`[天气] 拉取 ${location} 天气(${mode})...`)
-      const parsed = await Promise.race([
-        fetchWeatherBundle(location, mode),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`hard timeout ${HARD_TIMEOUT_MS}ms`)), HARD_TIMEOUT_MS)),
-      ])
+      const parsed = await withHardTimeout(fetchWeatherBundle(location, mode), HARD_TIMEOUT_MS)
       if (!parsed) return null
       const next = { location, mode, ...parsed, fetchedAt: Date.now() }
       cache.set(key, next)

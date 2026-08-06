@@ -37,7 +37,7 @@ export async function restartConnector(platform, { pushMessage, emitEvent } = {}
 
   const starters = {
     discord: () => startDiscordConnector({ pushMessage, emitEvent }),
-    'wechat-clawbot': () => startClawbotConnector({ pushMessage, emitEvent }),
+    'wechat-clawbot': () => startClawbotConnector({ pushMessage, emitEvent, allowQrLogin: true }),
     feishu: () => startFeishuConnector({ pushMessage, emitEvent }),
   }
 

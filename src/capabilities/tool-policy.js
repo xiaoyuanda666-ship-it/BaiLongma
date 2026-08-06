@@ -26,6 +26,7 @@ const TOOL_RISK = {
   schedule_reminder: 'medium',
   manage_prefetch_task: 'medium',
   manage_rule: 'medium',
+  manage_information_subscription: 'medium',
   ui_set: 'medium',
   capability_demo: 'medium',
   terminal_stream: 'medium',

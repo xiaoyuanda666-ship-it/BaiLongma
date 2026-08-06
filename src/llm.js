@@ -651,7 +651,12 @@ function makeSameTickNoEvidenceResult(args = {}, previousOutbound = null, tickSt
 function buildPostSendNudge(outboundMessages = [], tickState = null) {
   const latest = outboundMessages.at(-1)
   if (!latest) {
-    return 'Message sent. Default action: end the round now. Do not send another message unless genuinely new substantive information appears.'
+    return [
+      'The most recent action was a communication attempt, but no new outbound message was recorded for this turn. Read the tool result to distinguish a failed/suppressed send from an already-delivered duplicate.',
+      'If the result confirms that the complete final answer was already delivered, end the round silently.',
+      'If any delivered message promised, previewed, or announced that you would inspect, search, create, execute, change, or otherwise do something next, continue now with an available action tool or find_tool.',
+      'End only after a complete answer or a genuine terminal blocker. Do not send a duplicate or a separate closing pleasantry.',
+    ].join('\n')
   }
   return [
     'Communication reality check:',
@@ -659,8 +664,10 @@ function buildPostSendNudge(outboundMessages = [], tickState = null) {
     `“${latest.content.slice(0, 500)}”`,
     tickState ? `This is still outer TICK #${tickState.number}; the send happened in tool-loop round ${latest.toolRound}.` : '',
     'The successful tool result means the message was received and shown to the user. If the user has not replied, that is only a pause; do not reinterpret silence as a missed or failed delivery, and do not retry the message for that reason.',
-    'Treat that delivery as a completed fact, not an unfinished task. Compare the current evidence with what the recipient already knows before considering another message.',
-    'Default action: end the round silently. Only send again if new external evidence, task progress, risk, or a new user message makes another message useful to the recipient.',
+    'Delivery is a completed communication fact, but it is not evidence that any promised underlying work is complete.',
+    'If the delivered message was the complete final answer, end the round silently.',
+    'If it promised, previewed, or announced that you would inspect, search, create, execute, change, or otherwise do something next, continue now with an available action tool or find_tool. After real tool results arrive, provide the useful final result without repeating the progress note.',
+    'End only after a complete answer or a genuine terminal blocker. Do not send a duplicate, retry, or separate closing pleasantry.',
   ].filter(Boolean).join('\n')
 }
 
@@ -768,6 +775,27 @@ function isToolFailure(result) {
     return false
   } catch {}
   return /^(错误|请求失败|执行失败|命令超时|命令执行失败|閿欒|璇锋眰澶辫触|鎵ц澶辫触|鍛戒护瓒呮椂|鍛戒护鎵ц澶辫触)/.test(text)
+}
+
+function parseToolDeliveryState(result) {
+  try {
+    const parsed = JSON.parse(String(result || '{}'))
+    return {
+      hasDelivered: typeof parsed?.delivered === 'boolean',
+      delivered: parsed?.delivered === true,
+      hasMessageSent: typeof parsed?.message_sent === 'boolean',
+      messageSent: parsed?.message_sent === true,
+      terminalDelivery: parsed?.terminal_delivery === true,
+    }
+  } catch {
+    return {
+      hasDelivered: false,
+      delivered: false,
+      hasMessageSent: false,
+      messageSent: false,
+      terminalDelivery: false,
+    }
+  }
 }
 
 function createToolLoopState() {
@@ -1014,10 +1042,15 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let salvageableReply = ''
   let lastToolResult = null
   let sawToolCall = false
+  // Four independent facts must not be collapsed into one another:
+  // - sentMessage: the most recent tool action was the communication tool;
+  // - delivered: at least one user-visible delivery succeeded;
+  // - toolDeliveredFinalReply: an explicit terminal_delivery protocol ended the reply;
+  // - actionContractSatisfied: a requested real-world action has successful tool evidence.
   let sentMessage = false
   let toolDeliveredFinalReply = false
   // delivered 语义：本次 callLLM 调用中是否**真正投递过**至少一条回复给用户。
-  //   = 「≥1 次未被 silent / closer 拦截、且未熔断的 send_message 执行过」。
+  //   = send_message 的传输结果确认送达，或自投递工具显式报告 delivered:true。
   //   这是"用户到底有没有收到实质回复"的**单一权威信号**，调用方不准再从 toolCallLog 二次推导。
   //   注意与 sentMessage 区分：sentMessage 是"最后一个动作是不是 send_message"（用于内部补刀 nudge），
   //   delivered 是"整轮有没有发出去过"（用于决定要不要兜底）。closer 被拦时主回复通常已把 delivered 置 true。
@@ -1485,24 +1518,28 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
               actionContractEvidence = { name: tc.name, args: normalizedArgs, result }
             }
           }
-          let deliveredByToolResult = false
-          try {
-            const parsedResult = JSON.parse(String(result || '{}'))
-            deliveredByToolResult = parsedResult?.delivered === true && parsedResult?.message_sent === true
-          } catch {}
+          const toolDelivery = parseToolDeliveryState(result)
           recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
           if (tickState && toolAddsTickEvidence(tc.name, result)) {
             tickState.evidenceVersion += 1
           }
-          // 单一权威：一次未被 silent/closer 拦截、未熔断的 send_message 真正执行过 →
-          //   用户确实收到了回复。这是 delivered 唯一被置 true 的地方（除文末协议兜底外）。
-          if (tc.name === 'send_message' && !strictSuppressed && !isToolFailure(result)) delivered = true
+          // A send_message attempt is a communication action; only its actual
+          // transport result establishes delivery. Legacy plain-text test/tool
+          // results fall back to the historical success heuristic.
+          const sendMessageSucceeded = tc.name === 'send_message'
+            && !strictSuppressed
+            && !isToolFailure(result)
+          const sendMessageDelivered = sendMessageSucceeded
+            && (toolDelivery.hasDelivered ? toolDelivery.delivered : true)
+          const sendMessageActuallySent = sendMessageSucceeded
+            && (toolDelivery.hasMessageSent ? toolDelivery.messageSent : true)
+          if (sendMessageDelivered) delivered = true
           outboundSent = tc.name === 'send_message'
             && !strictSuppressed
             && !silentSignalSuppressed
             && !closerSuppressed
-          && !mediaCloserSuppressed
-          && !isToolFailure(result)
+            && !mediaCloserSuppressed
+            && sendMessageActuallySent
           if (outboundSent) {
             const outbound = {
               targetId: String(normalizedArgs.target_id || ''),
@@ -1514,8 +1551,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             outboundMessages.push(outbound)
             if (tickState && outbound.targetId) tickState.outboundByTarget.set(outbound.targetId, outbound)
           }
-          if (deliveredByToolResult && !strictSuppressed) {
-            delivered = true
+          if (toolDelivery.delivered && !strictSuppressed) delivered = true
+          if (toolDelivery.terminalDelivery && !strictSuppressed
+              && (!actionContract || actionContractSatisfied)) {
             toolDeliveredFinalReply = true
           }
           // find_tool 动态装载：把搜到的工具 schema 当场注入本轮 toolSchemas（数组原地 push，
@@ -1531,17 +1569,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 这样 line ~641 的"沉默退出 nudge"才能在该补刀时正确触发。
       // 被 closer dedup 拦截的 send_message 也算 sentMessage=true（最后一个动作意图是
       // 发消息，主回复已经发过——下一轮注入 "默认结束本轮" nudge 是合适的）。
-      let deliveredByToolResultForTurn = false
-      try {
-        const parsedResult = JSON.parse(String(result || '{}'))
-        deliveredByToolResultForTurn = parsedResult?.delivered === true && parsedResult?.message_sent === true
-      } catch {}
-      if ((tc.name === 'send_message' || deliveredByToolResultForTurn) && !strictSuppressed && !actionContractSendSuppressed) {
+      const toolDeliveryForTurn = parseToolDeliveryState(result)
+      if (tc.name === 'send_message' && !strictSuppressed && !actionContractSendSuppressed) {
         sentMessage = true
         // 仅对真实发出的（未被 dedup 拦截的）send_message 记录到 turn 历史，避免被拦截的
         // closer / silent signal / media-closer 反过来污染后续判断（已经被拦截的就当没发生）。
         if (!closerSuppressed && !silentSignalSuppressed && !mediaCloserSuppressed
-            && (deliveredByToolResultForTurn || (tc.name === 'send_message' && !isToolFailure(result)))) {
+            && !isToolFailure(result)
+            && (!toolDeliveryForTurn.hasMessageSent || toolDeliveryForTurn.messageSent)) {
           const target = normalizedArgs.target_id
           const content = String(normalizedArgs.content || '')
           if (target) {

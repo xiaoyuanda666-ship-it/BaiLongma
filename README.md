@@ -233,8 +233,14 @@ npm run probe:config-upgrade
 打包 Windows 安装包：
 
 ```bash
-npm run build
+npm ci
+npm run build:win
 ```
+
+Windows 构建目前只支持 x64，必须在 x64 Windows Node 进程中执行。构建脚本会检查
+Windows 版 Sharp、Sherpa ONNX、ONNX Runtime、better-sqlite3、内置 Chromium 和 Node
+runtime，并在打包后运行真实产物 smoke test。正式发布时使用
+`npm run build:win:release`；该命令要求最终 NSIS 安装器具有有效的 Authenticode 签名。
 
 发布到 GitHub Releases：
 

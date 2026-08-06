@@ -91,6 +91,59 @@ export const systemSchemas = {
     }
   },
 
+  manage_information_subscription: {
+    type: 'function',
+    function: {
+      name: 'manage_information_subscription',
+      description: 'Manage turn-context information subscriptions for the user or for yourself as the Agent. Providers are typed local information sources. mode="default" injects every turn, mode="on_demand" injects only when the current input matches the provider or match_keywords, and mode="scheduled" injects on the first Agent turn after interval_minutes elapses (it does not wake the Agent). Preserve an ongoing user request such as "watch my mouse battery and remind me when low" in instruction so it accompanies future snapshots. In an autonomous turn, you may create and manage only subscriber="agent" subscriptions. Use action="providers" to inspect available sources.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['providers', 'list', 'subscribe', 'unsubscribe', 'enable', 'disable'],
+            description: 'Catalog, inspect, create/update, remove, enable, or disable a subscription.'
+          },
+          provider_id: {
+            type: 'string',
+            description: 'Registered provider id, such as system_time, installed_software, or device_peripherals. Required except for providers/list.'
+          },
+          subscriber: {
+            type: 'string',
+            enum: ['auto', 'user', 'agent'],
+            description: 'Who owns the subscription. auto means the current user on a user-driven turn and the Agent on an autonomous turn.'
+          },
+          mode: {
+            type: 'string',
+            enum: ['default', 'on_demand', 'scheduled'],
+            description: 'default=every turn; on_demand=input-matched; scheduled=first turn after the interval.'
+          },
+          interval_minutes: {
+            type: 'number',
+            minimum: 1,
+            maximum: 525600,
+            description: 'For scheduled mode only. Defaults to 60 minutes.'
+          },
+          match_keywords: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 20,
+            description: 'Optional extra literal keywords for on_demand mode.'
+          },
+          reason: {
+            type: 'string',
+            description: 'Short reason for the subscription, useful for later inspection.'
+          },
+          instruction: {
+            type: 'string',
+            description: 'Durable attention/notification intent to inject with future provider snapshots. Preserve the user meaning without inventing numeric thresholds they did not specify.'
+          }
+        },
+        required: ['action']
+      }
+    }
+  },
+
   connect_wechat: {
     type: 'function',
     function: {

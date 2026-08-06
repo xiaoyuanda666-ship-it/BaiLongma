@@ -87,7 +87,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'capability_demo',
-      description: 'Start BaiLongma\'s visual and spoken capability showcase. When the user is asking what you/BaiLongma can do, or explicitly requests a capability/function demo/showcase, call this tool; it sends and speaks the intro itself while the visual sequence starts, so do not send a second introduction. Do not call for ordinary feasibility questions like "这个能做吗" or "能不能做 X". The demo runs as a paced sequence: weather card, streamed Chinese article writing, a maximized real Windows CMD window filling the screen with harmless random numbers for about 5 seconds, hotspot panel, then cleanup.',
+      description: 'Start BaiLongma\'s visual and spoken capability showcase. When the user is asking what you/BaiLongma can do, or explicitly requests a capability/function demo/showcase, call this tool; it sends and speaks the intro itself while the visual sequence starts, and returns terminal_delivery=true, so do not send a second introduction. Do not call for ordinary feasibility questions like "这个能做吗" or "能不能做 X". The demo runs as a paced sequence: weather card, streamed Chinese article writing, a maximized real Windows CMD window filling the screen with harmless random numbers for about 5 seconds, hotspot panel, then cleanup.',
       parameters: {
         type: 'object',
         properties: {

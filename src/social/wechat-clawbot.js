@@ -508,8 +508,26 @@ export function logoutClawbot() {
   client = null
 }
 
-export function startClawbotConnector({ pushMessage, emitEvent } = {}) {
+export function startClawbotConnector({ pushMessage, emitEvent, allowQrLogin = false } = {}) {
   const saved = getClawbotCredentials()
+
+  // Starting the whole app must not silently launch a short-lived QR session.
+  // With no saved credentials, wait until the user explicitly presses Connect;
+  // restartConnector passes allowQrLogin=true for that path.
+  if (!saved && !allowQrLogin) {
+    client = null
+    currentQrUrl = null
+    clawbotStatus = 'idle'
+    console.log('[ClawBot] 未配置凭证，等待用户主动连接')
+    emitEvent?.('social_status', { platform: 'wechat-clawbot', status: 'idle', reason: 'not_configured' })
+    return {
+      platform: 'wechat-clawbot',
+      stop() {
+        clawbotStatus = 'idle'
+        currentQrUrl = null
+      },
+    }
+  }
 
   client = new WeChatClient(saved ? {
     accountId: saved.accountId,

@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.647",
+  "version": "2.1.651",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -15,7 +15,8 @@
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "chcp 65001 >nul && node --env-file=.env --watch src/index.js",
     "build": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
-    "build:win": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs --platform=win32 --arch=x64 && node scripts/prepare-node-runtime.mjs --platform=win32 --arch=x64 && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --win",
+    "build:win": "node scripts/build-win.mjs",
+    "build:win:release": "node scripts/build-win.mjs --require-signing",
     "build:linux": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs --platform=linux --arch=x64 && node scripts/prepare-node-runtime.mjs --platform=linux --arch=x64 && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 -a x64 && node ./node_modules/electron-builder/cli.js --linux AppImage --x64",
     "build:mac": "node scripts/build-mac.mjs",
     "build:mac:x64": "node scripts/build-mac.mjs x64",
@@ -24,6 +25,8 @@
     "publish": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
+    "test:information-subscriptions": "electron ./src/test-information-subscriptions.js",
+    "test:device-information": "node ./src/test-device-information.js",
     "test:complex-task": "electron ./src/test-complex-task.js",
     "test:relevance": "electron ./src/test-relevance-selection.js",
     "test:section-gate": "node ./src/test-section-gate.js",
@@ -33,6 +36,7 @@
     "test:reminder-runs": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-reminder-runs.js\"",
     "test:scheduled-tasks": "node ./src/test-scheduled-tasks.js",
     "test:runtime-managers": "node ./src/test-index-refactor-modules.js",
+    "test:startup-hardening": "node ./src/test-startup-hardening.js && node ./src/test-clawbot-startup.js && node ./src/test-weather-fallback.js",
     "test:agent-skills": "node ./src/test-agent-skills.js",
     "test:tool-factory": "node ./src/test-tool-factory.js",
     "test:mcp-client": "node ./src/test-mcp-client.js",
@@ -55,6 +59,7 @@
     "test:web-access": "node ./src/test-web-read.js && node ./src/test-web-search.js",
     "test:chrome-devtools": "node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs",
     "test:browser-packaging": "node ./scripts/test-playwright-packaging.mjs",
+    "test:windows-build": "node ./scripts/test-windows-build.mjs",
     "test:browser-core": "node ./src/test-web-url-policy.js && node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs && node ./src/test-browser-display.js && node ./src/test-browser-agent-integration.js && node ./src/test-browser-challenge-guard.js && node ./src/test-web-read.js && node ./src/test-web-search.js",
     "test:network-audit": "node ./electron/test-network-audit-utils.cjs && node ./electron/test-network-diagnostics.cjs && node ./scripts/test-compare-network-captures.mjs",
     "test:network-audit:real": "electron ./electron/test-network-diagnostics-real.cjs",
@@ -63,6 +68,7 @@
     "network-audit:record-bailongma": "electron ./electron/record-bailongma-network.cjs",
     "test:browser-real": "electron ./electron/test-browser-real-workflow.cjs",
     "smoke:mac-artifacts": "node ./scripts/smoke-mac-artifacts.mjs",
+    "smoke:win-artifacts": "node ./scripts/smoke-win-artifacts.mjs",
     "repair:memories:dry": "electron ./scripts/repair-memory-quality.js",
     "repair:memories": "electron ./scripts/repair-memory-quality.js --apply",
     "probe:config-upgrade": "node ./scripts/probe-config-upgrade.mjs",
@@ -153,8 +159,6 @@
       "build/icon.png",
       "build/icon-mac-cartoon.png",
       "build/native-speech-recognizer",
-      "sandbox/**/*",
-      "!sandbox/*-test-*/**",
       "music/**/*",
       "package.json",
       "!**/*.map",
@@ -185,6 +189,9 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "files": [
+        "!build/native-speech-recognizer"
+      ],
       "target": [
         {
           "target": "nsis",
@@ -203,7 +210,7 @@
       "installerSidebar": "build/installerSidebar.bmp",
       "uninstallerSidebar": "build/uninstallerSidebar.bmp",
       "createDesktopShortcut": false,
-      "createStartMenuShortcut": false,
+      "createStartMenuShortcut": true,
       "shortcutName": "Bailongma"
     },
     "mac": {

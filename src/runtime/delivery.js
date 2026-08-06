@@ -115,6 +115,9 @@ function makeDeliverySuccess({
   skipped = '',
   deliveredAt = '',
 } = {}) {
+  // These fields describe transport only. Ordinary send_message delivery is
+  // never a tool-loop termination signal; self-delivering terminal tools use
+  // the separate, explicit terminal_delivery protocol.
   return JSON.stringify({
     ok: true,
     tool: 'send_message',

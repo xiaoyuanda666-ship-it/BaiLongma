@@ -365,6 +365,32 @@ export function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_ui_signals_unconsumed ON ui_signals(consumed, ts);
   `)
 
+  // Information subscriptions are durable routing state, not memories. A
+  // subscription says which registered provider may be injected, for whom,
+  // and at what cadence. last_delivered_at is advanced only after the model
+  // actually receives the turn, so interrupted turns remain retryable.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS information_subscriptions (
+      id                TEXT PRIMARY KEY,
+      provider_id       TEXT NOT NULL,
+      subscriber_type   TEXT NOT NULL CHECK(subscriber_type IN ('user', 'agent')),
+      subscriber_id     TEXT NOT NULL,
+      mode              TEXT NOT NULL CHECK(mode IN ('default', 'on_demand', 'scheduled')),
+      interval_ms       INTEGER,
+      match_json        TEXT NOT NULL DEFAULT '[]',
+      reason            TEXT NOT NULL DEFAULT '',
+      instruction       TEXT NOT NULL DEFAULT '',
+      enabled           INTEGER NOT NULL DEFAULT 1,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      last_delivered_at TEXT,
+      UNIQUE(provider_id, subscriber_type, subscriber_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_information_subscriptions_active
+      ON information_subscriptions(enabled, subscriber_type, subscriber_id);
+  `)
+  try { db.exec(`ALTER TABLE information_subscriptions ADD COLUMN instruction TEXT NOT NULL DEFAULT ''`) } catch {}
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS media_history (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -75,6 +75,7 @@ export const WORLDCUP_TOOLS = ['worldcup_mode', ...BROWSER_CAPABILITY_TOOLS]
 export const TYPHOON_TOOLS = ['typhoon_mode']
 export const SOFTWARE_INSTALL_TOOLS = ['install_software', 'list_processes']
 export const MACOS_SYSTEM_MUSIC_TOOLS = ['system_music']
+export const INFORMATION_SUBSCRIPTION_TOOLS = ['manage_information_subscription']
 
 // ---- 触发词 / 触发正则 ----
 // 工具半历史上用字面包含的字符串数组（tool-router），工作流半用正则（prompt）。两者各自
@@ -104,6 +105,19 @@ const BROWSER_DATA_DELETE_TRIGGERS = [
   '删除你的浏览器数据', '清除你的浏览器数据', '清理你的浏览器数据',
   'clear bailongma browser data', 'clear agent browser data', 'clear your browser data',
 ]
+const DEVICE_MONITORING_TRIGGERS = [
+  '关注鼠标', '关注键盘', '关注耳机', '关注麦克风', '关注设备', '关注外设',
+  '留意鼠标', '留意键盘', '监控电量', '低电量提醒', '没电提醒', '提醒我充电',
+  '鼠标电量', '键盘电量', '耳机电量', '设备电量', '外设电量',
+  'watch mouse battery', 'monitor keyboard battery', 'low battery alert', 'peripheral battery',
+]
+const DEVICE_MONITORING_DEVICE_RE = /鼠标|键盘|耳机|麦克风|话筒|触控板|外设|设备|mouse|keyboard|headset|headphones?|microphone|peripheral|device/i
+const DEVICE_MONITORING_ACTION_RE = /关注|留意|监控|盯着|持续|定期|订阅|提醒|通知|低电量|快没电|没电|充电|watch|monitor|subscribe|notify|alert|remind|low\s+battery/i
+
+export function isDeviceMonitoringSubscriptionIntent(text = '') {
+  const value = String(text || '')
+  return DEVICE_MONITORING_DEVICE_RE.test(value) && DEVICE_MONITORING_ACTION_RE.test(value)
+}
 
 const STATEFUL_BROWSER_INTENT_RE = /(?:\u6253\u5f00|\u542f\u52a8|\u5173\u95ed|\u7ee7\u7eed|\u56de\u5230).{0,8}(?:\u6d4f\u89c8\u5668|\u7f51\u9875|\u9875\u9762|\u94fe\u63a5)|(?:\u5207\u6362|\u6362\u6210|\u6539\u6210|\u8c03\u6210|\u663e\u793a\u4e3a|\u53d8\u6210).{0,12}(?:\u5c0f\u6d4f\u89c8\u5668|\u5927\u6d4f\u89c8\u5668|\u5c0f\u7a97\u53e3(?:\u6d4f\u89c8\u5668)?|\u5927\u7a97\u53e3(?:\u6d4f\u89c8\u5668)?|\u6d4f\u89c8\u5668\u5361\u7247|\u5916\u90e8\u6d4f\u89c8\u5668)|(?:\u6253\u5f00|open|navigate\s+to)\s*(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)|(?:\u5f53\u524d|\u521a\u624d|\u4e0a\u4e00\u4e2a).{0,6}(?:\u7f51\u9875|\u9875\u9762|\u6807\u7b7e\u9875)|\u6d4f\u89c8\u5668.{0,8}(?:\u5f00\u7740|\u6253\u5f00|\u5173\u95ed|\u5728\u5417|\u72b6\u6001)|(?:\u7f51\u9875|\u6d4f\u89c8\u5668)(?:\u64cd\u4f5c|\u622a\u56fe)|\u622a\u56fe\u7f51\u9875|\u6807\u7b7e\u9875|(?:\u70b9\u51fb|\u70b9\u4e00\u4e0b).{0,10}(?:\u7f51\u7ad9|\u7f51\u9875|\u9875\u9762|\u6309\u94ae|\u94fe\u63a5|\u83dc\u5355|\u6807\u7b7e|\u8868\u5355|\u767b\u5f55)|(?:\u586b\u5199|\u586b\u5165).{0,10}(?:\u8868\u5355|\u8f93\u5165\u6846|\u5b57\u6bb5|\u767b\u5f55|\u7f51\u9875|\u9875\u9762)|(?:\u5e2e\u6211|\u8bf7)?(?:\u767b\u5f55|\u767b\u5165)(?:\u4e00\u4e0b)?$|(?:open|launch|close|continue|resume|return to)\s+(?:(?:the|this|that|a)\s+)?(?:browser|webpage|website|page|link)\b|(?:switch|change).{0,16}(?:browser|webpage).{0,12}(?:card|compact|small|window|large)|(?:current|previous|last)\s+(?:webpage|page|tab)\b|is\s+(?:the\s+)?browser\s+open\b|browser\s+(?:action|automation)\b|interact\s+with\s+(?:the\s+)?page\b|take\s+(?:a\s+)?screenshot\b|(?:switch|open|close|list|show|manage|create|new)\s+(?:browser\s+)?tabs?\b|browser\s+tabs?\b|click\s+(?:the\s+)?(?:login\s+)?(?:button|link|menu|tab|element)\b|fill\s+(?:in\s+)?(?:the\s+)?(?:form|field|input)\b|(?:log\s*in|sign\s*in)(?:\s+(?:to|on)\b|[.!?\s]*$)/i
 const EXPLICIT_WEB_NAVIGATION_RE = /(?:\u8bbf\u95ee|\u67e5\u770b\u7f51\u7ad9|\u8fdb\u5165\u7f51\u7ad9|\u524d\u5f80)\s*(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)|(?:visit|go\s+to)\s+(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)/i
@@ -242,6 +256,15 @@ const MACOS_SYSTEM_MUSIC_CONTEXT_BLOCK = `## macOS System Music — Authoritativ
 - system_music re-reads Music.app after every action. Only say it paused when ok=true and playback_state="paused"; only say it is playing when ok=true and playback_state="playing".
 - If the runtime context says Music.app is not open, say that plainly when relevant. pause/next/previous must not launch it; play/open may launch it because the user explicitly requested playback.`
 
+const DEVICE_MONITORING_CONTEXT_BLOCK = `## Device Information Subscription — Natural Language Workflow
+- The user is asking for ongoing attention to computer/peripheral state, not a one-off reminder at a fixed clock time. Use manage_information_subscription; do not use manage_reminder or manage_prefetch_task.
+- Subscribe provider_id="device_peripherals" with subscriber="agent" so the Agent owns the continuing attention. Prefer mode="scheduled" and interval_minutes=15 unless the user gave a cadence. A scheduled subscription is evaluated on the first Agent turn/Tick after it becomes due; it does not create a turn.
+- Put the user's durable meaning in instruction. Preserve vague judgment words such as “比较低” instead of inventing a numeric threshold. Example: “关注鼠标和键盘电量；电量比较低且值得打扰时提醒用户充电，是否提醒由 Agent 根据实际状态判断。”
+- reason is a short audit label, for example “user requested peripheral battery monitoring”; instruction is what future turns need in order to make the decision.
+- The device provider supplies facts only. Some wired/Bluetooth devices do not expose battery data; never guess a missing percentage and do not claim that monitoring covers an unsupported value.
+- Use recent conversation/action context when deciding whether to notify. Avoid repeating the same low-battery reminder when the reading is unchanged and the user was already notified recently; this is judgment guidance, not a fabricated sensor threshold.
+- After the tool succeeds, tell the user what source and cadence were subscribed. Do not claim a low-battery alert was sent unless a later snapshot supports it and send_message succeeds.`
+
 // 通用辅助：text 已小写，triggers 字面包含。
 function hits(text, triggers) {
   if (!text) return false
@@ -377,6 +400,17 @@ export const CAPABILITIES = [
     tools: SOFTWARE_INSTALL_TOOLS,
     detect: (ctx) => isSoftwareInstallRequest(ctx.rawText || ''),
     context: SOFTWARE_INSTALL_CONTEXT_BLOCK,
+    prefeed: null,
+  },
+  {
+    id: 'device-information-subscription',
+    label: '设备与外设信息订阅',
+    summary: '用自然语言持续关注电脑、鼠标、键盘、耳机和麦克风的连接状态与系统可读取的电量，由 Agent 根据订阅意图判断是否提醒。',
+    triggers: DEVICE_MONITORING_TRIGGERS,
+    tools: INFORMATION_SUBSCRIPTION_TOOLS,
+    detect: (ctx) => isDeviceMonitoringSubscriptionIntent(ctx.rawText || ''),
+    toolWhen: (ctx) => isDeviceMonitoringSubscriptionIntent(ctx.rawText || ''),
+    context: DEVICE_MONITORING_CONTEXT_BLOCK,
     prefeed: null,
   },
 ]

@@ -31,6 +31,8 @@ export {
   runRuntimeInformationInjector,
   commitInformationConsumption,
   buildSupplementalInformationContext,
+  registerInformationProvider,
+  listInformationProviders,
 } from '../injectors/information-injector.js'
 
 export function mergeInjectorResults({ memory = {}, tool = {}, information = {} } = {}) {
@@ -55,6 +57,9 @@ export function mergeInjectorResults({ memory = {}, tool = {}, information = {} 
     prefetchedItems: information.prefetchedItems || [],
     uiSignalSummary: information.uiSignalSummary || '',
     uiSignalIds: information.uiSignalIds || [],
+    informationContextText: information.informationContextText || '',
+    informationProviderIds: information.informationProviderIds || [],
+    scheduledSubscriptionIds: information.scheduledSubscriptionIds || [],
     directions: [
       ...(memory.directions || []),
       ...(tool.directions || []),
@@ -86,7 +91,11 @@ export async function runInjector({ message, state, hint = '', currentChannel = 
       hint,
       actionLog: tool.actionLog,
     }),
-    runInformationInjector(),
+    runInformationInjector({
+      message: parsed.messageBody,
+      userId: parsed.senderId || undefined,
+      isTick: parsed.isTick,
+    }),
   ])
 
   return mergeInjectorResults({ memory, tool, information })

@@ -36,6 +36,7 @@ import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
 import { execManageRule } from './tools/rules.js'
+import { execManageInformationSubscription } from './tools/information-subscriptions.js'
 import { execBrowserSetDisplayMode } from './tools/browser-display.js'
 import { execBrowserClearData } from './tools/browser-data.js'
 import { execSystemBrowserOpen } from './tools/system-browser.js'
@@ -324,6 +325,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execManagePrefetchTask(args)
       case 'manage_rule':
         return execManageRule(args)
+      case 'manage_information_subscription':
+        return execManageInformationSubscription(args, context)
       case 'ui_set':
         return execUISet(args)
       case 'browser_set_display_mode':
@@ -686,6 +689,7 @@ function execCapabilityDemo(args = {}, context = {}) {
     started: true,
     delivered: true,
     message_sent: true,
+    terminal_delivery: true,
     spoken: true,
     spoken_text: spokenText,
     intro_text: CAPABILITY_DEMO_INTRO,

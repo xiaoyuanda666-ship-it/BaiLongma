@@ -19,7 +19,7 @@ try {
 
   db.getDB()
   const id = db.insertUISignal({ type: 'card.action', target: 'test', payload: { action: 'open' } })
-  const information = runInformationInjector()
+  const information = await runInformationInjector()
 
   if (!information.uiSignalIds.includes(id)) throw new Error('information injector did not return pending UI signal id')
   if (!db.getUnconsumedUISignals().some(signal => signal.id === id)) throw new Error('UI signal was consumed during read phase')
@@ -36,3 +36,5 @@ try {
   } catch {}
   fs.rmSync(tempUserDir, { recursive: true, force: true })
 }
+
+process.exit(process.exitCode || 0)
