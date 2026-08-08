@@ -37,7 +37,22 @@ assert.equal(pkg.scripts['build:win'], 'node scripts/build-win.mjs')
 assert.equal(pkg.scripts['build:win:release'], 'node scripts/build-win.mjs --require-signing')
 assert.equal(pkg.scripts['smoke:win-artifacts'], 'node ./scripts/smoke-win-artifacts.mjs')
 assert.deepEqual(pkg.build.win.target[0].arch, ['x64'])
+for (const required of ['electron/**/*', 'src/**/*', 'skills/**/*', 'package.json']) {
+  assert.ok(pkg.build.win.files.includes(required), `Windows package whitelist is missing ${required}`)
+}
+for (const excluded of [
+  '!.dev-test/**/*',
+  '!sandbox/**/*',
+  '!data/**/*',
+  '!images/**/*',
+  '!**/node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*',
+  '!**/node_modules/onnxruntime-node/bin/napi-v3/linux/**/*',
+  '!**/node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*',
+]) {
+  assert.ok(pkg.build.win.files.includes(excluded), `Windows package exclusions are missing ${excluded}`)
+}
 assert.ok(pkg.build.win.files.includes('!build/native-speech-recognizer'))
+assert.ok(pkg.build.win.asarUnpack.includes('!build/native-speech-recognizer'))
 assert.equal(pkg.build.nsis.createStartMenuShortcut, true)
 assert.equal(pkg.build.nsis.createDesktopShortcut, false)
 assert.doesNotMatch(winBuild, /build-macos-speech/)

@@ -34,6 +34,20 @@ assert.equal(fs.existsSync(path.join(appUnpacked, 'build', 'native-speech-recogn
   'Windows package must not contain the macOS native speech helper')
 
 const entries = new Set(listPackage(appAsar).map(entry => entry.replaceAll('\\', '/')))
+for (const forbiddenPrefix of [
+  '/.dev-test',
+  '/data',
+  '/sandbox',
+  '/images',
+  '/node_modules/onnxruntime-node/bin/napi-v3/darwin',
+  '/node_modules/onnxruntime-node/bin/napi-v3/linux',
+  '/node_modules/onnxruntime-node/bin/napi-v3/win32/arm64',
+  '/node_modules/sherpa-onnx-darwin-',
+  '/node_modules/sherpa-onnx-linux-',
+]) {
+  assert.equal([...entries].some(entry => entry.startsWith(forbiddenPrefix)), false,
+    `Windows package contains forbidden content: ${forbiddenPrefix}`)
+}
 for (const required of [
   '/package.json',
   '/electron/main.cjs',

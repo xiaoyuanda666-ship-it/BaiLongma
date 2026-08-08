@@ -101,23 +101,31 @@ export function installTarget(target, runtime = resolveMcpRuntime()) {
 export function hasStagedBrowser(target, root = stagingRoot) {
   const destination = path.join(root, target.builderKey)
   if (!existsSync(destination)) return false
-  let revisions = []
-  try {
-    revisions = readdirSync(destination, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() && /^chromium-\d+$/.test(entry.name))
-      .map(entry => entry.name)
-  } catch {
-    return false
-  }
   const relative = target.platform === 'darwin'
     ? path.join(`chrome-mac-${target.arch}`, 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing')
     : target.platform === 'linux'
       ? path.join('chrome-linux64', 'chrome')
       : path.join('chrome-win64', 'chrome.exe')
-  return revisions.some(revision => (
-    existsSync(path.join(destination, revision, 'INSTALLATION_COMPLETE'))
-    && existsSync(path.join(destination, revision, relative))
-  ))
+  return readdirSync(destination, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() && /^chromium-\d+$/.test(entry.name))
+    .some(entry => (
+      existsSync(path.join(destination, entry.name, 'INSTALLATION_COMPLETE'))
+      && existsSync(path.join(destination, entry.name, relative))
+    ))
+}
+
+export function pruneStaleBrowsers(target, root = stagingRoot, runtime = resolveMcpRuntime()) {
+  const destination = path.join(root, target.builderKey)
+  mkdirSync(destination, { recursive: true })
+  const descriptor = browserDescriptor(target, destination, runtime)
+  const expectedDirectory = path.basename(descriptor.directory)
+  const removed = []
+  for (const entry of readdirSync(destination, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !/^chromium-\d+$/.test(entry.name) || entry.name === expectedDirectory) continue
+    rmSync(path.join(destination, entry.name), { recursive: true, force: true })
+    removed.push(entry.name)
+  }
+  return { descriptor, removed }
 }
 
 function run(command, args, options = {}) {
@@ -209,11 +217,15 @@ export function main() {
   mkdirSync(stagingRoot, { recursive: true })
   let runtime
   for (const target of resolveTargets()) {
+    runtime ||= resolveMcpRuntime()
+    const { descriptor, removed } = pruneStaleBrowsers(target, stagingRoot, runtime)
+    if (removed.length) {
+      console.log(`[playwright] removed stale Chromium revisions for ${target.builderKey}: ${removed.join(', ')}`)
+    }
     if (hasStagedBrowser(target)) {
-      console.log(`[playwright] reusing staged bundled Chromium for ${target.builderKey}`)
+      console.log(`[playwright] reusing staged bundled Chromium ${descriptor.revision} for ${target.builderKey}`)
       continue
     }
-    runtime ||= resolveMcpRuntime()
     installTarget(target, runtime)
   }
 }

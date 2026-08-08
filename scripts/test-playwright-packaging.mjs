@@ -2,12 +2,14 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import {
   browserDescriptor,
+  pruneStaleBrowsers,
   resolveMcpRuntime,
   resolveTargets,
 } from './prepare-playwright-browsers.mjs'
@@ -105,6 +107,21 @@ assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-x64').d
 assert.match(descriptors.find(({ target }) => target.builderKey === 'mac-arm64').descriptor.executablePath(), /chrome-mac-arm64/)
 assert.match(descriptors.find(({ target }) => target.builderKey === 'win-x64').descriptor.executablePath(), /chrome-win64[/\\]chrome\.exe$/)
 assert.match(descriptors.find(({ target }) => target.builderKey === 'linux-x64').descriptor.executablePath(), /chrome-linux64[/\\]chrome$/)
+
+const pruneRoot = mkdtempSync(path.join(os.tmpdir(), 'bailongma-browser-prune-'))
+try {
+  const winTarget = resolveTargets([], 'win32')[0]
+  const winDestination = path.join(pruneRoot, winTarget.builderKey)
+  const expectedRevision = descriptors.find(({ target }) => target.builderKey === 'win-x64').descriptor.revision
+  mkdirSync(path.join(winDestination, 'chromium-1217'), { recursive: true })
+  mkdirSync(path.join(winDestination, `chromium-${expectedRevision}`), { recursive: true })
+  const { removed } = pruneStaleBrowsers(winTarget, pruneRoot, mcpRuntime)
+  assert.deepEqual(removed, ['chromium-1217'])
+  assert.equal(existsSync(path.join(winDestination, 'chromium-1217')), false)
+  assert.equal(existsSync(path.join(winDestination, `chromium-${expectedRevision}`)), true)
+} finally {
+  rmSync(pruneRoot, { recursive: true, force: true })
+}
 
 assert.equal(packagedRuntime.packagedHostPlatform('darwin', 'arm64'), 'mac15-arm64')
 assert.equal(packagedRuntime.packagedHostPlatform('linux', 'x64'), 'ubuntu24.04-x64')

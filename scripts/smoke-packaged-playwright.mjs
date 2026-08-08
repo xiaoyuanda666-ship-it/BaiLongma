@@ -119,6 +119,12 @@ const chromium = browsersJson.browsers.find(browser => browser.name === 'chromiu
 assert.ok(chromium?.revision, 'MCP playwright-core browsers.json has no Chromium revision')
 const chromiumRoot = path.join(browsersDir, `chromium-${chromium.revision}`)
 const chromiumExe = path.join(chromiumRoot, ...target.chromiumExecutableParts)
+const packagedChromiumRevisions = fs.readdirSync(browsersDir, { withFileTypes: true })
+  .filter(entry => entry.isDirectory() && /^chromium-\d+$/.test(entry.name))
+  .map(entry => entry.name)
+  .sort()
+assert.deepEqual(packagedChromiumRevisions, [`chromium-${chromium.revision}`],
+  'package must contain exactly the MCP-pinned Chromium revision')
 requireFile(chromiumExe, `packaged MCP Chromium revision ${chromium.revision}`)
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-packaged-playwright-mcp-'))
