@@ -278,6 +278,17 @@ const createSettingsModal = () => `
             ${createThemeSwitcher()}
           </div>
           <div class="settings-section">
+            <div class="settings-section-label">界面语言</div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-ui-language">界面语言</label>
+              <select class="settings-select" id="settings-ui-language">
+                <option value="zh-CN">简体中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </div>
+            <p class="settings-hint">更改后刷新页面生效。界面语言不会改变语音识别语言或 Agent 回复语言。</p>
+          </div>
+          <div class="settings-section">
             <div class="settings-section-label">AI 名字</div>
             <div class="settings-row">
               <label class="settings-label" for="settings-agent-name">显示名</label>

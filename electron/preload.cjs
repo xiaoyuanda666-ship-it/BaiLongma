@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('bailongma', {
   platform: process.platform,
   isElectron: true,
   getVersion: () => ipcRenderer.invoke('app:get-version'),
+  setUiLanguage: (locale) => ipcRenderer.invoke('ui:set-language', locale),
   checkForUpdates: () => ipcRenderer.invoke('updater:check-for-updates'),
   startDownload: () => ipcRenderer.invoke('updater:start-download'),
   quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),

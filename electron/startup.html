@@ -372,13 +372,17 @@
     </section>
   </main>
 
-  <script>
+  <script type="module">
+    import { localizeDom, observeDomLocalization, t, translateUiText } from '../src/ui/brain-ui/i18n/index.js'
+    localizeDom(document)
+    observeDomLocalization(document.body)
+
     const fallbackSteps = [
-      ['port', '准备本地端口', '锁定 3721 或备用端口'],
-      ['core', '启动本地核心', '加载 Bailongma runtime'],
-      ['resources', '准备工作区', '复制沙箱与音乐资源'],
-      ['tools', '加载工具槽', '恢复已安装能力'],
-      ['api', '启动本地 API', 'HTTP / SSE / WebSocket'],
+      ['port', t('startup.port'), t('startup.portDetail')],
+      ['core', t('startup.core'), t('startup.coreDetail')],
+      ['resources', t('startup.resources'), t('startup.resourcesDetail')],
+      ['tools', t('startup.tools'), t('startup.toolsDetail')],
+      ['api', t('startup.api'), t('startup.apiDetail')],
     ];
 
     const messageEl = document.getElementById('message');
@@ -391,15 +395,15 @@
     let latestState = {
       startedAt,
       percent: 0,
-      message: '正在准备启动环境',
+      message: t('startup.preparing'),
       steps: fallbackSteps.map(([id, label, detail]) => ({ id, label, detail, status: 'pending' })),
     };
 
     function stateText(status) {
-      if (status === 'done') return '完成';
-      if (status === 'running') return '进行中';
-      if (status === 'error') return '失败';
-      return '等待';
+      if (status === 'done') return t('startup.done');
+      if (status === 'running') return t('startup.running');
+      if (status === 'error') return t('startup.failed');
+      return t('startup.waiting');
     }
 
     function render(state) {
@@ -407,7 +411,7 @@
       latestState = state;
       startedAt = state.startedAt || startedAt;
       const percent = Math.max(0, Math.min(100, Number(state.percent) || 0));
-      messageEl.textContent = state.message || '正在准备启动环境';
+      messageEl.textContent = translateUiText(state.message || t('startup.preparing'));
       percentEl.textContent = `${percent}%`;
       fillEl.style.width = `${percent}%`;
 
@@ -424,10 +428,10 @@
         copy.className = 'copy';
         const label = document.createElement('div');
         label.className = 'label';
-        label.textContent = step.label || step.id || '';
+        label.textContent = translateUiText(step.label || step.id || '');
         const detail = document.createElement('div');
         detail.className = 'detail';
-        detail.textContent = step.detail || '';
+        detail.textContent = translateUiText(step.detail || '');
         copy.append(label, detail);
         item.appendChild(copy);
 

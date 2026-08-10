@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
-import { friendlyToolIcon, friendlyToolName } from './ui/brain-ui/thought-stream.js'
+import { ThoughtStream, friendlyToolIcon, friendlyToolName } from './ui/brain-ui/thought-stream.js'
+import { setLocale } from './ui/brain-ui/i18n/index.js'
 import { BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS } from './mcp/playwright-server.js'
+
+const storage = { getItem: () => null, setItem: () => {} }
+setLocale('zh-CN', { storage })
 
 for (const toolName of BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS) {
   const label = friendlyToolName(toolName)
@@ -26,6 +30,24 @@ assert.equal(
   friendlyToolName('private_internal_tool_name'),
   '处理事务',
   'unknown internal identifiers must not leak into the user-facing UI',
+)
+
+setLocale('en-US', { storage })
+assert.equal(friendlyToolName('read_file'), 'Read file')
+assert.equal(friendlyToolName('browser_press_key', { key: 'End' }), 'Scroll page')
+assert.equal(friendlyToolName('browser_tabs', { action: 'select' }), 'Switch tab')
+assert.equal(friendlyToolName('private_internal_tool_name'), 'Handle task')
+
+const formatter = Object.create(ThoughtStream.prototype)
+formatter.toolDetailLength = 160
+assert.equal(formatter.formatToolDetail('read_file', {}, 'smoke content'), 'Content preview: smoke content')
+assert.equal(
+  formatter.formatToolDetail('run_command', {}, JSON.stringify({ ok: true, exit_code: 0 })),
+  'Command completed (exit code 0).',
+)
+assert.equal(
+  formatter.formatToolDetail('search_memory', {}, JSON.stringify({ ok: true, hits: [] })),
+  'No memories matched.',
 )
 
 console.log('[PASS] Brain UI tool descriptions')

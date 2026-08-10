@@ -677,6 +677,19 @@ body {
   margin-bottom: 8px;
 }
 
+/* Runtime labels can be much wider in translated interfaces. Keep the title
+   and badges in normal flow so the badges wrap instead of spilling over the
+   LIVE COGNITION heading. */
+.l2-module-head.cognition-head {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.cognition-head > :first-child {
+  flex: 1 1 82px;
+  min-width: 82px;
+}
+
 .l2-module-kicker {
   margin-bottom: 2px;
   color: var(--dim);
@@ -713,7 +726,17 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
   gap: 6px;
+}
+
+.cognition-state-group > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .l3-state[data-state="running"],
@@ -2091,12 +2114,12 @@ body {
 
 .physics-control {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 100%;
   border-radius: 8px;
   border: 1px solid var(--line-strong);
   background: transparent;
-  overflow: hidden;
+  overflow: visible;
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.3s ease, transform 0.3s ease, background 0.6s ease, border-color 0.6s ease;
@@ -2137,18 +2160,38 @@ body {
 }
 
 .physics-panel {
-  max-height: 0;
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 8px);
+  z-index: 1;
   overflow: hidden;
-  transition: max-height 0.28s ease;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft), var(--shadow-inset);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition:
+    opacity 0.2s ease,
+    visibility 0s linear 0.2s,
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.6s ease,
+    border-color 0.6s ease;
 }
 
 .physics-control.open .physics-panel {
-  max-height: 240px;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
 }
 
 .physics-panel-inner {
   padding: 0 12px 12px;
-  border-top: 1px solid var(--line);
 }
 
 .physics-field {

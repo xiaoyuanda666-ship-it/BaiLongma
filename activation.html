@@ -1331,5 +1331,10 @@
       if (e.key === 'Enter' && !customActivateBtn.disabled) activateCustom()
     })
   </script>
+  <script type="module">
+    import { localizeDom, observeDomLocalization } from './src/ui/brain-ui/i18n/index.js'
+    localizeDom(document)
+    observeDomLocalization(document.body)
+  </script>
 </body>
 </html>

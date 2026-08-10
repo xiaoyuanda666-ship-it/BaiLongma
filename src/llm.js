@@ -7,6 +7,7 @@ import { insertActionLog } from './db.js'
 import { isTerminalInternalToolRound } from './runtime/tool-protocol.js'
 import { sanitizeAssistantReplyForDelivery, createAssistantReplyStreamSanitizer } from './runtime/markers.js'
 import { beginTurn } from './runtime/turn-trace.js'
+import { sanitizeJsonForTransport } from './runtime/json-unicode.js'
 import { createMergedAbortSignal } from './capabilities/abort-utils.js'
 import { filterStrictEvaluationTools, isToolForbiddenInStrictEvaluation, makeStrictForbiddenToolResult } from './runtime/strict-evaluation.js'
 import {
@@ -133,15 +134,22 @@ function buildChatCompletionRequestParams({ messages, toolSchemas = [], temperat
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
 async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model }) {
-  const requestParams = buildChatCompletionRequestParams({
-    model,
-    messages,
-    toolSchemas,
-    temperature,
-    topP,
-    maxTokens,
-    thinking,
-  })
+  const requestParams = sanitizeJsonForTransport(
+    buildChatCompletionRequestParams({
+      model,
+      messages,
+      toolSchemas,
+      temperature,
+      topP,
+      maxTokens,
+      thinking,
+    }),
+    {
+      onRepair: count => console.warn(
+        `[LLM] Repaired ${count} lone UTF-16 surrogate code unit${count === 1 ? '' : 's'} before sending request`,
+      ),
+    },
+  )
   // ── 空闲超时（连接卡死保护）──
   // provider 连接开着却长时间不吐任何增量 = 停摆。每收到一个 chunk 就重置计时；超时则中止本轮，
   // 交给 streamOnceWithRetry 重试，避免把整个 turn 干耗到 index.js 的 180s watchdog 才被发现。

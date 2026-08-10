@@ -1,4 +1,5 @@
 import { apiUrl } from './api-client.js'
+import { t } from './i18n/index.js'
 
 let active = false
 let state = { regionId: '', query: '', documentId: '' }
@@ -7,7 +8,7 @@ const $ = (id) => document.getElementById(id)
 function request(path) {
   return fetch(apiUrl(path)).then(async (response) => {
     const data = await response.json().catch(() => ({}))
-    if (!response.ok || data.ok === false) throw new Error(data.error || `请求失败 (${response.status})`)
+    if (!response.ok || data.ok === false) throw new Error(data.error || t('knowledge.requestFailed', { status: response.status }))
     return data
   })
 }
@@ -42,7 +43,7 @@ function renderRegions(regions = []) {
   if (count) count.textContent = String(regions.length)
   if (!target) return
   target.replaceChildren()
-  if (!regions.length) return empty(target, '暂无启用中的知识区域。请先导入资料。')
+  if (!regions.length) return empty(target, t('knowledge.noRegions'))
   for (const region of regions) {
     const button = document.createElement('button')
     button.type = 'button'
@@ -63,13 +64,13 @@ function renderDocuments(documents = []) {
   if (count) count.textContent = String(documents.length)
   if (!target) return
   target.replaceChildren()
-  if (!documents.length) return empty(target, '这个区域还没有可浏览的当前版本文档。')
+  if (!documents.length) return empty(target, t('knowledge.noDocuments'))
   for (const documentRecord of documents) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = `kc-document${String(documentRecord.id) === state.documentId ? ' is-active' : ''}`
     const title = document.createElement('strong')
-    title.textContent = documentRecord.title || '未命名文档'
+    title.textContent = documentRecord.title || t('knowledge.untitled')
     const meta = document.createElement('span')
     meta.textContent = `v${documentRecord.version || 1} · ${documentRecord.mime_type || 'text'}`
     button.append(title, meta)
@@ -84,17 +85,17 @@ function renderResults(hits = []) {
   if (count) count.textContent = String(hits.length)
   if (!target) return
   target.replaceChildren()
-  if (!hits.length) return empty(target, state.query ? '没有匹配证据。可换一种描述再试。' : '输入问题，查看可引用的证据片段。')
+  if (!hits.length) return empty(target, state.query ? t('knowledge.noMatches') : t('knowledge.searchPrompt'))
   for (const hit of hits) {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'kc-result'
     const title = document.createElement('strong')
-    title.textContent = hit.document_title || '未命名文档'
+    title.textContent = hit.document_title || t('knowledge.untitled')
     const excerpt = document.createElement('p')
     excerpt.textContent = text(hit.text || hit.chunk_text).slice(0, 260)
     const meta = document.createElement('span')
-    meta.textContent = `${hit.citation_id || '证据'} · ${hit.retrieval_method || '检索'}`
+    meta.textContent = `${hit.citation_id || t('knowledge.evidence')} · ${hit.retrieval_method || t('knowledge.retrieval')}`
     button.append(title, excerpt, meta)
     button.addEventListener('click', () => loadDocument(hit.document_id))
     target.appendChild(button)
@@ -105,14 +106,14 @@ function renderDocument(documentRecord) {
   const target = $('kc-detail')
   if (!target) return
   target.replaceChildren()
-  if (!documentRecord) return empty(target, '选择一份文档或检索结果以查看来源和版本。')
+  if (!documentRecord) return empty(target, t('knowledge.selectDocument'))
   const title = document.createElement('h2')
-  title.textContent = documentRecord.title || '未命名文档'
+  title.textContent = documentRecord.title || t('knowledge.untitled')
   const items = [
-    ['知识区域', documentRecord.region_name || documentRecord.region_id || '--'],
-    ['版本', `v${documentRecord.version || 1}`],
-    ['格式', documentRecord.mime_type || 'text'],
-    ['来源', documentRecord.source_uri || '--'],
+    [t('knowledge.region'), documentRecord.region_name || documentRecord.region_id || '--'],
+    [t('knowledge.version'), `v${documentRecord.version || 1}`],
+    [t('knowledge.format'), documentRecord.mime_type || 'text'],
+    [t('knowledge.source'), documentRecord.source_uri || '--'],
   ]
   const list = document.createElement('dl')
   for (const [label, value] of items) {
@@ -134,16 +135,16 @@ async function search() {
   const query = text($('kc-search-input')?.value || state.query)
   state.query = query
   if (!query) { renderResults([]); report('brain-ui'); return }
-  setStatus('正在检索可追溯证据…')
+  setStatus(t('knowledge.searching'))
   try {
     const params = new URLSearchParams({ q: query, limit: '12' })
     if (state.regionId) params.set('region_id', state.regionId)
     const data = await request(`/knowledge/search?${params}`)
     renderResults(data.hits || [])
-    setStatus(`已找到 ${data.count || 0} 条可引用证据`)
+    setStatus(t('knowledge.found', { count: data.count || 0 }))
   } catch (err) {
     empty($('kc-result-list'), err.message)
-    setStatus('检索失败')
+    setStatus(t('knowledge.searchFailed'))
   }
   report('brain-ui')
 }
@@ -175,7 +176,7 @@ async function selectRegion(regionId) {
 }
 
 async function refresh() {
-  setStatus('正在加载知识区域…')
+  setStatus(t('knowledge.loading'))
   try {
     const data = await request('/knowledge/regions')
     const regions = data.regions || []
@@ -186,10 +187,10 @@ async function refresh() {
     if (state.query) {
       const input = $('kc-search-input'); if (input) input.value = state.query
       await search()
-    } else setStatus(regions.length ? '选择文档，或检索可引用证据' : '暂无启用中的知识区域')
+    } else setStatus(regions.length ? t('knowledge.ready') : t('knowledge.noActiveRegions'))
     if (state.documentId) await loadDocument(state.documentId)
   } catch (err) {
-    setStatus('无法加载知识脑区')
+    setStatus(t('knowledge.loadFailed'))
     empty($('kc-region-list'), err.message)
   }
 }

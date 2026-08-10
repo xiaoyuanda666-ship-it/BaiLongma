@@ -75,6 +75,59 @@ if (PORTABLE_USER_DIR) {
 }
 
 const USER_DIR = app.getPath('userData')
+const UI_LANGUAGE_FILE = path.join(USER_DIR, 'ui-language.json')
+
+function normalizeUiLanguage(value) {
+  const locale = String(value || '').trim().replaceAll('_', '-').toLowerCase()
+  if (locale === 'en' || locale.startsWith('en-')) return 'en-US'
+  if (locale === 'zh' || locale === 'zh-cn' || locale === 'zh-hans' || locale.startsWith('zh-hans-')) return 'zh-CN'
+  return null
+}
+
+function readSavedUiLanguage() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(UI_LANGUAGE_FILE, 'utf8'))
+    return normalizeUiLanguage(parsed?.locale)
+  } catch {
+    return null
+  }
+}
+
+let nativeUiLanguage = readSavedUiLanguage()
+
+function getNativeUiLanguage() {
+  if (nativeUiLanguage) return nativeUiLanguage
+  try { nativeUiLanguage = normalizeUiLanguage(app.getLocale()) } catch {}
+  return nativeUiLanguage || 'zh-CN'
+}
+
+const NATIVE_UI_MESSAGES = Object.freeze({
+  'zh-CN': { showMain: '显示主界面', quit: '退出' },
+  'en-US': { showMain: 'Show Main Window', quit: 'Quit' },
+})
+
+function nativeUiText(key) {
+  return NATIVE_UI_MESSAGES[getNativeUiLanguage()]?.[key] || NATIVE_UI_MESSAGES['zh-CN'][key] || key
+}
+
+function setNativeUiLanguage(locale) {
+  const normalized = normalizeUiLanguage(locale)
+  if (!normalized) throw new Error(`Unsupported UI locale: ${locale}`)
+  const changed = nativeUiLanguage !== normalized
+  nativeUiLanguage = normalized
+  if (changed || !fs.existsSync(UI_LANGUAGE_FILE)) {
+    try {
+      const tmp = `${UI_LANGUAGE_FILE}.tmp`
+      fs.writeFileSync(tmp, JSON.stringify({ locale: normalized }, null, 2), 'utf8')
+      fs.renameSync(tmp, UI_LANGUAGE_FILE)
+    } catch (error) {
+      console.warn('[ui-language] failed to persist locale:', error?.message || error)
+    }
+  }
+  refreshTrayContextMenu()
+  return normalized
+}
+
 app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
 app.commandLine.appendSwitch('remote-debugging-port', '0')
 const CODE_ROOT = app.getAppPath()
@@ -662,7 +715,7 @@ function waitForBackend(port, timeoutMs = 30000) {
 async function loadStartupPage(targetWindow = mainWindow) {
   if (!targetWindow || targetWindow.isDestroyed()) return
   emitStartupProgress({ id: 'window', status: 'running', message: '正在打开桌面窗口' })
-  await targetWindow.loadFile(STARTUP_PAGE)
+  await targetWindow.loadFile(STARTUP_PAGE, { query: { lang: getNativeUiLanguage() } })
   emitStartupProgress({ id: 'window', status: 'done', message: '桌面窗口已打开' })
 }
 
@@ -851,14 +904,21 @@ function setupTray() {
   tray = new Tray(trayImage)
   tray.setToolTip('Bailongma')
 
+  refreshTrayContextMenu()
+  tray.on('double-click', () => { showMainWindow().catch(() => {}) })
+  if (IS_MAC) tray.on('click', () => { showMainWindow().catch(() => {}) })
+}
+
+function refreshTrayContextMenu() {
+  if (!tray || tray.isDestroyed()) return
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: '显示主界面',
+      label: nativeUiText('showMain'),
       click: () => { showMainWindow().catch(() => {}) },
     },
     { type: 'separator' },
     {
-      label: '退出',
+      label: nativeUiText('quit'),
       click: () => {
         app.isQuiting = true
         app.quit()
@@ -867,8 +927,6 @@ function setupTray() {
   ])
 
   tray.setContextMenu(contextMenu)
-  tray.on('double-click', () => { showMainWindow().catch(() => {}) })
-  if (IS_MAC) tray.on('click', () => { showMainWindow().catch(() => {}) })
 }
 
 function createFocusBannerWindow({ task = '', current_step = '', tasks = [] } = {}) {
@@ -910,7 +968,9 @@ function createFocusBannerWindow({ task = '', current_step = '', tasks = [] } = 
     return false
   })
 
-  focusBannerWindow.loadFile(path.join(RESOURCE_ROOT, 'focus-banner.html'))
+  focusBannerWindow.loadFile(path.join(RESOURCE_ROOT, 'focus-banner.html'), {
+    query: { lang: getNativeUiLanguage() },
+  })
 
   focusBannerWindow.webContents.once('did-finish-load', () => {
     if (!focusBannerWindow || focusBannerWindow.isDestroyed()) return
@@ -1537,6 +1597,7 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('app:get-version', () => app.getVersion())
+ipcMain.handle('ui:set-language', (_event, locale) => ({ locale: setNativeUiLanguage(locale) }))
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
 ipcMain.handle('window:is-full-screen', (event) => {
   const targetWindow = BrowserWindow.fromWebContents(event.sender)

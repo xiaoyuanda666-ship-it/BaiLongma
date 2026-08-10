@@ -181,7 +181,7 @@ body {
 .voice-transcript.interim { color: rgba(255, 255, 255, 0.32); font-style: italic; }
 .voice-transcript.final   { color: rgba(255, 255, 255, 0.8); }
 .voice-transcript:empty::before {
-  content: '点击麦克风说话...';
+  content: attr(data-placeholder);
   color: rgba(255, 255, 255, 0.16);
   font-style: italic;
 }
@@ -282,16 +282,16 @@ body {
 
   <!-- 任务区：主任务 + 当前步骤（折叠态可见） -->
   <div class="task-area" id="taskArea">
-    <div class="task-text" id="taskText">准备中...</div>
-    <div class="current-step-text" id="currentStepText"></div>
+    <div class="task-text" id="taskText" data-i18n-ignore>准备中...</div>
+    <div class="current-step-text" id="currentStepText" data-i18n-ignore></div>
   </div>
 
   <!-- 展开后的子任务列表 -->
-  <div class="task-list" id="taskList"></div>
+  <div class="task-list" id="taskList" data-i18n-ignore></div>
 
   <!-- 语音区 -->
   <div class="voice-row" id="voiceRow">
-    <span class="voice-transcript" id="voiceTranscript"></span>
+    <span class="voice-transcript" id="voiceTranscript" data-i18n-ignore></span>
     <span class="voice-hint" id="voiceHint" title="点击立即发送">↑发送</span>
     <div class="voice-btn" id="voiceBtn" title="点击说话">
       <div class="mic-icon">
@@ -302,7 +302,12 @@ body {
   </div>
 </div>
 
-<script>
+<script type="module">
+import { localizeDom, observeDomLocalization, t, translateUiText } from './src/ui/brain-ui/i18n/index.js'
+localizeDom(document)
+observeDomLocalization(document.body)
+document.getElementById('voiceTranscript').dataset.placeholder = t('focus.voicePlaceholder')
+
 /* ── 状态 ── */
 let state = { task: '', current_step: '', tasks: [], expanded: false }
 let backendPort = null
@@ -327,7 +332,7 @@ function render() {
   const taskListEl      = document.getElementById('taskList')
   const expandArrow     = document.getElementById('expandArrow')
 
-  taskTextEl.textContent = state.task || '专注中'
+  taskTextEl.textContent = state.task || t('focus.active')
 
   // 折叠态显示当前步骤
   if (state.current_step) {
@@ -422,12 +427,12 @@ function toggleTask(idx) {
    ════════════════════════════════ */
 async function startRecording() {
   if (isRecording) { stopRecording(); return }
-  if (!backendPort) { setTranscript('等待后端就绪...', 'interim'); return }
+  if (!backendPort) { setTranscript(t('focus.waitingBackend'), 'interim'); return }
 
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
   } catch {
-    setTranscript('请允许麦克风权限', 'interim')
+    setTranscript(t('focus.allowMic'), 'interim')
     setVoiceBtnState('error')
     return
   }
@@ -478,7 +483,7 @@ async function startRecording() {
           setTranscript(text, 'interim')
         }
       } else if (msg.type === 'error') {
-        setTranscript(msg.message || '识别出错', 'interim')
+        setTranscript(translateUiText(msg.message || t('focus.recognitionError')), 'interim')
         setVoiceBtnState('error')
         cleanupAudio()
       }
@@ -486,7 +491,7 @@ async function startRecording() {
   }
 
   cloudWs.onerror = () => {
-    setTranscript('连接失败，请检查语音配置', 'interim')
+    setTranscript(t('focus.connectionError'), 'interim')
     setVoiceBtnState('error')
     cleanupAudio()
   }
@@ -534,7 +539,7 @@ function sendMessage() {
       currentText = ''
       window.focusBanner?.requestResize()
     }, 500)
-  }).catch(() => setTranscript('发送失败，请重试', 'interim'))
+  }).catch(() => setTranscript(t('focus.sendFailed'), 'interim'))
 }
 
 /* ── UI 辅助 ── */

@@ -9,6 +9,8 @@ const relativeSpeechHelper = path.join(
   'Contents', 'Resources', 'app.asar.unpacked', 'build', 'native-speech-recognizer',
 )
 const relativeNodeRuntime = path.join('Contents', 'Resources', 'node-runtime', 'node')
+const disableTimestamp = String(process.env.BAILONGMA_CODESIGN_TIMESTAMP || '').trim().toLowerCase() === 'none'
+const timestampArgs = disableTimestamp ? ['--timestamp=none'] : []
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8' })
@@ -58,11 +60,11 @@ export default async function afterSignMac(context) {
   // framework was left with a stale signature by a signer retry.
   run('codesign', [
     '--force', '--deep', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, appPath,
+    '--sign', identity, ...timestampArgs, appPath,
   ])
   run('codesign', [
     '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, speechHelperPath,
+    '--sign', identity, ...timestampArgs, speechHelperPath,
   ])
   // The Chrome DevTools MCP server runs in this standalone Node process. Node
   // initializes V8 JIT on startup; under the hardened runtime it crashes with
@@ -70,14 +72,14 @@ export default async function afterSignMac(context) {
   // not reliably apply them to an executable stored under Resources/.
   run('codesign', [
     '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, nodeRuntimePath,
+    '--sign', identity, ...timestampArgs, nodeRuntimePath,
   ])
   // Do not use --deep here: it would sign the helper again without its own
   // entitlement file. The outer signature only needs resealing after the
   // nested helper changed.
   run('codesign', [
     '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, appPath,
+    '--sign', identity, ...timestampArgs, appPath,
   ])
   run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath])
   console.log('[after-sign:mac] signed native speech helper and Node runtime with required entitlements')

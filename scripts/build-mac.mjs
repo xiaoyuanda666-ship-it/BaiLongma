@@ -15,6 +15,7 @@ if (invalidArgs.length > 0) {
 
 const requestedArchs = args.filter((arg) => supportedArchs.has(arg));
 const archs = requestedArchs.length > 0 ? requestedArchs : ['x64', 'arm64'];
+const disableTimestamp = String(process.env.BAILONGMA_CODESIGN_TIMESTAMP || '').trim().toLowerCase() === 'none';
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -60,5 +61,7 @@ for (const arch of archs) {
   ]);
 
   console.log(`[build:mac] packaging ${arch} DMG and update ZIP`);
-  run('node', ['./node_modules/electron-builder/cli.js', '--mac', 'dmg', 'zip', `--${arch}`]);
+  const builderArgs = ['./node_modules/electron-builder/cli.js', '--mac', 'dmg', 'zip', `--${arch}`];
+  if (disableTimestamp) builderArgs.push('--config.mac.timestamp=none');
+  run('node', builderArgs);
 }

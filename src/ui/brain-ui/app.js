@@ -29,6 +29,7 @@ import {
   shuffleGraphItems,
 } from "./memory-graph-data.js";
 import { playBrainUiIntro } from "./brain-ui-intro.js";
+import { formatDateTime, getLocale, localizeDom, observeDomLocalization, t } from "./i18n/index.js";
 
 const BRAIN_UI_ARRIVAL_KEY = "bailongma_brain_ui_arrival_at";
 
@@ -108,6 +109,9 @@ if (hasWindowsTitleBarOverlay) {
   window.bailongma.isFullScreen?.().then(setFullScreenClass).catch(() => {});
 }
 renderBrainUiApp(document.body);
+localizeDom(document.body);
+observeDomLocalization(document.body);
+void window.bailongma?.setUiLanguage?.(getLocale());
 if (brainUiIntroRequested) {
   void (async () => {
     try {
@@ -192,7 +196,7 @@ function updateLastJarvisMsg(...args) { return chat?.updateLastJarvisMsg(...args
 function isTyping() { return chat?.isTyping() || false; }
 
 function defaultInputPlaceholder() {
-  return `向 ${agentName} 发消息…`;
+  return t("shell.messageAgent", { name: agentName });
 }
 
 function clampZoomFactor(factor) {
@@ -1036,7 +1040,7 @@ async function loadMemories() {
     }
   } catch (error) {
     console.warn("[graph] load failed:", error.message);
-    setConnectionState("未连接", false);
+    setConnectionState(t("runtime.offline"), false);
   }
 }
 
@@ -1105,14 +1109,14 @@ function formatMsgTime(stamp) {
 
 const L1 = new ThoughtStream("si-l1", "cool", {
   readCSSVar,
-  thinkingLabel: "思考中…",
-  thinkingDoneLabel: "思考完成",
+  thinkingLabel: t("thought.thinkingEllipsis"),
+  thinkingDoneLabel: t("thought.thinkingDone"),
   toolDetailLength: 140,
 });
 const L2 = new ThoughtStream("si-l2", "warm", {
   readCSSVar,
-  thinkingLabel: "思考中",
-  thinkingDoneLabel: "思考完成",
+  thinkingLabel: t("thought.thinking"),
+  thinkingDoneLabel: t("thought.thinkingDone"),
   toolDetailLength: 220,
 });
 
@@ -1193,7 +1197,7 @@ const commandRunViews = new Map();
 let commandRunRenderFrame = 0;
 
 function heartbeatClock(ts) {
-  return new Date(Number(ts) || Date.now()).toLocaleTimeString("zh-CN", {
+  return formatDateTime(Number(ts) || Date.now(), {
     hour12: false,
     hour: "2-digit",
     minute: "2-digit",
@@ -1235,13 +1239,13 @@ function renderActionLog() {
 
 function commandRunStateLabel(state) {
   return ({
-    starting: "启动中",
-    running: "运行中",
-    cancelling: "正在停止",
-    completed: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-  })[state] || state || "等待中";
+    starting: t("runtime.commandStarting"),
+    running: t("runtime.commandRunning"),
+    cancelling: t("runtime.commandCancelling"),
+    completed: t("runtime.commandCompleted"),
+    failed: t("runtime.commandFailed"),
+    cancelled: t("runtime.commandCancelled"),
+  })[state] || state || t("runtime.commandWaiting");
 }
 
 function renderCommandRuns() {
@@ -1262,7 +1266,7 @@ function renderCommandRuns() {
     dot.className = "command-run-dot";
     const command = document.createElement("code");
     command.className = "command-run-command";
-    command.textContent = run.command || `命令 ${run.runId.slice(-6)}`;
+    command.textContent = run.command || t("runtime.commandFallback", { id: run.runId.slice(-6) });
     const state = document.createElement("span");
     state.className = "command-run-state";
     state.textContent = commandRunStateLabel(run.state);
@@ -1820,19 +1824,21 @@ function updateHeartbeatFacts() {
   if (heartbeatCountEl) heartbeatCountEl.textContent = String(heartbeatCount);
   if (!heartbeatLastEl) return;
   if (!lastHeartbeatAt) {
-    heartbeatLastEl.textContent = "等待首次 Tick";
+    heartbeatLastEl.textContent = t("runtime.heartbeatWaiting");
     return;
   }
   const elapsed = Math.max(0, Date.now() - lastHeartbeatAt);
-  if (elapsed < 60_000) heartbeatLastEl.textContent = "刚刚发生";
-  else if (elapsed < 3_600_000) heartbeatLastEl.textContent = `${Math.floor(elapsed / 60_000)} 分钟前`;
-  else if (elapsed < 86_400_000) heartbeatLastEl.textContent = `${Math.floor(elapsed / 3_600_000)} 小时前`;
-  else heartbeatLastEl.textContent = `${Math.floor(elapsed / 86_400_000)} 天前`;
+  if (elapsed < 60_000) heartbeatLastEl.textContent = t("runtime.justNow");
+  else if (elapsed < 3_600_000) heartbeatLastEl.textContent = t("runtime.minutesAgo", { count: Math.floor(elapsed / 60_000) });
+  else if (elapsed < 86_400_000) heartbeatLastEl.textContent = t("runtime.hoursAgo", { count: Math.floor(elapsed / 3_600_000) });
+  else heartbeatLastEl.textContent = t("runtime.daysAgo", { count: Math.floor(elapsed / 86_400_000) });
 }
 
 function formatHeartbeatInterval(minutes = defaultHeartbeatIntervalMinutes) {
   const value = Number(minutes);
-  return Number.isInteger(value) && value > 0 ? `${value} 分钟` : "默认间隔";
+  return Number.isInteger(value) && value > 0
+    ? t("runtime.intervalMinutes", { count: value })
+    : t("runtime.defaultInterval");
 }
 
 function applyHeartbeatConfig(heartbeat = {}) {
@@ -1862,7 +1868,7 @@ function setHeartbeatConnection(state, label) {
   if (heartbeatStateLabelEl) heartbeatStateLabelEl.textContent = label;
   if (heartbeatStateEl) {
     heartbeatStateEl.title = state === "alive"
-      ? `默认心跳间隔：${formatHeartbeatInterval()}`
+      ? t("runtime.defaultHeartbeatInterval", { interval: formatHeartbeatInterval() })
       : label;
   }
 }
@@ -1870,12 +1876,14 @@ function setHeartbeatConnection(state, label) {
 function setCognitionState(label, state = "idle") {
   if (!cognitionStateEl) return;
   cognitionStateEl.textContent = label;
+  cognitionStateEl.title = label;
   cognitionStateEl.dataset.state = state;
 }
 
-function setL3State(label = "L3 待命", state = "idle") {
+function setL3State(label = t("runtime.l3Standby"), state = "idle") {
   if (!l3StateEl) return;
   l3StateEl.textContent = label;
+  l3StateEl.title = label;
   l3StateEl.dataset.state = state;
 }
 
@@ -1920,14 +1928,14 @@ function restoreUserStreamHistory(events) {
         break;
       case "tool_preparing": {
         if (!roundActive) break;
-        const action = data.name ? L1.toolAction(data.name) : "处理下一步";
-        L1.setStatus(`准备${action}…`, "busy");
+        const action = data.name ? L1.toolAction(data.name) : t("runtime.preparingNext");
+        L1.setStatus(t("runtime.preparingActionStatus", { action }), "busy");
         break;
       }
       case "tool_executing": {
         if (!roundActive) break;
-        const action = data.name ? L1.toolAction(data.name) : "处理事务";
-        L1.setStatus(`正在${action}…`, "busy");
+        const action = data.name ? L1.toolAction(data.name) : t("runtime.activityGeneral");
+        L1.setStatus(t("runtime.workingActionStatus", { action }), "busy");
         break;
       }
       case "tool_call":
@@ -1946,14 +1954,14 @@ function restoreUserStreamHistory(events) {
         break;
       case "llm_retry":
       case "message_requeued":
-        if (roundActive) L1.setStatus("等待重试…", "busy");
+        if (roundActive) L1.setStatus(t("runtime.waitingRetry"), "busy");
         break;
     }
   }
 
   if (roundActive) {
     L1.stopThinking();
-    L1.setStatus("上次会话未完成", "failed");
+    L1.setStatus(t("runtime.previousSessionIncomplete"), "failed");
   }
 }
 
@@ -1965,7 +1973,7 @@ function restoreCognitionHistory(events) {
   L2.el.replaceChildren();
   let roundActive = false;
   let lastSettledState = "idle";
-  let lastL3State = { label: "L3 待命", state: "idle" };
+  let lastL3State = { label: t("runtime.l3Standby"), state: "idle" };
 
   for (const event of history) {
     const type = event?.type;
@@ -1982,21 +1990,21 @@ function restoreCognitionHistory(events) {
         roundActive = true;
         L2.beginRound();
         L2.newLine("L3 scheduled task", {
-          content: data.task || "定时任务",
+          content: data.task || t("runtime.scheduledTask"),
           time: heartbeatClock(Date.parse(event.ts) || Date.now()),
         });
         L2.startThinkingSession();
         lastSettledState = "thinking";
-        lastL3State = { label: `L3 执行 #${data.reminder_id || data.run_id || "?"}`, state: "running" };
+        lastL3State = { label: t("runtime.l3Running", { id: data.reminder_id || data.run_id || "?" }), state: "running" };
         break;
       case "scheduled_task_completed":
-        lastL3State = { label: "L3 已完成", state: "done" };
+        lastL3State = { label: t("runtime.l3Completed"), state: "done" };
         break;
       case "scheduled_task_retry":
-        lastL3State = { label: `L3 重试 ${data.next_attempt || ""}`.trim(), state: "retry" };
+        lastL3State = { label: t("runtime.l3Retry", { attempt: data.next_attempt || "" }).trim(), state: "retry" };
         break;
       case "scheduled_task_failed":
-        lastL3State = { label: "L3 失败", state: "failed" };
+        lastL3State = { label: t("runtime.l3Failed"), state: "failed" };
         break;
       case "stream_start":
         if (roundActive) L2.startThinkingSession();
@@ -2006,15 +2014,15 @@ function restoreCognitionHistory(events) {
         break;
       case "tool_preparing": {
         if (!roundActive) break;
-        const action = data.name ? L2.toolAction(data.name) : "处理下一步";
-        L2.setStatus(`准备${action}…`, "busy");
+        const action = data.name ? L2.toolAction(data.name) : t("runtime.preparingNext");
+        L2.setStatus(t("runtime.preparingActionStatus", { action }), "busy");
         lastSettledState = "tool";
         break;
       }
       case "tool_executing": {
         if (!roundActive) break;
-        const action = data.name ? L2.toolAction(data.name) : "处理事务";
-        L2.setStatus(`正在${action}…`, "busy");
+        const action = data.name ? L2.toolAction(data.name) : t("runtime.activityGeneral");
+        L2.setStatus(t("runtime.workingActionStatus", { action }), "busy");
         lastSettledState = "tool";
         break;
       }
@@ -2039,7 +2047,7 @@ function restoreCognitionHistory(events) {
         break;
       case "llm_retry":
       case "message_requeued":
-        if (roundActive) L2.setStatus("等待重试…", "busy");
+        if (roundActive) L2.setStatus(t("runtime.waitingRetry"), "busy");
         break;
     }
   }
@@ -2047,11 +2055,11 @@ function restoreCognitionHistory(events) {
   if (roundActive) {
     L2.stopThinking();
     L2.clearStatus();
-    setCognitionState("上次未完成", "idle");
+    setCognitionState(t("runtime.previousRoundIncomplete"), "idle");
   } else if (lastSettledState === "done") {
-    setCognitionState("最近一轮完成", "done");
+    setCognitionState(t("runtime.recentRoundComplete"), "done");
   } else if (lastSettledState === "interrupted") {
-    setCognitionState("最近一轮中止", "idle");
+    setCognitionState(t("runtime.recentRoundInterrupted"), "idle");
   }
   setL3State(lastL3State.label, lastL3State.state);
 }
@@ -2214,21 +2222,21 @@ const memExtractEl = document.getElementById("mem-extract-rate");
 const AI_ACTIVITY_WINDOW_MS = 60_000;
 const AI_ACTIVITY_IDLE_AFTER_MS = 15_000;
 const AI_TOOL_GROUPS = {
-  "扫描文件": new Set(["read_file", "list_dir"]),
-  "改动文件": new Set(["write_file", "make_dir", "delete_file"]),
-  "执行命令": new Set(["run_command", "download_file", "kill_process", "list_processes"]),
-  "上网": new Set([
+  "runtime.activityScanFiles": new Set(["read_file", "list_dir"]),
+  "runtime.activityChangeFiles": new Set(["write_file", "make_dir", "delete_file"]),
+  "runtime.activityRunCommands": new Set(["run_command", "download_file", "kill_process", "list_processes"]),
+  "runtime.activityBrowse": new Set([
     "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",
     "browser_click", "browser_type", "browser_fill_form", "browser_select_option",
     "browser_press_key", "browser_hover", "browser_drag", "browser_wait_for",
     "browser_handle_dialog", "browser_tabs", "browser_take_screenshot",
     "browser_console_messages", "browser_resize", "browser_close",
   ]),
-  "清理浏览器": new Set(["browser_clear_data"]),
-  "调取记忆": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
-  "推送界面": new Set(["ui_set", "focus_banner"]),
-  "处理多媒体": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),
-  "回复用户": new Set(["send_message", "express"]),
+  "runtime.activityClearBrowser": new Set(["browser_clear_data"]),
+  "runtime.activityMemory": new Set(["search_memory", "recall_memory", "probe_memory", "upsert_memory", "merge_memories", "downgrade_memory"]),
+  "runtime.activityUi": new Set(["ui_set", "focus_banner"]),
+  "runtime.activityMedia": new Set(["speak", "generate_lyrics", "generate_music", "generate_image", "music", "media_mode"]),
+  "runtime.activityReply": new Set(["send_message", "express"]),
 };
 const aiActivityLog = [];
 let aiActivityFirstTs = 0;
@@ -2238,10 +2246,10 @@ const aiActivityLabelEl = document.getElementById("ai-activity-label");
 const aiActivityDetailEl = document.getElementById("ai-activity-detail");
 
 function classifyTool(name) {
-  for (const [label, set] of Object.entries(AI_TOOL_GROUPS)) {
-    if (set.has(name)) return label;
+  for (const [translationKey, set] of Object.entries(AI_TOOL_GROUPS)) {
+    if (set.has(name)) return translationKey;
   }
-  return "处理事务";
+  return "runtime.activityGeneral";
 }
 
 function recordAiActivity(name) {
@@ -2260,7 +2268,7 @@ function refreshAiActivity() {
   }
   if (aiActivityLog.length === 0) {
     aiActivityEl.dataset.state = "idle";
-    aiActivityLabelEl.textContent = "空闲";
+    aiActivityLabelEl.textContent = t("runtime.activityIdle");
     aiActivityDetailEl.textContent = "";
     aiActivityFirstTs = 0;
     return;
@@ -2268,22 +2276,22 @@ function refreshAiActivity() {
   const lastTs = aiActivityLog[aiActivityLog.length - 1].ts;
   if (now - lastTs > AI_ACTIVITY_IDLE_AFTER_MS) {
     aiActivityEl.dataset.state = "idle";
-    aiActivityLabelEl.textContent = "刚完成";
+    aiActivityLabelEl.textContent = t("runtime.activityJustCompleted");
     const ago = Math.round((now - lastTs) / 1000);
-    aiActivityDetailEl.textContent = `${ago}s 前停止`;
+    aiActivityDetailEl.textContent = t("runtime.activityStoppedAgo", { seconds: ago });
     return;
   }
   const counts = {};
   for (const e of aiActivityLog) counts[e.group] = (counts[e.group] || 0) + 1;
-  let domGroup = "处理事务";
+  let domGroup = "runtime.activityGeneral";
   let domCount = 0;
   for (const [g, c] of Object.entries(counts)) {
     if (c > domCount) { domCount = c; domGroup = g; }
   }
   aiActivityEl.dataset.state = "busy";
-  aiActivityLabelEl.textContent = `正在${domGroup}`;
+  aiActivityLabelEl.textContent = t("runtime.activityWorking", { activity: t(domGroup) });
   const elapsed = Math.round((now - (aiActivityFirstTs || lastTs)) / 1000);
-  aiActivityDetailEl.textContent = `· ${aiActivityLog.length} 项操作 · ${elapsed}s`;
+  aiActivityDetailEl.textContent = t("runtime.activityDetail", { count: aiActivityLog.length, seconds: elapsed });
 }
 
 if (aiActivityEl) {
@@ -2425,8 +2433,8 @@ function flashFocusCompressed() {
 }
 
 function connectSSE() {
-  setConnectionState("连接中", true);
-  setHeartbeatConnection("waiting", "连接中");
+  setConnectionState(t("runtime.connecting"), true);
+  setHeartbeatConnection("waiting", t("runtime.connecting"));
   const eventsUrl = new URL("/events", `${API}/`);
   eventsUrl.searchParams.set("client_id", UI_CLIENT_ID);
   let lastEventId = "";
@@ -2435,7 +2443,7 @@ function connectSSE() {
   const es = new EventSource(eventsUrl);
 
   es.onopen = () => {
-    setConnectionState("已连接", true);
+    setConnectionState(t("runtime.connected"), true);
     setHeartbeatConnection("alive", formatHeartbeatInterval());
     chat?.restoreChatHistory?.();
     voiceDiag("sse-open", { last_event_id: lastEventId || "none" });
@@ -2455,8 +2463,8 @@ function connectSSE() {
   };
 
   es.onerror = () => {
-    setConnectionState("重连中", false);
-    setHeartbeatConnection("offline", "连接中断");
+    setConnectionState(t("runtime.reconnecting"), false);
+    setHeartbeatConnection("offline", t("runtime.connectionLost"));
     voiceDiag("sse-error", { last_event_id: lastEventId || "none" });
     es.close();
     setTimeout(connectSSE, 3000);
@@ -2483,7 +2491,7 @@ function handle({ type, data = {}, ts = null }) {
       triggerHeartbeatPulse(HEARTBEAT_MAJOR_STRENGTH, "major");
       if (activeHeartbeatRound) {
         finishHeartbeatRound("interrupted", "收到用户消息，心跳让路");
-        setCognitionState("已让路", "idle");
+        setCognitionState(t("runtime.yielded"), "idle");
       }
       currentPath = "l1";
       setVoiceThinking(true);
@@ -2511,7 +2519,7 @@ function handle({ type, data = {}, ts = null }) {
       setVoiceThinking(true);
       revealCognitionStream();
       beginHeartbeatRound(Date.parse(ts) || Date.now());
-      setCognitionState("正在思考", "thinking");
+      setCognitionState(t("runtime.thinking"), "thinking");
       L2.beginRound();
       L2.newLine("heartbeat tick");
       L2.startThinkingSession();
@@ -2521,29 +2529,29 @@ function handle({ type, data = {}, ts = null }) {
       currentPath = "l3";
       setVoiceThinking(true);
       revealCognitionStream();
-      setCognitionState("L3 正在执行", "thinking");
-      setL3State(`L3 执行 #${data.reminder_id || data.run_id || "?"}`, "running");
+      setCognitionState(t("runtime.l3Executing"), "thinking");
+      setL3State(t("runtime.l3Running", { id: data.reminder_id || data.run_id || "?" }), "running");
       L2.beginRound();
       L2.newLine("L3 scheduled task", {
-        content: data.task || "定时任务",
+        content: data.task || t("runtime.scheduledTask"),
         time: heartbeatClock(Date.parse(ts) || Date.now()),
       });
       L2.startThinkingSession();
       break;
     case "scheduled_task_completed":
-      setL3State("L3 已完成", "done");
+      setL3State(t("runtime.l3Completed"), "done");
       break;
     case "scheduled_task_retry":
-      setL3State(`L3 重试 ${data.next_attempt || ""}`.trim(), "retry");
+      setL3State(t("runtime.l3Retry", { attempt: data.next_attempt || "" }).trim(), "retry");
       break;
     case "scheduled_task_failed":
-      setL3State("L3 失败", "failed");
+      setL3State(t("runtime.l3Failed"), "failed");
       break;
     case "stream_start":
       setVoiceThinking(true);
       if (currentPath !== "l1") {
         revealCognitionStream();
-        setCognitionState(currentPath === "l3" ? "L3 正在思考" : "正在思考", "thinking");
+        setCognitionState(currentPath === "l3" ? t("runtime.l3Thinking") : t("runtime.thinking"), "thinking");
       }
       currentStream().startThinkingSession();
       // 正文流（plainReply）：把 token 实时打进聊天气泡。一轮可能有多段正文（正文→工具→正文），
@@ -2585,7 +2593,7 @@ function handle({ type, data = {}, ts = null }) {
     case "stream_end":
       currentStream().stopThinking();
       setVoiceThinking(false);
-      if (currentPath === "l2" && activeHeartbeatRound) setCognitionState("判断下一步", "thinking");
+      if (currentPath === "l2" && activeHeartbeatRound) setCognitionState(t("runtime.decidingNext"), "thinking");
       // 正文段结束：把残句先送去合成，降低尾句延迟（不结束会话，可能还有后续正文段）
       if (data.mode === "text" && sttsActive && isStreamingTTSTurn(data)) flushStreamingTTSBuf();
       break;
@@ -2600,9 +2608,9 @@ function handle({ type, data = {}, ts = null }) {
       }
       if (currentPath !== "l1") {
         revealCognitionStream();
-        setCognitionState(action ? `准备 · ${action}` : "准备下一步", "tool");
+        setCognitionState(action ? t("runtime.preparingAction", { action }) : t("runtime.preparingNext"), "tool");
       }
-      stream.setStatus(action ? `准备${action}…` : "准备下一步…", "busy");
+      stream.setStatus(action ? t("runtime.preparingActionStatus", { action }) : t("runtime.preparingNextStatus"), "busy");
       break;
     }
     case "tool_executing": {
@@ -2610,15 +2618,15 @@ function handle({ type, data = {}, ts = null }) {
       // 开始时立即跳一次；未完成前每 3 秒继续小跳。
       beginToolHeartbeat(data.name);
       const stream = currentStream();
-      const action = data.name ? stream.toolAction(data.name, data.args) : "处理事务";
+      const action = data.name ? stream.toolAction(data.name, data.args) : t("runtime.activityGeneral");
       if (isCardBrowserAction(data)) prepareBrowserPreview(data);
       else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
         void showNativeBrowserWindow(data);
       }
-      if (currentPath !== "l1") setCognitionState(`进行中 · ${action}`, "tool");
-      stream.setTimedStatus(`正在${action}…`, "busy", {
+      if (currentPath !== "l1") setCognitionState(t("runtime.workingAction", { action }), "tool");
+      stream.setTimedStatus(t("runtime.workingActionStatus", { action }), "busy", {
         staleAfterMs: 45000,
-        staleText: `${action}用时较长，仍在等待结果…`,
+        staleText: t("runtime.longRunningAction", { action }),
       });
       break;
     }
@@ -2626,7 +2634,8 @@ function handle({ type, data = {}, ts = null }) {
       finishToolHeartbeat(data.name);
       const stream = currentStream();
       if (currentPath !== "l1") {
-        setCognitionState(`${data.ok === false ? "未完成" : "完成"} · ${stream.toolAction(data.name, data.args)}`, "tool");
+        const action = stream.toolAction(data.name, data.args);
+        setCognitionState(t(data.ok === false ? "runtime.incompleteAction" : "runtime.completedAction", { action }), "tool");
       }
       addActionLogEntry(data.name, data.args, data.result, data.ok, Date.parse(ts) || Date.now());
       stream.tool(data.name, data.args, data.result, data.ok);
@@ -2649,9 +2658,9 @@ function handle({ type, data = {}, ts = null }) {
       setVoiceThinking(false);
       if (currentPath === "l2") {
         finishHeartbeatRound("complete");
-        setCognitionState("本轮完成", "done");
+        setCognitionState(t("runtime.roundComplete"), "done");
       } else if (currentPath === "l3") {
-        setCognitionState("L3 本轮完成", "done");
+        setCognitionState(t("runtime.l3RoundComplete"), "done");
       }
       // 兜底：本轮结束时（response 必在 message 之后发）若流式合成会话仍开着——极少见，模型只调了工具
       // 没产出可投递正文、message 未到达——标记正文已尽让队列放完即恢复麦克风，避免麦克风一直挂起。
@@ -2667,10 +2676,10 @@ function handle({ type, data = {}, ts = null }) {
       hideBrowserPreview();
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted");
-        setCognitionState("已中止", "idle");
+        setCognitionState(t("runtime.interrupted"), "idle");
       } else if (currentPath === "l3") {
-        setCognitionState("L3 已让路", "idle");
-        setL3State("L3 等待重试", "retry");
+        setCognitionState(t("runtime.l3Yielded"), "idle");
+        setL3State(t("runtime.l3WaitingRetry"), "retry");
       }
       break;
     case "llm_retry": {
@@ -2678,14 +2687,14 @@ function handle({ type, data = {}, ts = null }) {
       currentStream().startThinkingSession();
       const nextAttempt = Number(data.nextAttempt || 2);
       const delayText = formatRetryDelay(Number(data.delayMs || 0));
-      currentStream().setStatus("LLM 繁忙，第 " + nextAttempt + " 次重试将于 " + delayText + " 后开始", "busy");
+      currentStream().setStatus(t("runtime.llmRetry", { attempt: nextAttempt, delay: delayText }), "busy");
       break;
     }
     case "message_requeued": {
       setVoiceThinking(true);
       currentStream().startThinkingSession();
       const retryCount = Number(data.retryCount || 1);
-      currentStream().setStatus("LLM 繁忙，已入队重试 " + retryCount + "/3", "busy");
+      currentStream().setStatus(t("runtime.llmRequeued", { count: retryCount }), "busy");
       break;
     }
     case "message_dropped":
@@ -2693,10 +2702,10 @@ function handle({ type, data = {}, ts = null }) {
       setVoiceThinking(false);
       hideBrowserPreview();
       currentStream().startThinkingSession();
-      currentStream().setStatus("LLM 繁忙，重试次数已达上限", "failed");
+      currentStream().setStatus(t("runtime.llmRetryExhausted"), "failed");
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted", "心跳处理未完成 · 重试已用尽");
-        setCognitionState("未完成", "idle");
+        setCognitionState(t("runtime.incomplete"), "idle");
       }
       break;
     case "error":
@@ -2704,15 +2713,15 @@ function handle({ type, data = {}, ts = null }) {
       if (isBusyErrorMessage(data.error)) {
         setVoiceThinking(true);
         currentStream().startThinkingSession();
-        currentStream().setStatus("LLM 繁忙，请稍后重试", "busy");
+        currentStream().setStatus(t("runtime.llmRetryLater"), "busy");
       } else {
         setVoiceThinking(false);
         hideBrowserPreview();
         currentStream().stopThinking();
-        currentStream().setStatus(data.error || "处理失败", "failed");
+        currentStream().setStatus(data.error || t("runtime.processingFailed"), "failed");
         if (currentPath === "l2") {
           finishHeartbeatRound("interrupted", "心跳处理遇到异常");
-          setCognitionState("异常", "idle");
+          setCognitionState(t("runtime.exception"), "idle");
         }
       }
       break;
@@ -2723,7 +2732,7 @@ function handle({ type, data = {}, ts = null }) {
       hideBrowserPreview();
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted", "心跳协议校验未通过");
-        setCognitionState("未完成", "idle");
+        setCognitionState(t("runtime.incomplete"), "idle");
       }
       break;
     case "injector_result": {

@@ -2,6 +2,7 @@
 
 import { apiUrl } from './api-client.js';
 import { HotspotEarth } from './hotspot-earth.js';
+import { t, translateUiText } from './i18n/index.js';
 
 // ── 实时热点数据由后端 /hotspots 提供；前端不再用 mock 冒充真实热榜 ─────────────
 
@@ -144,7 +145,7 @@ function renderList(listId, items, style = 'heat') {
   if (!items.length) {
     ul.innerHTML = `<li class="hs-item hs-item-empty">
       <span class="hs-rank">--</span>
-      <span class="hs-item-text">实时源未配置或暂不可用</span>
+      <span class="hs-item-text">${t('hotspot.sourceUnavailable')}</span>
       <span class="hs-heat">--</span>
       <span class="hs-trend hs-trend-same">—</span>
     </li>`;
@@ -154,7 +155,7 @@ function renderList(listId, items, style = 'heat') {
     const rankCls = rank <= 3 ? `hs-rank-top${rank}` : '';
     const trendIcon = TREND_ICONS[trend] || '';
     const trendCls  = TREND_CLASSES[trend] || '';
-    const newBadge  = isNew ? '<span class="hs-new-badge">新</span>' : '';
+    const newBadge  = isNew ? `<span class="hs-new-badge">${t('hotspot.new')}</span>` : '';
     const heatLabel = style === 'heat'
       ? `<span class="hs-heat">${heat}</span>`
       : `<span class="hs-label-badge">${heat}</span>`;
@@ -174,9 +175,9 @@ function renderAllLists() {
 }
 
 function formatFetchedAt(value) {
-  if (!value) return '未知';
+  if (!value) return t('hotspot.unknown');
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '未知';
+  if (Number.isNaN(date.getTime())) return t('hotspot.unknown');
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -204,12 +205,12 @@ function updateHotspotMeta() {
     const status = hotspotMeta.status?.[platform] || {};
     total += items.length;
     const source = status.ok
-      ? `${status.source || '实时'}${hotspotMeta.stale ? '缓存' : '数据'}`
-      : '未配置';
+      ? `${translateUiText(status.source || t('hotspot.realtime'))} · ${t(hotspotMeta.stale ? 'hotspot.cache' : 'hotspot.data')}`
+      : t('hotspot.notConfigured');
     setText(config.updateId, `${source} · ${formatFetchedAt(hotspotMeta.fetchedAt)}`);
   }
   setText('hs-stat-data', String(total));
-  setText('hs-stat-data-delta', `四平台热榜 / ${hotspotMeta.refreshMinutes || 30} 分钟缓存`);
+  setText('hs-stat-data-delta', t('hotspot.statsDelta', { minutes: hotspotMeta.refreshMinutes || 30 }));
 }
 
 async function refreshHotspots({ force = false } = {}) {

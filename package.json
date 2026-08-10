@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.651",
+  "version": "2.1.655",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -25,6 +25,8 @@
     "publish": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
+    "test:i18n": "node ./src/test-i18n.js",
+    "test:brain-ui-tools": "node ./src/test-brain-ui-tool-descriptions.js",
     "test:information-subscriptions": "electron ./src/test-information-subscriptions.js",
     "test:device-information": "node ./src/test-device-information.js",
     "test:complex-task": "electron ./src/test-complex-task.js",
@@ -265,7 +267,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "signIgnore": [
-        "playwright-browsers/.+\\.(pak|dat|bin)$"
+        "playwright-browsers/.+\\.(pak|dat|bin|strings)$"
       ],
       "binaries": [
         "Contents/Resources/app.asar.unpacked/build/native-speech-recognizer",

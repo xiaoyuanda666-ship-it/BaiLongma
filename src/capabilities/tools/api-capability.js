@@ -3,6 +3,7 @@ import path from 'path'
 import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { paths } from '../../paths.js'
+import { stringifyJsonForTransport } from '../../runtime/json-unicode.js'
 import {
   apiCapabilityNeedsCredential,
   buildApiSlotContext,
@@ -304,7 +305,7 @@ async function callOpenAICompatibleVision(slot, { imageUrl, prompt, detail = 'au
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: stringifyJsonForTransport(body),
     signal: context.signal || AbortSignal.timeout(60_000),
   })
   const text = await res.text()

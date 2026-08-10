@@ -15,6 +15,7 @@ import {
   listOutputDevices,
   setOutputPreference,
 } from "./audio-output.js";
+import { getLocale, setLocale, t } from "./i18n/index.js";
 
 export function initSettings({
   defaultAgentName,
@@ -27,10 +28,24 @@ export function initSettings({
   setOpenSettings,
 } = {}) {
 const themeSwitcher = document.getElementById("theme-switcher");
+const uiLanguageSelect = document.getElementById("settings-ui-language");
 const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
 const VOICE_SPACE_PTT_KEY = "bailongma-voice-space-ptt-enabled";
 const IGNORED_VERSION_KEY = "bailongma_ignored_update_version";
 const SUPPRESS_UPDATES_KEY = "bailongma_suppress_update_notifications";
+if (uiLanguageSelect) {
+  uiLanguageSelect.value = getLocale();
+  uiLanguageSelect.addEventListener("change", async () => {
+    if (uiLanguageSelect.value === getLocale()) return;
+    setLocale(uiLanguageSelect.value);
+    try {
+      await globalThis.bailongma?.setUiLanguage?.(uiLanguageSelect.value);
+    } catch (error) {
+      console.warn("[settings] failed to sync the native UI language:", error?.message || error);
+    }
+    globalThis.location?.reload?.();
+  });
+}
 // ── TTS settings panel init ───────────────────────────────────────────────────
 function updateSecretVisibility(input, toggle, visible, label = "API Key") {
   const isVisible = Boolean(visible);
@@ -422,8 +437,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       toolContextSlider.value = String(toolCallLimit);
       toolContextSlider.setAttribute("aria-valuemax", String(Math.max(0, chatMessageLimit - 1)));
     }
-    if (chatContextVal) chatContextVal.textContent = `${chatMessageLimit} 条`;
-    if (toolContextVal) toolContextVal.textContent = `${toolCallLimit} 条`;
+    if (chatContextVal) chatContextVal.textContent = t("format.items", { count: chatMessageLimit });
+    if (toolContextVal) toolContextVal.textContent = t("format.items", { count: toolCallLimit });
     if (contextRange) {
       contextRange.style.setProperty("--chat-context-position", `${chatMessageLimit / 40 * 100}%`);
       contextRange.style.setProperty("--tool-context-position", `${toolCallLimit / 40 * 100}%`);
@@ -773,13 +788,13 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         if (!el) continue;
         const configuredCount = keys.filter(k => social[k]?.configured).length;
         if (configuredCount === keys.length) {
-          el.textContent = "● 已配置";
+          el.textContent = t("dynamic.configuredDot");
           el.className = "settings-platform-status ok";
         } else if (configuredCount > 0) {
-          el.textContent = `● 部分配置 (${configuredCount}/${keys.length})`;
+          el.textContent = t("format.partialConfig", { configured: configuredCount, total: keys.length });
           el.className = "settings-platform-status miss";
         } else {
-          el.textContent = "○ 未配置";
+          el.textContent = t("dynamic.notConfiguredDot");
           el.className = "settings-platform-status miss";
         }
       }
@@ -811,7 +826,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     if (!mcpStatus) return;
     const servers = Array.isArray(status.servers) ? status.servers : [];
     if (servers.length === 0) {
-      mcpStatus.textContent = "没有配置 MCP Server";
+      mcpStatus.textContent = t("mcp.none");
       return;
     }
     mcpStatus.textContent = servers.map(server => {
@@ -841,9 +856,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       let servers;
       try {
         servers = JSON.parse(mcpServersJson?.value || "[]");
-        if (!Array.isArray(servers)) throw new Error("顶层必须是 Server 数组");
+        if (!Array.isArray(servers)) throw new Error(t("dynamic.mcpJsonTopLevel"));
       } catch (error) {
-        showFeedback(mcpFeedback, `JSON 格式错误：${error.message}`, true);
+        showFeedback(mcpFeedback, t("format.jsonError", { error: error.message }), true);
         return;
       }
       saveMcpBtn.disabled = true;
@@ -859,7 +874,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         const publicServers = (data.mcp?.servers || []).map(({ envKeys, ...server }) => server);
         if (mcpServersJson) mcpServersJson.value = JSON.stringify(publicServers, null, 2);
         renderMcpStatus(data.status);
-        showFeedback(mcpFeedback, `已保存，加载 ${data.status?.toolCount || 0} 个 MCP 工具`);
+        showFeedback(mcpFeedback, t("format.mcpToolsLoaded", { count: data.status?.toolCount || 0 }));
       } catch (error) {
         showFeedback(mcpFeedback, error?.message || "请求失败", true);
       } finally {
@@ -1218,13 +1233,13 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       voiceMicSelect.innerHTML = "";
       const defaultOption = document.createElement("option");
       defaultOption.value = "";
-      defaultOption.textContent = "系统默认麦克风";
+      defaultOption.textContent = t("voice.defaultMic");
       voiceMicSelect.appendChild(defaultOption);
 
       devices.forEach((device, index) => {
         const option = document.createElement("option");
         option.value = device.deviceId;
-        option.textContent = device.label || `麦克风 ${index + 1}`;
+        option.textContent = device.label || t("format.microphone", { count: index + 1 });
         voiceMicSelect.appendChild(option);
       });
 
@@ -1238,9 +1253,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       } else if (!devices.length) {
         setVoiceMicStatus("未检测到独立麦克风，将使用系统默认麦克风。");
       } else if (!hasLabels) {
-        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风；点刷新并授权后可显示完整名称。`);
+        setVoiceMicStatus(t("format.micsDetectedPermission", { count: devices.length }));
       } else {
-        setVoiceMicStatus(`已检测到 ${devices.length} 个麦克风。更换后重新开启语音对话生效。`);
+        setVoiceMicStatus(t("format.micsDetected", { count: devices.length }));
       }
     } catch {
       setVoiceMicStatus("麦克风列表读取失败，将使用系统默认麦克风。", true);
@@ -1283,12 +1298,12 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       voiceOutputSelect.innerHTML = "";
       const autoOpt = document.createElement("option");
       autoOpt.value = "";
-      autoOpt.textContent = "自动（跟随系统，避开虚拟设备）";
+      autoOpt.textContent = t("voice.autoOutput");
       voiceOutputSelect.appendChild(autoOpt);
       selectable.forEach((d, i) => {
         const opt = document.createElement("option");
         opt.value = d.deviceId;
-        opt.textContent = (d.label || `输出设备 ${i + 1}`) + (d.isVirtual ? "（虚拟，可能没声音）" : "");
+        opt.textContent = (d.label || t("format.outputDevice", { count: i + 1 })) + (d.isVirtual ? t("format.virtualOutput") : "");
         voiceOutputSelect.appendChild(opt);
       });
       const stillExists = !preferred || selectable.some(d => d.deviceId === preferred);
@@ -1357,8 +1372,11 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       const map = data?.map || {};
       if (status) {
         status.textContent = map.configured
-          ? "高德地图 · 已配置"
-          : `高德地图 · Key ${map.keyConfigured ? "已配置" : "未配置"} / 安全密钥 ${map.securityConfigured ? "已配置" : "未配置"}`;
+          ? t("format.mapConfigured")
+          : t("format.mapStatus", {
+            key: map.keyConfigured ? t("common.configured") : t("common.notConfigured"),
+            security: map.securityConfigured ? t("common.configured") : t("common.notConfigured"),
+          });
       }
       if (dot) {
         dot.textContent = "●";
@@ -1389,18 +1407,18 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     }
     const provider = voice?.voiceProvider || "aliyun";
     const definitions = {
-      local: { label: "本机识别（macOS）", keys: [] },
-      aliyun: { label: "阿里云百炼 ASR", keys: ["aliyunApiKey"] },
-      volcengine: { label: "火山豆包 ASR", keys: ["volcAsrApiKey"] },
-      tencent: { label: "腾讯云 ASR", keys: ["tencentSecretId", "tencentSecretKey", "tencentAppId"] },
-      xunfei: { label: "科大讯飞 RTASR", keys: ["xunfeiAppId", "xunfeiApiKey", "xunfeiApiSecret"] },
+      local: { label: t("voice.localMac"), keys: [] },
+      aliyun: { label: t("voice.aliyunAsr"), keys: ["aliyunApiKey"] },
+      volcengine: { label: t("voice.volcAsr"), keys: ["volcAsrApiKey"] },
+      tencent: { label: t("voice.tencentAsr"), keys: ["tencentSecretId", "tencentSecretKey", "tencentAppId"] },
+      xunfei: { label: t("voice.xunfeiAsr"), keys: ["xunfeiAppId", "xunfeiApiKey", "xunfeiApiSecret"] },
     };
     const definition = definitions[provider] || definitions.aliyun;
     const configured = definition.keys.length === 0
       || definition.keys.every(key => voice?.[key]?.configured === true);
     el.textContent = configured
-      ? `已读取主机配置：${definition.label}（已配置）`
-      : `已读取主机配置：${definition.label}（配置尚未完整）`;
+      ? t("format.hostVoiceConfigured", { provider: definition.label })
+      : t("format.hostVoiceIncomplete", { provider: definition.label });
     el.style.color = configured ? "var(--ok, #4caf50)" : "var(--dim)";
   }
 
@@ -1581,8 +1599,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
     window.dispatchEvent(new CustomEvent("bailongma:voice-threshold", { detail: { threshold } }));
     window.dispatchEvent(new CustomEvent("bailongma:space-ptt-change", { detail: { enabled: spacePtt } }));
-    const micLabel = voiceMicSelect?.selectedOptions?.[0]?.textContent || "系统默认麦克风";
-    setVoiceMicStatus(`当前麦克风：${micLabel}。重新开启语音对话生效。`);
+    const micLabel = voiceMicSelect?.selectedOptions?.[0]?.textContent || t("voice.defaultMic");
+    setVoiceMicStatus(t("format.currentMic", { microphone: micLabel }));
 
     const body = { voiceProvider: provider };
     const credentialFields = [
@@ -1939,7 +1957,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     settingsUpdateFeedback.className = isError ? "settings-feedback error" : "settings-feedback";
   }
 
-  function showUpdateButtons({ check = true, checkDisabled = false, checkLabel = "检查更新", download = false, install = false, ignore = false } = {}) {
+  function showUpdateButtons({ check = true, checkDisabled = false, checkLabel = t("update.check"), download = false, install = false, ignore = false } = {}) {
     if (settingsCheckUpdateBtn) {
       settingsCheckUpdateBtn.classList.toggle("hidden", !check);
       settingsCheckUpdateBtn.disabled = checkDisabled;
@@ -1984,23 +2002,25 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
           break;
         case "available":
           pendingUpdateVersion = ver;
-          setUpdateStatusText(`发现新版本 ${ver}`, "available");
+          setUpdateStatusText(t("format.updateAvailable", { version: ver }), "available");
           showUpdateButtons({ check: false, download: true, ignore: true });
           break;
         case "downloading":
-          setUpdateStatusText(`下载中${percent !== null ? ` ${percent}%` : "…"}`, "downloading");
+          setUpdateStatusText(percent !== null
+            ? t("format.updateDownloading", { percent })
+            : t("format.updateDownloadingUnknown"), "downloading");
           showUpdateButtons({ check: false });
           break;
         case "downloaded":
-          setUpdateStatusText(`版本 ${ver} 已就绪 — 重启后安装`, "ready");
+          setUpdateStatusText(t("format.updateReady", { version: ver }), "ready");
           showUpdateButtons({ check: false, install: true });
           break;
         case "up-to-date":
-          setUpdateStatusText(`已是最新版本 ${ver}`, "idle");
+          setUpdateStatusText(t("format.updateCurrent", { version: ver }), "idle");
           showUpdateButtons({ checkLabel: "检查更新" });
           break;
         case "error":
-          setUpdateStatusText(`更新失败：${payload.message || "请稍后再试"}`, "error");
+          setUpdateStatusText(t("format.updateFailed", { error: payload.message || t("dynamic.tryLater") }), "error");
           showUpdateButtons({ checkLabel: "重试" });
           break;
         case "dev":
@@ -2041,11 +2061,11 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     try {
       const result = await bridge.checkForUpdates?.();
       if (result?.ok === false && result?.message) {
-        setUpdateStatusText(`更新失败：${result.message}`, "error");
+        setUpdateStatusText(t("format.updateFailed", { error: result.message }), "error");
         showUpdateButtons({ checkLabel: "重试" });
       }
     } catch (err) {
-      setUpdateStatusText(`更新失败：${err?.message || "请稍后再试"}`, "error");
+      setUpdateStatusText(t("format.updateFailed", { error: err?.message || t("dynamic.tryLater") }), "error");
       showUpdateButtons({ checkLabel: "重试" });
     }
   });
@@ -2058,7 +2078,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     try {
       await bridge.startDownload?.();
     } catch (err) {
-      setUpdateStatusText(`下载失败：${err?.message || "请稍后再试"}`, "error");
+      setUpdateStatusText(t("format.downloadFailed", { error: err?.message || t("dynamic.tryLater") }), "error");
       showUpdateButtons({ checkLabel: "重试" });
     }
   });

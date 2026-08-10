@@ -88,6 +88,31 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/activation' || url.pathname === '/activation.html') {
+      sendFile(res, path.join(root, 'activation.html'))
+      return
+    }
+
+    if (url.pathname === '/electron/startup.html') {
+      sendFile(res, path.join(root, 'electron', 'startup.html'))
+      return
+    }
+
+    if (url.pathname === '/focus-banner' || url.pathname === '/focus-banner.html') {
+      sendFile(res, path.join(root, 'focus-banner.html'))
+      return
+    }
+
+    if (url.pathname === '/turn-trace' || url.pathname === '/turn-trace.html') {
+      sendFile(res, path.join(root, 'turn-trace.html'))
+      return
+    }
+
+    if (url.pathname === '/activation-status') {
+      sendJson(res, { activated: false })
+      return
+    }
+
     if (url.pathname === '/vendor/d3/d3.min.js') {
       sendFile(res, path.join(root, 'node_modules', 'd3', 'dist', 'd3.min.js'))
       return
@@ -134,6 +159,11 @@ function createServer() {
 
     if (url.pathname === '/agent-profile') {
       sendJson(res, { name: 'SmokeLongma' })
+      return
+    }
+
+    if (url.pathname === '/admin/traces') {
+      sendJson(res, { ok: true, traces: [] })
       return
     }
 
@@ -452,6 +482,7 @@ const browser = await chromium.launch(executablePath ? { executablePath } : {})
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } })
 await page.addInitScript(() => {
   localStorage.setItem('bailongma-memory-graph-enabled', 'true')
+  localStorage.setItem('bailongma-ui-language', 'zh-CN')
 })
 const errors = []
 page.on('pageerror', err => errors.push(err.message))
@@ -474,6 +505,34 @@ try {
   await page.waitForFunction(() => window.d3 && document.querySelector('#agent-brand-name')?.textContent.includes('SmokeLongma'))
   await page.waitForSelector('#heartbeat-state[data-state="alive"]')
   await page.waitForFunction(() => document.querySelector('#heartbeat-state-label')?.textContent === '20 分钟')
+  await page.evaluate(() => document.fonts.ready)
+
+  const closedPhysicsLayout = await page.evaluate(() => ({
+    controlHeight: document.querySelector('#physics-control')?.offsetHeight,
+    actionsHeight: document.querySelector('.panel-actions')?.offsetHeight,
+  }))
+  await page.click('#physics-toggle')
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#physics-panel')).opacity === '1')
+  const openPhysicsLayout = await page.evaluate(() => {
+    const toggle = document.querySelector('#physics-toggle')?.getBoundingClientRect()
+    const panel = document.querySelector('#physics-panel')?.getBoundingClientRect()
+    const panelStyle = getComputedStyle(document.querySelector('#physics-panel'))
+    return {
+      controlHeight: document.querySelector('#physics-control')?.offsetHeight,
+      actionsHeight: document.querySelector('.panel-actions')?.offsetHeight,
+      opensUpward: panel?.bottom <= toggle?.top && panel?.top < toggle?.top,
+      floating: panelStyle.position === 'absolute',
+      interactive: panelStyle.pointerEvents === 'auto',
+    }
+  })
+  if (Math.abs(openPhysicsLayout.controlHeight - closedPhysicsLayout.controlHeight) > 0.5
+    || Math.abs(openPhysicsLayout.actionsHeight - closedPhysicsLayout.actionsHeight) > 0.5
+    || !openPhysicsLayout.opensUpward
+    || !openPhysicsLayout.floating
+    || !openPhysicsLayout.interactive) {
+    throw new Error(`graph controls must float upward without changing layout: ${JSON.stringify({ closedPhysicsLayout, openPhysicsLayout })}`)
+  }
+  await page.click('#physics-toggle')
 
   await page.click('#settings-btn')
   await page.waitForSelector('#settings-overlay:not([hidden])')
@@ -880,6 +939,7 @@ try {
     }
   })
   await nativePage.addInitScript(() => {
+    localStorage.setItem('bailongma-ui-language', 'zh-CN')
     const calls = []
     window.__browserEmbedCalls = calls
     window.bailongma = {
@@ -2008,6 +2068,215 @@ try {
   if (compactLayout.inputWidth < 70 || compactLayout.transcriptWidth < 80) {
     throw new Error(`compact composer or transcript is too narrow: ${JSON.stringify(compactLayout)}`)
   }
+
+  const englishPage = await browser.newPage({ viewport: { width: 1280, height: 840 } })
+  englishPage.on('pageerror', err => errors.push(`English page: ${err.message}`))
+  await englishPage.addInitScript(() => {
+    localStorage.setItem('bailongma-ui-language', 'en-US')
+    localStorage.setItem('bailongma-memory-graph-enabled', 'false')
+  })
+  await englishPage.goto(`${baseUrl}/brain-ui`, { waitUntil: 'domcontentloaded' })
+  await englishPage.waitForSelector('#settings-btn[title="Settings"]')
+  await englishPage.click('#settings-btn')
+  await englishPage.waitForSelector('#settings-overlay:not([hidden])')
+  const englishUi = await englishPage.evaluate(() => ({
+    lang: document.documentElement.lang,
+    settingsTitle: document.querySelector('.settings-title')?.textContent?.trim(),
+    appearanceTab: document.querySelector('.settings-nav-item[data-tab="appearance"]')?.textContent?.trim(),
+    languageValue: document.querySelector('#settings-ui-language')?.value,
+    messagePlaceholder: document.querySelector('#msg-input')?.placeholder,
+    sendLabel: document.querySelector('#send-btn')?.textContent?.trim(),
+    connection: document.querySelector('#conn-state')?.textContent?.trim(),
+    heartbeatInterval: document.querySelector('#heartbeat-state-label')?.textContent?.trim(),
+  }))
+  if (englishUi.lang !== 'en-US'
+      || englishUi.settingsTitle !== 'Settings'
+      || englishUi.appearanceTab !== 'Appearance'
+      || englishUi.languageValue !== 'en-US'
+      || englishUi.messagePlaceholder !== 'Hold Space to speak'
+      || englishUi.sendLabel !== 'Send'
+      || englishUi.connection !== 'Connected'
+      || englishUi.heartbeatInterval !== '20 min') {
+    throw new Error(`English UI localization failed: ${JSON.stringify(englishUi)}`)
+  }
+  await englishPage.click('#settings-close')
+
+  const englishCognitionLayout = await englishPage.evaluate(() => {
+    const l3State = document.querySelector('#l3-state')
+    const cognitionState = document.querySelector('#cognition-state')
+    if (l3State) l3State.textContent = 'L3 Thinking by scheduler'
+    if (cognitionState) cognitionState.textContent = 'Previous round did not finish'
+
+    const title = document.querySelector('.cognition-head > :first-child')?.getBoundingClientRect()
+    const stateGroup = document.querySelector('.cognition-state-group')?.getBoundingClientRect()
+    const surface = document.querySelector('#cognition-surface')?.getBoundingClientRect()
+    const badges = [...document.querySelectorAll('.cognition-state-group > *')]
+      .map(element => element.getBoundingClientRect().toJSON())
+    const intersects = Boolean(title && stateGroup
+      && title.left < stateGroup.right
+      && title.right > stateGroup.left
+      && title.top < stateGroup.bottom
+      && title.bottom > stateGroup.top)
+
+    return {
+      intersects,
+      title: title?.toJSON(),
+      stateGroup: stateGroup?.toJSON(),
+      surface: surface?.toJSON(),
+      badges,
+    }
+  })
+  if (englishCognitionLayout.intersects
+      || englishCognitionLayout.badges.some(badge => (
+        badge.left < englishCognitionLayout.surface.left
+        || badge.right > englishCognitionLayout.surface.right
+      ))) {
+    throw new Error(`English cognition header overlaps or overflows: ${JSON.stringify(englishCognitionLayout)}`)
+  }
+  if (process.env.BRAIN_UI_COGNITION_SCREENSHOT) {
+    const screenshotPath = path.resolve(process.env.BRAIN_UI_COGNITION_SCREENSHOT)
+    fs.mkdirSync(path.dirname(screenshotPath), { recursive: true })
+    await englishPage.screenshot({ path: screenshotPath, fullPage: true })
+  }
+
+  server.emitTransientSse({ type: 'message_received', data: { input: 'English tool localization smoke' }, ts: new Date().toISOString() })
+  server.emitTransientSse({ type: 'tool_call', data: { name: 'read_file', args: { path: '/smoke.txt' }, result: 'smoke file content', ok: true }, ts: new Date().toISOString() })
+  await englishPage.waitForFunction(() => document.querySelector('#ai-activity-label')?.textContent === 'Currently scanning files')
+  await englishPage.waitForFunction(() => {
+    const stream = document.querySelector('#si-l1')?.textContent || ''
+    return stream.includes('Read file') && stream.includes('Success') && stream.includes('Content preview: smoke file content')
+  })
+
+  const englishHotspot = await englishPage.evaluate(() => ({
+    title: document.querySelector('#hotspot-panel .hs-title-zh')?.textContent?.trim(),
+    alertLabel: document.querySelector('#hotspot-panel .hs-stat--warn .hs-stat-label')?.textContent?.trim(),
+    heatmap: document.querySelector('#hotspot-panel .hs-earth-label')?.textContent?.trim(),
+    emptySource: document.querySelector('#hs-douyin-list .hs-item-text')?.textContent?.trim(),
+    cacheLabel: document.querySelector('#hs-stat-data-delta')?.textContent?.trim(),
+  }))
+  if (englishHotspot.title !== 'Global Hotspot Event Tracking System'
+      || englishHotspot.alertLabel !== 'Global alerts'
+      || englishHotspot.heatmap !== 'Global heatmap'
+      || englishHotspot.emptySource !== 'Real-time source is unavailable or not configured'
+      || englishHotspot.cacheLabel !== 'Four trending lists / 30-minute cache') {
+    throw new Error(`English hotspot localization failed: ${JSON.stringify(englishHotspot)}`)
+  }
+
+  server.emitTransientSse({
+    type: 'person_card_mode',
+    data: { action: 'show', active: true, card: { name: 'Ada Lovelace', title: '', summary: '', knownFor: [], tags: [], source: 'smoke' } },
+    ts: new Date().toISOString(),
+  })
+  await englishPage.waitForFunction(() => document.querySelector('#pc-name')?.textContent === 'Ada Lovelace')
+  const englishPerson = await englishPage.evaluate(() => ({
+    kicker: document.querySelector('#person-card-panel .pc-kicker')?.textContent?.trim(),
+    title: document.querySelector('#pc-title')?.textContent?.trim(),
+    summary: document.querySelector('#pc-summary')?.textContent?.trim(),
+    knownFor: document.querySelector('#pc-known-list')?.textContent?.trim(),
+    closeTitle: document.querySelector('#pc-exit-btn')?.title,
+  }))
+  if (englishPerson.kicker !== 'PERSON PROFILE'
+      || englishPerson.title !== 'Person Card'
+      || englishPerson.summary !== 'No summary available.'
+      || englishPerson.knownFor !== 'No notable works or identifying details yet'
+      || englishPerson.closeTitle !== 'Close person card') {
+    throw new Error(`English person card localization failed: ${JSON.stringify(englishPerson)}`)
+  }
+  await englishPage.click('#pc-exit-btn')
+  await englishPage.waitForFunction(() => !document.querySelector('#person-card-panel'))
+
+  server.emitTransientSse({
+    type: 'knowledge_cortex_mode',
+    data: { action: 'show', active: true, region_id: 'smoke-docs', query: 'release', document_id: '1' },
+    ts: new Date().toISOString(),
+  })
+  await englishPage.waitForFunction(() => (
+    document.body.classList.contains('knowledge-cortex-mode')
+    && document.querySelector('#kc-status')?.textContent?.includes('Found 1 citable evidence items')
+    && document.querySelector('#kc-detail')?.textContent?.includes('file:///smoke/release.md')
+  ))
+  const englishKnowledge = await englishPage.evaluate(() => ({
+    heading: document.querySelector('#knowledge-cortex-panel h1')?.textContent?.trim(),
+    searchPlaceholder: document.querySelector('#kc-search-input')?.placeholder,
+    resultsHeading: document.querySelector('.kc-results-pane .kc-pane-title')?.textContent?.replace(/\s+/g, ' ').trim(),
+    detailLabels: [...document.querySelectorAll('#kc-detail dt')].map(el => el.textContent.trim()),
+  }))
+  if (englishKnowledge.heading !== 'Knowledge Base'
+      || englishKnowledge.searchPlaceholder !== 'Search documents and evidence in the current region'
+      || !englishKnowledge.resultsHeading?.includes('Search results')
+      || englishKnowledge.detailLabels.join('|') !== 'Knowledge region|Version|Format|Source') {
+    throw new Error(`English knowledge localization failed: ${JSON.stringify(englishKnowledge)}`)
+  }
+  await englishPage.click('#kc-close')
+  await englishPage.waitForFunction(() => !document.body.classList.contains('knowledge-cortex-mode'))
+
+  await englishPage.goto(`${baseUrl}/activation`, { waitUntil: 'domcontentloaded' })
+  await englishPage.waitForFunction(() => document.documentElement.lang === 'en-US')
+  const englishActivation = await englishPage.evaluate(() => ({
+    title: document.title,
+    heading: document.querySelector('main h1')?.textContent?.trim(),
+    submit: document.querySelector('#activate')?.textContent?.trim(),
+    customToggle: document.querySelector('#settings-toggle')?.textContent?.trim(),
+  }))
+  if (englishActivation.title !== 'Activate Bailongma'
+      || englishActivation.heading !== 'Activate Bailongma'
+      || englishActivation.submit !== 'Activate and continue'
+      || englishActivation.customToggle !== 'Or use a custom endpoint (local model)') {
+    throw new Error(`English activation localization failed: ${JSON.stringify(englishActivation)}`)
+  }
+
+
+  await englishPage.goto(`${baseUrl}/electron/startup.html?lang=en-US`, { waitUntil: 'domcontentloaded' })
+  await englishPage.waitForFunction(() => document.documentElement.lang === 'en-US')
+  const englishStartup = await englishPage.evaluate(() => ({
+    title: document.title,
+    message: document.querySelector('#message')?.textContent?.trim(),
+    stepsTitle: document.querySelector('.steps-title')?.textContent?.trim(),
+    firstStep: document.querySelector('#steps .label')?.textContent?.trim(),
+    firstState: document.querySelector('#steps .state')?.textContent?.trim(),
+  }))
+  if (englishStartup.title !== 'Bailongma is starting'
+      || englishStartup.message !== 'Preparing the startup environment'
+      || englishStartup.stepsTitle !== 'Steps in progress'
+      || englishStartup.firstStep !== 'Prepare local port'
+      || englishStartup.firstState !== 'Waiting') {
+    throw new Error(`English startup localization failed: ${JSON.stringify(englishStartup)}`)
+  }
+
+  await englishPage.goto(`${baseUrl}/focus-banner.html?lang=en-US`, { waitUntil: 'domcontentloaded' })
+  await englishPage.waitForFunction(() => document.documentElement.lang === 'en-US')
+  const englishFocus = await englishPage.evaluate(() => ({
+    label: document.querySelector('.focus-label')?.textContent?.trim(),
+    task: document.querySelector('#taskText')?.textContent?.trim(),
+    send: document.querySelector('#voiceHint')?.textContent?.trim(),
+    placeholder: document.querySelector('#voiceTranscript')?.dataset?.placeholder,
+  }))
+  if (englishFocus.label !== 'Focus'
+      || englishFocus.task !== 'Focused'
+      || englishFocus.send !== '↑ Send'
+      || englishFocus.placeholder !== 'Click the microphone to speak…') {
+    throw new Error(`English focus banner localization failed: ${JSON.stringify(englishFocus)}`)
+  }
+
+  await englishPage.goto(`${baseUrl}/turn-trace.html?lang=en-US`, { waitUntil: 'domcontentloaded' })
+  await englishPage.waitForFunction(() => document.documentElement.lang === 'en-US')
+  await englishPage.waitForFunction(() => document.querySelector('#list')?.textContent?.includes('No records yet'))
+  const englishTrace = await englishPage.evaluate(() => ({
+    title: document.title,
+    heading: document.querySelector('header h1')?.textContent?.trim(),
+    refresh: document.querySelector('#refresh')?.textContent?.trim(),
+    clear: document.querySelector('#clear')?.textContent?.trim(),
+    empty: document.querySelector('#list')?.textContent?.trim(),
+  }))
+  if (englishTrace.title !== 'Turn Context Forensics · Turn Trace'
+      || englishTrace.heading !== 'Turn Context Forensics'
+      || englishTrace.refresh !== 'Refresh'
+      || englishTrace.clear !== 'Clear records'
+      || englishTrace.empty !== 'No records yet (they appear after a conversation with the Agent)') {
+    throw new Error(`English turn trace localization failed: ${JSON.stringify(englishTrace)}`)
+  }
+  await englishPage.close()
+
   if (errors.length) throw new Error(`browser errors:\n${errors.join('\n')}`)
 
   console.log('[PASS] brain-ui smoke')

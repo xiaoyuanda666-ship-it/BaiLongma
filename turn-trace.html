@@ -144,7 +144,10 @@
   <div id="detail"><div class="empty">从左侧选择一个回合查看上下文与思考过程</div></div>
 </main>
 
-<script>
+<script type="module">
+import { formatDateTime, localizeDom, t as tFn } from './src/ui/brain-ui/i18n/index.js'
+localizeDom(document)
+
 const $ = sel => document.querySelector(sel)
 const listEl = $('#list')
 const detailEl = $('#detail')
@@ -172,7 +175,7 @@ function highlight(text, role) {
 function fmtTime(iso) {
   if (!iso) return ''
   const d = new Date(iso)
-  return d.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return formatDateTime(d, { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function roleRibbonHtml(ribbon) {
@@ -187,25 +190,25 @@ async function loadList() {
     summaries = data.traces || []
     renderList()
   } catch (e) {
-    listEl.innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`
+    listEl.innerHTML = `<div class="empty">${tFn('trace.loadFailed', { error: esc(e.message) })}</div>`
   }
 }
 
 function renderList() {
-  if (!summaries.length) { listEl.innerHTML = '<div class="empty">暂无记录（与 agent 对话后会出现）</div>'; return }
+  if (!summaries.length) { listEl.innerHTML = `<div class="empty">${tFn('trace.empty')}</div>`; return }
   listEl.innerHTML = summaries.map(t => {
     const tags = []
     if (t.silentSignal || t.meta?.silentSignal) tags.push('<span class="tag silent">silent</span>')
     if (t.meta?.localReply) tags.push('<span class="tag">local</span>')
-    if (!t.delivered && !t.meta?.silentSignal) tags.push('<span class="tag nodeliver">未投递</span>')
-    if (t.aborted) tags.push('<span class="tag abort">中断</span>')
+    if (!t.delivered && !t.meta?.silentSignal) tags.push(`<span class="tag nodeliver">${tFn('trace.notDelivered')}</span>`)
+    if (t.aborted) tags.push(`<span class="tag abort">${tFn('trace.aborted')}</span>`)
     return `<div class="turn ${t.id === activeId ? 'active' : ''}" data-id="${t.id}">
       <div class="row1">
         <span class="chan">${esc(t.meta?.channel || t.meta?.label || 'turn')}</span>
         <span class="time">${fmtTime(t.startedAt)}</span>
       </div>
-      <div class="preview">${esc(t.preview || t.meta?.userMessage || '(无预览)')}</div>
-      <div class="ribbon">${roleRibbonHtml(t.roleRibbon)} <span style="color:var(--faint)">· ${t.roundCount}轮 ${t.messageCount}条</span></div>
+      <div class="preview">${esc(t.preview || t.meta?.userMessage || tFn('trace.noPreview'))}</div>
+      <div class="ribbon">${roleRibbonHtml(t.roleRibbon)} <span style="color:var(--faint)">${tFn('trace.counts', { rounds: t.roundCount, messages: t.messageCount })}</span></div>
       <div class="tags">${tags.join('')}</div>
     </div>`
   }).join('')
@@ -217,14 +220,14 @@ function renderList() {
 async function loadDetail(id) {
   activeId = id
   renderList()
-  detailEl.innerHTML = '<div class="empty">加载中…</div>'
+  detailEl.innerHTML = `<div class="empty">${tFn('trace.loading')}</div>`
   try {
     const r = await fetch('/admin/traces/' + encodeURIComponent(id))
     const data = await r.json()
     if (!data.ok) throw new Error(data.error || 'not found')
     renderDetail(data.trace)
   } catch (e) {
-    detailEl.innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`
+    detailEl.innerHTML = `<div class="empty">${tFn('trace.loadFailed', { error: esc(e.message) })}</div>`
   }
 }
 
@@ -241,11 +244,11 @@ function msgHtml(m, idx) {
     ).join('\n')
   }
   if (m.reasoning_content) body += `\n<span style="color:var(--faint)">[reasoning] </span>` + highlight(m.reasoning_content, role)
-  if (!body) body = '<span style="color:var(--faint)">(空)</span>'
-  const trunc = m.truncated ? `<div class="trunc">… 已截断 ${m.truncated} 字</div>` : ''
+  if (!body) body = `<span style="color:var(--faint)">${tFn('trace.emptyMessage')}</span>`
+  const trunc = m.truncated ? `<div class="trunc">${tFn('trace.truncated', { count: m.truncated })}</div>` : ''
   // user / tool 消息里出现 agent 名字 = 角色归属混乱的重点嫌疑
   const showHint = (role === 'user' || role === 'tool') && agentName && m.content && m.content.includes(agentName)
-  const hint = showHint ? `<div class="hint">⚠ 此 ${role} 消息里出现了 agent 自己的名字「${esc(agentName)}」——可能是把"自己说的话"错当成了对方说的</div>` : ''
+  const hint = showHint ? `<div class="hint">${tFn('trace.roleWarning', { role: esc(role), name: esc(agentName) })}</div>` : ''
   return `<div class="msg role-${role}">
     <div class="msg-head">
       <span class="role">${esc(role)}</span>
@@ -260,17 +263,17 @@ function renderDetail(t) {
   const m = t.meta || {}
   const finalMsgs = t.messages || []
   let html = `<div class="meta-bar">
-    <div class="line"><span class="k">turn </span><span class="v">${esc(t.id)}</span> <span class="k">· ${fmtTime(t.startedAt)} → ${fmtTime(t.finishedAt) || '进行中'}</span></div>
+    <div class="line"><span class="k">turn </span><span class="v">${esc(t.id)}</span> <span class="k">· ${fmtTime(t.startedAt)} → ${fmtTime(t.finishedAt) || tFn('trace.inProgress')}</span></div>
     <div class="line"><span class="k">channel </span><span class="v">${esc(m.channel || m.label || '-')}</span>
       <span class="k"> · from </span><span class="v">${esc(m.fromId || '-')}</span>
       <span class="k"> · delivered </span><span class="v" style="color:${t.delivered ? 'var(--good)' : 'var(--accent)'}">${t.delivered}</span>
-      ${t.aborted ? '<span class="k"> · </span><span class="tag abort">中断</span>' : ''}
+      ${t.aborted ? `<span class="k"> · </span><span class="tag abort">${tFn('trace.aborted')}</span>` : ''}
       ${m.silentSignal ? '<span class="k"> · </span><span class="tag silent">silent</span>' : ''}</div>
-    ${m.userMessage ? `<div class="line"><span class="k">用户消息：</span><span class="um">${esc(m.userMessage)}</span></div>` : ''}
+    ${m.userMessage ? `<div class="line"><span class="k">${tFn('trace.userMessage')}</span><span class="um">${esc(m.userMessage)}</span></div>` : ''}
   </div>`
 
   if (!t.rounds || !t.rounds.length) {
-    html += '<div class="empty">该回合没有记录到模型调用</div>'
+    html += `<div class="empty">${tFn('trace.noModelCalls')}</div>`
     detailEl.innerHTML = html
     return
   }
@@ -280,12 +283,12 @@ function renderDetail(t) {
     const open = ri === 0  // 默认展开第 0 轮（初始上下文，角色混淆最常现形的地方）
     const callsLabel = rd.toolCalls && rd.toolCalls.length
       ? '⚙ ' + rd.toolCalls.map(c => c.name).join(', ')
-      : '<span style="color:var(--faint)">无工具调用</span>'
+      : `<span style="color:var(--faint)">${tFn('trace.noToolCalls')}</span>`
 
-    let inner = `<div class="section-title">本轮模型看到的上下文 · ${ctx.length} 条消息</div>`
+    let inner = `<div class="section-title">${tFn('trace.contextCount', { count: ctx.length })}</div>`
     inner += ctx.map((mm, i) => msgHtml(mm, i)).join('')
 
-    inner += `<div class="section-title">本轮模型输出</div>`
+    inner += `<div class="section-title">${tFn('trace.modelOutput')}</div>`
     if (rd.reasoningContent) inner += `<div class="think">🧠 ${highlight(rd.reasoningContent)}</div>`
     if (rd.content) {
       // content 里可能内嵌 <think>...</think>，单独提取展示
@@ -304,14 +307,14 @@ function renderDetail(t) {
       ).join('')
     }
     if (!rd.content && !rd.reasoningContent && (!rd.toolCalls || !rd.toolCalls.length)) {
-      inner += '<div class="empty">（本轮无输出）</div>'
+      inner += `<div class="empty">${tFn('trace.noOutput')}</div>`
     }
 
     html += `<div class="round" data-ri="${ri}">
       <div class="round-head">
-        <span class="rn">第 ${rd.round} 轮</span>
+        <span class="rn">${tFn('trace.round', { round: rd.round })}</span>
         <span class="calls">${callsLabel}</span>
-        ${rd.aborted ? '<span class="tag abort">中断</span>' : ''}
+        ${rd.aborted ? `<span class="tag abort">${tFn('trace.aborted')}</span>` : ''}
         <span class="chev">${open ? '▼' : '▶'}</span>
       </div>
       <div class="round-body" style="${open ? '' : 'display:none'}">${inner}</div>
@@ -332,10 +335,10 @@ function renderDetail(t) {
 
 $('#refresh').addEventListener('click', loadList)
 $('#clear').addEventListener('click', async () => {
-  if (!confirm('清空所有回合追踪记录（含落盘文件）？')) return
+  if (!confirm(tFn('trace.clearConfirm'))) return
   await fetch('/admin/traces-clear', { method: 'POST' })
   activeId = null
-  detailEl.innerHTML = '<div class="empty">已清空</div>'
+  detailEl.innerHTML = `<div class="empty">${tFn('trace.cleared')}</div>`
   loadList()
 })
 

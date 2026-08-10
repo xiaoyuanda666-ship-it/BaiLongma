@@ -1,5 +1,6 @@
 import { createMarkdownBody } from "./markdown.js";
 import { getUiClientId } from "./api-client.js";
+import { formatDateTime, t } from "./i18n/index.js";
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -69,7 +70,7 @@ export function initChat({
   const RENDER_DEDUPE_TTL_MS = 2 * 60 * 1000;
   const CHAT_BOTTOM_THRESHOLD_PX = 32;
 
-  const PUSH_TO_TALK_PLACEHOLDER = "按住空格键开始说话";
+  const PUSH_TO_TALK_PLACEHOLDER = t("shell.holdSpace");
   const MAX_PASTED_IMAGES = 8;
   const MAX_PASTED_IMAGE_BYTES = 12 * 1024 * 1024;
 
@@ -131,14 +132,14 @@ export function initChat({
   function formatMessageTime(timestamp) {
     const date = timestamp ? new Date(timestamp) : new Date();
     if (!Number.isFinite(date.getTime())) return "";
-    return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+    return formatDateTime(date, { hour: "2-digit", minute: "2-digit", hour12: false });
   }
 
   function setComposerLocked(locked, reason = "") {
     inputLocked = locked;
     msgInput.disabled = locked;
     sendBtn.disabled = locked;
-    msgInput.placeholder = locked ? (reason || "系统准备中…") : idlePlaceholder();
+    msgInput.placeholder = locked ? (reason || t("shell.systemPreparing")) : idlePlaceholder();
   }
 
   function releaseWarmupLock() {
@@ -163,7 +164,7 @@ export function initChat({
     }
 
     const seconds = Math.max(1, Math.ceil(remaining / 1000));
-    setComposerLocked(true, `刚激活 — 模型预热中… ~${seconds}s`);
+    setComposerLocked(true, t("format.warmup", { seconds }));
     if (warmupTimer) clearTimeout(warmupTimer);
     warmupTimer = setTimeout(releaseWarmupLock, remaining);
   }
@@ -180,8 +181,8 @@ export function initChat({
     chatPinned = Boolean(pinned);
     chatArea.classList.toggle("chat-pinned", chatPinned);
     chatPinButton?.setAttribute("aria-pressed", String(chatPinned));
-    chatPinButton?.setAttribute("aria-label", chatPinned ? "取消钉住聊天窗口" : "钉住聊天窗口");
-    if (chatPinButton) chatPinButton.title = chatPinned ? "取消钉住" : "钉住聊天窗口";
+    chatPinButton?.setAttribute("aria-label", chatPinned ? t("shell.unpinChat") : t("shell.pinChat"));
+    if (chatPinButton) chatPinButton.title = chatPinned ? t("shell.unpin") : t("shell.pinChat");
     if (persist) {
       try { localStorage.setItem(CHAT_PIN_STORAGE_KEY, chatPinned ? "1" : "0"); } catch {}
     }
@@ -345,7 +346,10 @@ export function initChat({
     timeSpan.className = "msg-time";
     timeSpan.dateTime = timestamp || new Date().toISOString();
     timeSpan.textContent = formatMessageTime(timestamp);
-    if (timestamp) timeSpan.title = new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
+    if (timestamp) timeSpan.title = formatDateTime(timestamp, {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
     meta.appendChild(timeSpan);
     div.appendChild(meta);
     div.appendChild(createMarkdownBody(text));
@@ -703,7 +707,7 @@ export function initChat({
       reconcileSentMessage(clientMessageId, responseBody.conversation_id || responseBody.conversationId);
     } catch (error) {
       console.warn("[send]", error.message);
-      addMsg("jarvis", "发送失败 — 请检查本地服务是否运行。");
+      addMsg("jarvis", t("shell.sendFailed"));
       openChat(true);
     } finally {
       pendingLocalSends.delete(pendingKey);
@@ -770,27 +774,27 @@ export function initChat({
   const SLASH_COMMANDS = [
     {
       cmd: "/llm", keys: ["llm", "模型", "model"],
-      label: "配置 LLM 模型", desc: "选择大模型服务商并填入 API Key",
+      label: t("slash.llmLabel"), desc: t("slash.llmDescription"),
       run: () => openSettings?.("llm"),
     },
     {
       cmd: "/voice", keys: ["voice", "asr", "语音对话", "语音识别", "shibie"],
-      label: "配置语音对话", desc: "麦克风转文字 + 回复转语音",
+      label: t("slash.voiceLabel"), desc: t("slash.voiceDescription"),
       run: () => openSettings?.("voice"),
     },
     {
       cmd: "/tts", keys: ["tts", "语音合成", "hecheng"],
-      label: "配置语音合成", desc: "Agent 回复转语音 · 豆包/MiniMax/OpenAI",
+      label: t("slash.ttsLabel"), desc: t("slash.ttsDescription"),
       run: openVoiceTTS,
     },
     {
       cmd: "/video", keys: ["video", "视频", "视频生成", "seedance", "huoshan"],
-      label: "配置视频生成", desc: "AI 视频生成 · 火山方舟 Seedance",
+      label: t("slash.videoLabel"), desc: t("slash.videoDescription"),
       run: prefillVideoConfig,
     },
     {
       cmd: "/help", keys: ["help", "帮助", "命令"],
-      label: "查看全部命令", desc: "列出所有可用斜杠命令",
+      label: t("slash.helpLabel"), desc: t("slash.helpDescription"),
       run: showSlashHelp,
     },
   ];
@@ -818,7 +822,7 @@ export function initChat({
     if (!slashItems.length) {
       const empty = document.createElement("div");
       empty.className = "slash-empty";
-      empty.textContent = "无匹配命令";
+      empty.textContent = t("shell.noMatchingCommand");
       slashMenu.appendChild(empty);
       return;
     }
@@ -904,7 +908,7 @@ export function initChat({
 
   function prefillVideoConfig() {
     // 视频生成（火山方舟 Seedance）没有独立设置面板，靠对话引导配置
-    msgInput.value = "我想配置视频生成（火山方舟 Seedance），请告诉我怎么申请 API Key 以及如何填入";
+    msgInput.value = t("slash.videoPrompt");
     openChat();
     autoGrowInput();
     try { msgInput.focus(); } catch {}
@@ -912,7 +916,7 @@ export function initChat({
 
   function showSlashHelp() {
     const lines = SLASH_COMMANDS.map(c => `· \`${c.cmd}\` — ${c.label}：${c.desc}`).join("\n");
-    addMsg("jarvis", `可用命令（在输入框输入 \`/\` 调出菜单）：\n\n${lines}`, { alert: false, pending: false });
+    addMsg("jarvis", `${t("slash.helpIntro")}\n\n${lines}`, { alert: false, pending: false });
     openChat();
   }
 

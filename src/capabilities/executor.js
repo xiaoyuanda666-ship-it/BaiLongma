@@ -6,6 +6,7 @@ import { upsertPrefetchTask, removePrefetchTask, listPrefetchTasks, setConfig as
 import { emitEvent, setStickyEvent } from '../events.js'
 import { getTerminalStreamSnapshot, recordTerminalStreamEvent } from '../terminal-stream.js'
 import { streamToolFileWriteExecutionPreview } from '../write-file-preview.js'
+import { stringifyJsonForTransport } from '../runtime/json-unicode.js'
 import { setCustomInterval as setTickerInterval, getStatus as getTickerStatus } from '../ticker.js'
 import { setHotspotPanelState, getHotspotPanelState } from '../hotspots.js'
 import { setWorldcupPanelState, getWorldcupPanelState } from '../worldcup.js'
@@ -1314,7 +1315,7 @@ async function execDelegateToAgent({ agent_id, prompt: agentPrompt, context: age
         const res = await fetch(`${base}${ep.path}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(ep.body),
+          body: stringifyJsonForTransport(ep.body),
           signal: AbortSignal.timeout(timeoutSec * 1000),
         })
         if (res.ok) {

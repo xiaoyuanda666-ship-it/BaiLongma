@@ -1,5 +1,6 @@
 ﻿import { apiUrl } from './api-client.js';
 import { createPersonCardPanel } from './person-card-panel.js';
+import { t, translateUiText } from './i18n/index.js';
 
 let personCardActive = false;
 let currentCard = null;
@@ -134,12 +135,12 @@ function formatUpdatedAt(value) {
 
 function avatarLabel(name = '') {
   const value = String(name || '').trim();
-  if (!value) return '人';
+  if (!value) return t('person.avatarFallback');
   const latinWords = value.split(/\s+/).filter(Boolean);
   if (latinWords.length > 1 && latinWords.every(word => /^[A-Za-z]/.test(word))) {
     return latinWords.slice(0, 2).map(word => word[0].toUpperCase()).join('');
   }
-  return [...value.replace(/\s+/g, '')][0] || '人';
+  return [...value.replace(/\s+/g, '')][0] || t('person.avatarFallback');
 }
 
 function setText(id, text) {
@@ -163,7 +164,7 @@ function setHeroImage(src = '', name = '') {
 
 async function findPersonImage(name = '') {
   const query = String(name || '').trim();
-  if (!query || query === '人物卡片' || query === '未知人物') return '';
+  if (!query || [t('person.card'), t('person.unknown'), '人物卡片', '未知人物'].includes(query)) return '';
   const summaryEndpoints = [
     `https://zh.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`,
     `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(query)}`,
@@ -216,11 +217,11 @@ function scheduleHeroImageLookup(card = {}) {
 function renderPersonCard(card = {}) {
   currentCard = card;
   if (!$('person-card-panel')) return;
-  const name = String(card.name || '未知人物').trim();
+  const name = String(card.name || t('person.unknown')).trim();
   setText('pc-name', name);
-  setText('pc-title', card.title || '人物卡片');
-  setText('pc-summary', card.summary || '暂无简介。');
-  setText('pc-source', `来源：${card.source || '人物卡片'}`);
+  setText('pc-title', translateUiText(card.title || t('person.card')));
+  setText('pc-summary', translateUiText(card.summary || t('person.noSummary')));
+  setText('pc-source', t('person.source', { source: translateUiText(card.source || t('person.card')) }));
   setText('pc-updated', formatUpdatedAt(card.updatedAt));
   scheduleHeroImageLookup(card);
 
@@ -230,7 +231,7 @@ function renderPersonCard(card = {}) {
     knownList.innerHTML = '';
     if (!knownFor.length) {
       const li = document.createElement('li');
-      li.textContent = '暂无代表作品或识别点';
+      li.textContent = t('person.noIdentifiers');
       knownList.appendChild(li);
     } else {
       for (const item of knownFor.slice(0, 6)) {
@@ -335,9 +336,9 @@ export function setPersonCardMode(visible, { source = 'brain-ui', card = null } 
   }
 
   const nextCard = card || currentCard || {
-    name: '人物卡片',
-    title: '待命',
-    summary: '当你不认识某位公众人物时，Longma 会在这里弹出一张简短人物卡片。',
+    name: t('person.card'),
+    title: t('person.standby'),
+    summary: t('person.intro'),
     knownFor: [],
     tags: ['standby'],
     source: 'standby',
@@ -413,10 +414,10 @@ export async function showPersonCardByName(name, { source = 'brain-ui' } = {}) {
       source,
       card: {
         name: query,
-        title: '人物卡片',
-        summary: '暂时没有资料。可以让 Longma 补充这个人的身份和代表作品。',
+        title: t('person.card'),
+        summary: t('person.noData'),
         knownFor: [],
-        tags: ['待补充'],
+        tags: [t('person.needsDetails')],
         source: 'fallback',
         updatedAt: new Date().toISOString(),
       },

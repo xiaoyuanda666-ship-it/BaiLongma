@@ -1,3 +1,5 @@
+import { t, translateUiText } from "./i18n/index.js";
+
 const TOOL_ZH = {
   send_message: "发送消息",
   express: "表达",
@@ -175,21 +177,21 @@ export function friendlyToolName(name, args = {}) {
   if (normalized === "browser_press_key") {
     const key = String(args?.key || "").toLowerCase();
     if (["end", "home", "pagedown", "pageup", "space", "arrowdown", "arrowup"].includes(key)) {
-      return "滚动页面";
+      return t("tool.scrollPage");
     }
   }
   if (normalized === "browser_tabs") {
-    if (args?.action === "new") return "打开新标签页";
-    if (args?.action === "select") return "切换标签页";
-    if (args?.action === "close") return "关闭标签页";
-    if (args?.action === "list") return "查看标签页";
+    if (args?.action === "new") return t("tool.openNewTab");
+    if (args?.action === "select") return t("tool.selectTab");
+    if (args?.action === "close") return t("tool.closeTab");
+    if (args?.action === "list") return t("tool.listTabs");
   }
   if (normalized === "browser_set_display_mode") {
-    if (args?.mode === "window") return "切换到大浏览器";
-    if (args?.mode === "card") return "切换到小浏览器";
-    return "切换浏览器显示";
+    if (args?.mode === "window") return t("tool.browserWindow");
+    if (args?.mode === "card") return t("tool.browserCard");
+    return t("tool.browserDisplay");
   }
-  return TOOL_ZH[normalized] || "处理事务";
+  return TOOL_ZH[normalized] ? translateUiText(TOOL_ZH[normalized]) : t("tool.generic");
 }
 
 export function friendlyToolIcon(name) {
@@ -213,7 +215,7 @@ export class ThoughtStream {
     this.scroller = this.el?.parentElement || null;
     this.color = color;
     this.readCSSVar = options.readCSSVar || (() => "");
-    this.thinkingLabel = options.thinkingLabel || "思考中";
+    this.thinkingLabel = options.thinkingLabel || t("thought.thinking");
     this.thinkingDoneLabel = options.thinkingDoneLabel || null;
     this.toolDetailLength = options.toolDetailLength || 160;
     this.startedAt = Date.now();
@@ -397,15 +399,21 @@ export class ThoughtStream {
   formatWebSearchDetail(payload) {
     const results = Array.isArray(payload.results) ? payload.results : [];
     if (payload.ok === false) {
-      return `搜索失败：${payload.error || "没有拿到结果"}。关键词：${payload.query || "未提供"}`;
+      return t("thought.webSearchFailed", {
+        error: payload.error || t("thought.noResult"),
+        query: payload.query || t("thought.notProvided"),
+      });
     }
 
-    const lines = [`关键词：${payload.query || "未提供"}；找到 ${results.length} 条结果。`];
+    const lines = [t("thought.webSearchResults", {
+      query: payload.query || t("thought.notProvided"),
+      count: results.length,
+    })];
     results.slice(0, 3).forEach((item, index) => {
       const host = this.hostFromUrl(item.url);
-      const title = this.compactText(item.title || item.url || "未命名结果", 70);
+      const title = this.compactText(item.title || item.url || t("thought.untitledResult"), 70);
       const snippet = this.compactText(item.snippet || "", 90);
-      lines.push(`${index + 1}. ${title}${host ? `（${host}）` : ""}${snippet ? `：${snippet}` : ""}`);
+      lines.push(`${index + 1}. ${title}${host ? t("thought.host", { host }) : ""}${snippet ? `: ${snippet}` : ""}`);
     });
     return lines.join(" ");
   }
@@ -413,30 +421,45 @@ export class ThoughtStream {
   formatFetchUrlDetail(payload) {
     const host = this.hostFromUrl(payload.url);
     if (payload.ok === false) {
-      const status = payload.status ? `HTTP ${payload.status}` : (payload.error || "请求失败");
+      const status = payload.status ? `HTTP ${payload.status}` : (payload.error || t("thought.requestFailed"));
       if (payload.error === "no readable content extracted") {
-        return `未读到正文：页面能打开${host ? `（${host}）` : ""}，但只拿到空白、等待页或反爬验证内容。建议换一个可直接访问的来源。`;
+        return t("thought.noReadableContent", { host: host ? t("thought.host", { host }) : "" });
       }
-      return `读取失败：${status}${host ? `；来源：${host}` : ""}。${payload.hint ? this.compactText(payload.hint, 90) : "可以换一个可访问来源。"}`;
+      return t("thought.readFailed", {
+        status,
+        host: host ? t("thought.sourceHost", { host }) : "",
+        hint: payload.hint ? this.compactText(payload.hint, 90) : t("thought.tryAnotherSource"),
+      });
     }
 
-    const title = this.compactText(payload.title || host || payload.url || "网页", 80);
+    const title = this.compactText(payload.title || host || payload.url || t("thought.webpage"), 80);
     const content = this.compactText(payload.content || "", 220);
-    return `已读取：${title}${host ? `（${host}）` : ""}。${content || "页面能打开，但没有提取到可用正文。"}`;
+    return t("thought.readSuccess", {
+      title,
+      host: host ? t("thought.host", { host }) : "",
+      content: content || t("thought.noExtractedContent"),
+    });
   }
 
   formatBrowserReadDetail(payload) {
     const host = this.hostFromUrl(payload.final_url || payload.url);
     if (payload.ok === false) {
       if (payload.error === "no readable content rendered") {
-        return `浏览器已打开页面${host ? `（${host}）` : ""}，但仍未读到正文；可能需要登录、验证码或阻止自动化访问。遇到验证时应保留页面并让用户亲自处理。`;
+        return t("thought.browserNoReadableContent", { host: host ? t("thought.host", { host }) : "" });
       }
-      return `浏览器读取失败${host ? `（${host}）` : ""}：${this.compactText(payload.error || "页面无法渲染", 120)}`;
+      return t("thought.browserReadFailed", {
+        host: host ? t("thought.host", { host }) : "",
+        error: this.compactText(payload.error || t("thought.pageRenderFailed"), 120),
+      });
     }
 
-    const title = this.compactText(payload.title || host || payload.final_url || payload.url || "网页", 80);
+    const title = this.compactText(payload.title || host || payload.final_url || payload.url || t("thought.webpage"), 80);
     const content = this.compactText(payload.content || "", 240);
-    return `浏览器已读取：${title}${host ? `（${host}）` : ""}。${content || "页面已渲染，但没有提取到可用正文。"}`;
+    return t("thought.browserReadSuccess", {
+      title,
+      host: host ? t("thought.host", { host }) : "",
+      content: content || t("thought.noRenderedContent"),
+    });
   }
 
   shortPath(p, max = 48) {
@@ -488,7 +511,7 @@ export class ThoughtStream {
       case "browser_hover":
         return this.compactText(a.element || a.name || "", 50);
       case "browser_fill_form":
-        return Array.isArray(a.fields) ? `${a.fields.length} 项` : "";
+        return Array.isArray(a.fields) ? t("thought.items", { count: a.fields.length }) : "";
       case "browser_select_option":
         return this.compactText(a.element || a.name || "", 50);
       case "browser_press_key":
@@ -499,20 +522,20 @@ export class ThoughtStream {
         return from && to ? `${from} → ${to}` : from || to;
       }
       case "browser_wait_for":
-        return a.time != null ? `${a.time} 秒` : this.compactText(a.text || a.textGone || "", 40);
+        return a.time != null ? t("thought.seconds", { count: a.time }) : this.compactText(a.text || a.textGone || "", 40);
       case "browser_handle_dialog":
-        return a.accept === false ? "取消" : "确认";
+        return a.accept === false ? t("thought.cancel") : t("thought.confirm");
       case "browser_tabs":
-        return a.index != null ? `第 ${Number(a.index) + 1} 个标签页` : "";
+        return a.index != null ? t("thought.tabNumber", { count: Number(a.index) + 1 }) : "";
       case "browser_take_screenshot":
         return this.shortPath(a.filename || "", 48);
       case "browser_set_display_mode":
-        if (a.mode === "window") return "大窗口";
-        if (a.mode === "card") return "小卡片";
+        if (a.mode === "window") return t("thought.largeWindow");
+        if (a.mode === "card") return t("thought.smallCard");
         return "";
       case "browser_clear_data": {
         const types = Array.isArray(a.data_types) ? a.data_types.length : 0;
-        return types ? `${types} 类 · ${a.time_range || ""}` : this.compactText(a.time_range || "", 24);
+        return types ? t("thought.categories", { count: types, range: a.time_range || "" }) : this.compactText(a.time_range || "", 24);
       }
       case "system_browser_open":
         try {
@@ -579,67 +602,73 @@ export class ThoughtStream {
     if (payload.ok === false) {
       if (payload.error === "permission denied") {
         const risk = payload.policy?.risk;
-        const reason = payload.policy?.reason || "策略拒绝";
-        const riskLabel = risk === "high" ? "高风险" : risk === "medium" ? "中风险" : risk === "low" ? "低风险" : "受限";
-        return `权限被拒绝（${riskLabel}）：${reason}`;
+        const reason = payload.policy?.reason || t("thought.policyDenied");
+        const riskLabel = risk === "high" ? t("thought.riskHigh") : risk === "medium" ? t("thought.riskMedium") : risk === "low" ? t("thought.riskLow") : t("thought.riskRestricted");
+        return t("thought.permissionDenied", { risk: riskLabel, reason });
       }
       if (payload.timed_out) {
-        return `命令超时（${Math.round((payload.timeout_ms || 0) / 1000)}s）${payload.stderr ? "；stderr：" + this.compactText(payload.stderr, 120) : ""}`;
+        return t("thought.commandTimeout", {
+          seconds: Math.round((payload.timeout_ms || 0) / 1000),
+          stderr: payload.stderr ? `; stderr: ${this.compactText(payload.stderr, 120)}` : "",
+        });
       }
-      if (payload.aborted) return "命令已被中断。";
-      const code = payload.exit_code != null ? `退出码 ${payload.exit_code}` : "执行失败";
+      if (payload.aborted) return t("thought.commandAborted");
+      const code = payload.exit_code != null ? t("thought.exitCode", { code: payload.exit_code }) : t("thought.executionFailed");
       const errOut = payload.stderr || payload.stdout || payload.error || "";
-      return `命令失败（${code}）${errOut ? "：" + this.compactText(errOut.replace(/\s+/g, " "), 160) : ""}`;
+      return t("thought.commandFailed", {
+        code,
+        detail: errOut ? `: ${this.compactText(errOut.replace(/\s+/g, " "), 160)}` : "",
+      });
     }
 
     if (payload.mode === "background") {
-      return `已转入后台运行，pid ${payload.pid}。可用 list_processes 查看，kill_process 停止。`;
+      return t("thought.backgroundProcess", { pid: payload.pid });
     }
     if (payload.mode === "promoted_to_background") {
-      return `前台超时，已转入后台，pid ${payload.pid}。`;
+      return t("thought.promotedBackground", { pid: payload.pid });
     }
 
     const stdout = String(payload.stdout || "").trim();
     if (stdout) {
       const preview = this.compactText(stdout.replace(/\s+/g, " "), 180);
-      return `输出：${preview}`;
+      return t("thought.output", { output: preview });
     }
     if (payload.stderr) {
       return `stderr：${this.compactText(payload.stderr.replace(/\s+/g, " "), 160)}`;
     }
-    return `命令完成（退出码 ${payload.exit_code ?? 0}）。`;
+    return t("thought.commandCompleted", { code: payload.exit_code ?? 0 });
   }
 
   formatGenericPermissionDenied(payload) {
     const risk = payload.policy?.risk;
-    const reason = payload.policy?.reason || "策略拒绝";
-    const riskLabel = risk === "high" ? "高风险" : risk === "medium" ? "中风险" : risk === "low" ? "低风险" : "受限";
-    return `权限被拒绝（${riskLabel}）：${reason}`;
+    const reason = payload.policy?.reason || t("thought.policyDenied");
+    const riskLabel = risk === "high" ? t("thought.riskHigh") : risk === "medium" ? t("thought.riskMedium") : risk === "low" ? t("thought.riskLow") : t("thought.riskRestricted");
+    return t("thought.permissionDenied", { risk: riskLabel, reason });
   }
 
   formatSearchMemoryDetail(payload) {
-    if (payload?.ok === false) return this.compactText(payload.error || "检索失败", 120);
+    if (payload?.ok === false) return this.compactText(payload.error || t("thought.searchFailed"), 120);
     const hits = Array.isArray(payload?.hits) ? payload.hits
       : Array.isArray(payload?.results) ? payload.results
       : Array.isArray(payload?.memories) ? payload.memories : null;
     if (hits) {
-      if (hits.length === 0) return "没有命中记忆。";
+      if (hits.length === 0) return t("thought.noMemoryHits");
       const preview = hits.slice(0, 2).map(h => this.compactText(h.summary || h.content || h.text || "", 50)).filter(Boolean).join(" ｜ ");
-      return `命中 ${hits.length} 条${preview ? "：" + preview : ""}`;
+      return t("thought.memoryHits", { count: hits.length, preview: preview ? `: ${preview}` : "" });
     }
     return "";
   }
 
   formatFileReadDetail(result) {
     const s = String(result || "").trim();
-    if (!s) return "（空文件）";
+    if (!s) return t("thought.emptyFile");
     if (s.startsWith("错误")) return this.compactText(s, 160);
-    return `内容预览：${this.compactText(s.replace(/\s+/g, " "), 160)}`;
+    return t("thought.contentPreview", { content: this.compactText(s.replace(/\s+/g, " "), 160) });
   }
 
   formatGenericOkDetail(payload, raw) {
     if (payload?.ok === false) {
-      return this.compactText(payload.error || "执行失败", 160);
+      return this.compactText(payload.error || t("thought.executionFailed"), 160);
     }
     if (payload?.ok === true) {
       const meaningful = payload.summary || payload.message || payload.detail || payload.hint;
@@ -651,7 +680,7 @@ export class ThoughtStream {
     if (!trimmed) return "";
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       // 看起来是 JSON 但解析失败（多半是后端截断了）
-      return "结果过长未展开。";
+      return t("thought.resultTooLong");
     }
     return this.compactText(trimmed.replace(/\s+/g, " "), this.toolDetailLength);
   }
@@ -674,7 +703,7 @@ export class ThoughtStream {
     if (name === "run_command" || name === "exec_command") {
       if (parsed) return this.formatExecCommandDetail(parsed);
       // JSON 残缺时不展示原文，给个通用兜底
-      return "命令已执行（结果过长未展开）。";
+      return t("thought.commandResultTooLong");
     }
 
     if (name === "search_memory") {
@@ -686,28 +715,28 @@ export class ThoughtStream {
     }
 
     if (name === "write_file" || name === "delete_file" || name === "make_dir") {
-      if (parsed?.ok === false) return this.compactText(parsed.error || "操作失败", 160);
+      if (parsed?.ok === false) return this.compactText(parsed.error || t("thought.operationFailed"), 160);
       const raw = String(result || "").trim();
       if (raw.startsWith("错误")) return this.compactText(raw, 160);
       return ""; // 成功时不重复显示路径，subject 已经写明
     }
 
     if (name === "list_dir") {
-      if (parsed?.ok === false) return this.compactText(parsed.error || "查看失败", 160);
+      if (parsed?.ok === false) return this.compactText(parsed.error || t("thought.viewFailed"), 160);
       const items = Array.isArray(parsed?.entries) ? parsed.entries
                   : Array.isArray(parsed?.items) ? parsed.items
                   : Array.isArray(parsed?.files) ? parsed.files : null;
       if (items) {
-        if (items.length === 0) return "（空目录）";
+        if (items.length === 0) return t("thought.emptyDirectory");
         const sample = items.slice(0, 6).map(it => typeof it === "string" ? it : (it.name || "")).filter(Boolean).join(" · ");
-        return `${items.length} 项：${this.compactText(sample, 160)}`;
+        return t("thought.directoryItems", { count: items.length, sample: this.compactText(sample, 160) });
       }
       return "";
     }
 
     if (name === "send_message") {
       // 已在 subject 显示内容预览，detail 留空
-      if (parsed?.ok === false) return this.compactText(parsed.error || "发送失败", 160);
+      if (parsed?.ok === false) return this.compactText(parsed.error || t("thought.sendFailed"), 160);
       return "";
     }
 
@@ -731,7 +760,7 @@ export class ThoughtStream {
   }
 
   tool(name, args, result, ok = undefined) {
-    if (!this.curLine) this.newLine("处理中");
+    if (!this.curLine) this.newLine(t("thought.processing"));
     this.finalizeLastTool();
     this.clearStatus();
 
@@ -743,7 +772,7 @@ export class ThoughtStream {
     this.toolFailed = this.toolFailed || failure;
     const statusCls = failure ? "failed" : "success";
     const statusIcon = failure ? "✗" : "✓";
-    const statusLabel = failure ? "失败" : "成功";
+    const statusLabel = failure ? t("thought.failed") : t("thought.success");
 
     const toolEl = document.createElement("div");
     toolEl.className = `line-tool done tool-${statusCls}`;
@@ -822,11 +851,11 @@ export class ThoughtStream {
 
     const nameSpan = document.createElement("span");
     nameSpan.className = "tool-name";
-    nameSpan.textContent = this.hadToolCall ? "全部操作" : "本轮";
+    nameSpan.textContent = this.hadToolCall ? t("thought.allOperations") : t("thought.thisRound");
 
     const statusSpan = document.createElement("span");
     statusSpan.className = `tool-status ${statusCls}`;
-    statusSpan.textContent = this.toolFailed ? "已结束" : "完成";
+    statusSpan.textContent = this.toolFailed ? t("thought.ended") : t("thought.completed");
 
     // 空 chevron 占位，让收尾行与上面的工具行图标对齐（本行不可展开）。
     const chevron = document.createElement("span");
