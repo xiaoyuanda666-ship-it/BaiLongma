@@ -818,7 +818,7 @@
       <label for="apiKey">LLM Key</label>
       <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" />
     </div>
-    <div class="row-hint">支持 DeepSeek、MiniMax、OpenAI、通义千问、Moonshot、智谱、小米 MiMo 等官方端点</div>
+    <div class="row-hint">模型端点必须支持 OpenAI Responses API；激活时会自动探测</div>
 
     <!-- AI 名字 -->
     <div class="row">
@@ -859,7 +859,7 @@
       <button class="primary" id="activate" disabled>自动识别并进入</button>
     </div>
     <div id="status" class="status"></div>
-    <button id="settings-toggle" type="button">或使用自定义端点（本地模型）</button>
+    <button id="settings-toggle" type="button">或使用自定义 Responses API 端点</button>
 
     <p class="hint">
       激活信息会保存到本地 <code>config.json</code>，仅用于连接对应厂商的官方 API。
@@ -870,7 +870,7 @@
       <hr class="divider">
       <div class="custom-section">
         <div class="custom-section-label">自定义端点</div>
-        <p class="custom-hint">Ollama、LM Studio 或其他兼容 OpenAI API 的本地/私有端点，API Key 可留空。</p>
+        <p class="custom-hint">使用兼容 OpenAI Responses API 的本地、私有或中转端点，API Key 可留空。</p>
         <div class="row">
           <label for="customBaseUrl">Base URL</label>
           <input id="customBaseUrl" type="text" placeholder="如 http://localhost:11434/v1" autocomplete="off" spellcheck="false" />
@@ -1312,7 +1312,7 @@
         })
         const data = await resp.json().catch(() => ({}))
         if (!resp.ok || !data.ok) {
-          setCustomStatus(data.error || '连接失败，请检查端点地址和模型名称', 'err')
+          setCustomStatus(data.error || 'Responses API 连接失败，请检查端点、模型名与协议支持', 'err')
           syncCustomButtonState()
           return
         }

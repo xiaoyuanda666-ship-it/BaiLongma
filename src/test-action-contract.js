@@ -8,16 +8,25 @@ process.env.BAILONGMA_USER_DIR = tmp
 process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
 
 let closeDBForTest = null
+const itemText = item => String(item?.content ?? item?.output ?? '')
 
 try {
   const {
     actionContractCompletionIssue,
+    actionContractToolCallIssue,
     actionContractToolSucceeded,
+    browserPageFindResultFromEvidence,
+    browserScreenshotDeliveryMatches,
+    browserScreenshotPathFromEvidence,
     classifyActionContract,
+    collectVerifiedWebResearchSources,
+    filterMemoriesForActionContract,
+    inferWebResearchSourceCount,
     resolveActionContractForTurn,
     verifiedActionContractReply,
   } = await import('./runtime/action-contract.js')
-  const { callLLM } = await import('./llm.js')
+  const { callLLM, slowAckText } = await import('./llm.js')
+  const { finalizeToolInjection } = await import('./injectors/tool-injector.js')
   const { evaluateToolPolicy } = await import('./capabilities/tool-policy.js')
   ;({ closeDBForTest } = await import('./db.js'))
 
@@ -59,6 +68,13 @@ try {
   const displayContract = classifyActionContract('切换到大浏览器')
   assert.equal(displayContract?.id, 'browser_display_mode')
   assert.deepEqual(displayContract.requiredTools, ['browser_set_display_mode'])
+  assert.match(actionContractCompletionIssue(
+    displayContract,
+    '已经全屏显示。',
+  ), /window mode|fullscreen/i, 'window mode cannot be described as fullscreen')
+  assert.equal(verifiedActionContractReply(displayContract, {
+    result: JSON.stringify({ ok: true, browser_preview: { mode: 'window' } }),
+  }), '已切换到独立大窗口。')
   const browserLoginContract = classifyActionContract('需要你帮我登录我的 X 账号')
   assert.equal(browserLoginContract?.id, 'browser_interaction')
   assert(browserLoginContract.requiredTools.includes('browser_snapshot'))
@@ -125,6 +141,118 @@ try {
     'unknown substantive wording outside the close clause is preserved by default')
   assert.equal(classifyActionContract('退出这个网站的登录'), null,
     'website sign-out is not a browser lifecycle close')
+  const screenshotContract = classifyActionContract('把当前页面截张图发给我看看')
+  assert.equal(screenshotContract?.id, 'browser_screenshot')
+  assert.deepEqual(screenshotContract.requiredTools, ['browser_take_screenshot'])
+  const screenshotPath = path.join(tmp, 'captured-page.png')
+  const screenshotEvidence = [{
+    name: 'browser_take_screenshot',
+    result: JSON.stringify({ ok: true, screenshot: { image_path: screenshotPath } }),
+  }]
+  assert.equal(browserScreenshotPathFromEvidence(screenshotEvidence), screenshotPath)
+  assert.equal(browserScreenshotDeliveryMatches(screenshotEvidence, { image_path: screenshotPath }), true)
+  assert.equal(browserScreenshotDeliveryMatches(screenshotEvidence, { image_path: `${screenshotPath}.other` }), false)
+  assert.match(actionContractCompletionIssue(
+    screenshotContract,
+    '截图发好了。',
+    { successfulToolEvidence: screenshotEvidence },
+  ), /not delivered/i, 'capture without media delivery cannot be described as sent')
+  assert.equal(actionContractCompletionIssue(
+    screenshotContract,
+    '',
+    { successfulToolEvidence: screenshotEvidence, messageArgs: { image_path: screenshotPath } },
+  ), '', 'send_message with the exact captured image path satisfies screenshot delivery')
+  const screenshotScopedMemories = filterMemoriesForActionContract([
+    {
+      mem_id: 'procedure_browser_display_mode_first',
+      content: '截图前先调用 browser_set_display_mode，再调用 browser_take_screenshot。',
+    },
+    {
+      mem_id: 'lesson_browser_screenshot_image_not_forwardable',
+      content: '截图无法通过 send_message 发送。',
+    },
+    {
+      mem_id: 'fact_browser_screenshot_current',
+      content: 'browser_take_screenshot 会返回持久化 image_path。',
+    },
+  ], screenshotContract)
+  assert.deepEqual(screenshotScopedMemories.map(item => item.mem_id), ['fact_browser_screenshot_current'],
+    'obsolete memories cannot expand or contradict the authoritative screenshot contract')
+
+  const pageFindContract = classifyActionContract('机器学习在这页出现几次')
+  assert.equal(pageFindContract?.id, 'browser_page_find')
+  assert.equal(pageFindContract.query, '机器学习')
+  assert.deepEqual(pageFindContract.requiredTools, ['browser_find'])
+  const pageFindEvidence = [{
+    name: 'browser_find',
+    result: JSON.stringify({
+      ok: true,
+      structured_content: {
+        page_find: {
+          query: '机器学习', found: true, total_matches: 4, current_match: 1,
+          source: 'rendered_page_text', url: 'https://zh.wikipedia.org/wiki/人工智能',
+        },
+      },
+    }),
+  }]
+  assert.equal(browserPageFindResultFromEvidence(pageFindEvidence)?.total_matches, 4)
+  assert.equal(actionContractToolSucceeded(
+    pageFindContract,
+    'browser_find',
+    pageFindEvidence[0].result,
+    { text: '机器学习' },
+  ), true)
+  assert.equal(verifiedActionContractReply(pageFindContract, pageFindEvidence[0], {
+    successfulToolEvidence: pageFindEvidence,
+  }), '当前页面里找到了“机器学习”，共出现 4 处。')
+
+  const browserConversation = [{ role: 'jarvis', content: '当前浏览器页面已打开。' }]
+  const directBrowserCases = [
+    ['刷新一下。', 'browser_reload', 'browser_reload'],
+    ['往下翻一屏。', 'browser_scroll', 'browser_press_key'],
+    ['回到上一页。', 'browser_back', 'browser_navigate_back'],
+    ['回搜索结果列表页。', 'browser_back', 'browser_navigate_back'],
+    ['不是详情页，我要回搜索结果列表页。', 'browser_back', 'browser_navigate_back'],
+    ['不对，回搜索结果列表。', 'browser_back', 'browser_navigate_back'],
+    ['我说的是结果页。', 'browser_back', 'browser_navigate_back'],
+    ['别进详情，回列表。', 'browser_back', 'browser_navigate_back'],
+    ['回刚才的搜索结果页。', 'browser_back', 'browser_navigate_back'],
+    ['再往前。', 'browser_forward', 'browser_navigate_forward'],
+    ['放大一点。', 'browser_display_mode', 'browser_set_display_mode'],
+    ['现在有几个标签页？', 'browser_tabs_list', 'browser_tabs'],
+    ['重新打开 example.com。', 'browser_reopen', 'browser_navigate'],
+    ['浏览器关一下。', 'browser_close', 'browser_close'],
+    ['行，缩回小卡片吧。', 'browser_display_mode', 'browser_set_display_mode'],
+    ['打开 DuckDuckGo。', 'browser_open_url', 'browser_navigate'],
+  ]
+  for (const [phrase, id, tool] of directBrowserCases) {
+    const contract = classifyActionContract(phrase, { conversationWindow: browserConversation })
+    assert.equal(contract?.id, id, phrase)
+    assert.deepEqual(contract.requiredTools, [tool], phrase)
+    const finalized = finalizeToolInjection({
+      initialTools: ['send_message', 'find_tool', 'download_file', 'run_command', 'browser_navigate', 'browser_find', tool],
+      actionContract: contract,
+      localReply: false,
+    })
+    assert.equal(finalized.turnTools.includes(tool), true, phrase)
+    assert.equal(finalized.turnTools.includes('find_tool'), false, `${phrase} does not waste a find_tool call`)
+  }
+  const directUrlContract = classifyActionContract('打开 https://zh.wikipedia.org/wiki/人工智能')
+  assert.equal(directUrlContract?.id, 'browser_open_url')
+  assert.deepEqual(directUrlContract.requiredTools, ['browser_navigate'])
+  assert.equal(directUrlContract.directBrowserAction, true)
+  assert.equal(actionContractToolSucceeded(
+    directUrlContract,
+    'browser_navigate',
+    JSON.stringify({ ok: true, browser_preview: { url: directUrlContract.expectedUrl } }),
+    { url: directUrlContract.expectedUrl },
+  ), true)
+  const narrowedFind = finalizeToolInjection({
+    initialTools: ['send_message', 'find_tool', 'download_file', 'run_command', 'exec_command', 'browser_navigate', 'browser_find'],
+    actionContract: pageFindContract,
+    localReply: false,
+  })
+  assert.deepEqual(narrowedFind.turnTools, ['send_message', 'browser_find'])
   for (const phrase of [
     '用大的窗口打开',
     '请用大一点的窗口打开这个网页',
@@ -166,10 +294,564 @@ try {
     args: { url: 'https://example.com/' },
     result: JSON.stringify({ ok: true, url: 'https://example.com/' }),
   }), /系统默认浏览器.*小窗口浏览器.*同一个实时页面/s)
+
+  let directNavigateRounds = 0
+  const directNavigateCalls = []
+  const directNavigateResult = await callLLM({
+    systemPrompt: 'Open the exact requested URL.',
+    message: '打开 https://example.com',
+    tools: ['browser_navigate', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '打开 https://example.com',
+      actionContract: classifyActionContract('打开 https://example.com'),
+    },
+    _streamOnceForTest: async () => {
+      directNavigateRounds += 1
+      if (directNavigateRounds > 1) throw new Error('direct URL navigation should converge without another provider round')
+      return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{
+          id: 'direct-url-navigation',
+          name: 'browser_navigate',
+          arguments: JSON.stringify({ url: 'https://example.com/' }),
+        }],
+      }
+    },
+    _executeToolForTest: async (name, args, context) => {
+      directNavigateCalls.push({ name, args, source: context?.source || '' })
+      if (name === 'browser_navigate') {
+        return JSON.stringify({ ok: true, browser_preview: { url: 'https://example.com/' } })
+      }
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: `unexpected tool ${name}` })
+    },
+  })
+  assert.deepEqual(directNavigateCalls.map(call => call.name), ['browser_navigate', 'send_message'])
+  assert.equal(directNavigateCalls.filter(call => call.name === 'send_message').length, 1,
+    'a direct URL navigation sends one completion message and no slow-tool acknowledgement')
+  assert.doesNotMatch(directNavigateCalls.at(-1).args.content, /我查一下/)
+  assert.equal(directNavigateCalls.at(-1).args.content, '已打开 https://example.com/')
+  assert.equal(directNavigateResult.delivered, true)
+
+  const naturalAcks = Array.from({ length: 5 }, () => slowAckText('browser_navigate', {
+    url: 'https://example.com/private/path?query=do-not-echo',
+  }))
+  assert.equal(new Set(naturalAcks).size, 5, 'lookup progress acknowledgements rotate naturally')
+  for (const ack of naturalAcks) {
+    assert.doesNotMatch(ack, /https?:\/\/|example\.com|do-not-echo/,
+      'lookup progress acknowledgements never expose a URL or query parameter')
+  }
+
+  const searchSubmitContract = classifyActionContract('在搜索框输入 OpenAI 官网并搜索。', {
+    conversationWindow: browserConversation,
+  })
+  assert.equal(searchSubmitContract?.id, 'browser_search_submit')
+  assert.equal(searchSubmitContract.query, 'OpenAI 官网')
+  assert.equal(searchSubmitContract.requireAllTools, true)
+  assert.deepEqual(searchSubmitContract.requiredTools, ['browser_snapshot', 'browser_type', 'browser_click'])
+  const searchSubmitInjection = finalizeToolInjection({
+    initialTools: ['send_message', 'find_tool', 'browser_navigate', 'browser_press_key'],
+    actionContract: searchSubmitContract,
+    localReply: false,
+  })
+  assert.deepEqual(searchSubmitInjection.turnTools,
+    ['send_message', 'browser_snapshot', 'browser_type', 'browser_click'])
+
+  let searchSubmitRounds = 0
+  const searchSubmitCalls = []
+  const searchSubmitResult = await callLLM({
+    systemPrompt: 'Use the current search box exactly once.',
+    message: '在搜索框输入 OpenAI 官网并搜索。',
+    tools: searchSubmitInjection.turnTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '在搜索框输入 OpenAI 官网并搜索。',
+      actionContract: searchSubmitContract,
+    },
+    _streamOnceForTest: async () => {
+      searchSubmitRounds += 1
+      if (searchSubmitRounds === 1) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'search-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+      }
+      if (searchSubmitRounds === 2) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'search-type', name: 'browser_type', arguments: JSON.stringify({ uid: '1_1', text: 'OpenAI 官网' }) }],
+      }
+      if (searchSubmitRounds === 3) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'search-click', name: 'browser_click', arguments: JSON.stringify({ uid: '1_2', element: '搜索按钮' }) }],
+      }
+      throw new Error('successful search click must end the tool loop before duplicate type/Enter/navigation')
+    },
+    _executeToolForTest: async (name, args) => {
+      searchSubmitCalls.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      if (name === 'browser_click') {
+        return JSON.stringify({
+          ok: true,
+          browser_preview: { url: 'https://duckduckgo.com/?q=OpenAI', title: 'OpenAI at DuckDuckGo' },
+          content: [{ type: 'text', text: 'Search results for OpenAI\nlink OpenAI\nlink OpenAI API' }],
+        })
+      }
+      return JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://duckduckgo.com/', title: 'DuckDuckGo' },
+        content: [{ type: 'text', text: 'Search the web without being tracked' }],
+      })
+    },
+  })
+  assert.deepEqual(searchSubmitCalls.map(call => call.name),
+    ['browser_snapshot', 'browser_type', 'browser_click', 'send_message'])
+  assert.equal(searchSubmitCalls[1].args.replace, true,
+    'search browser_type always replaces a prefilled field instead of appending')
+  assert.equal(searchSubmitCalls.at(-1).args.content, '已搜索“OpenAI 官网”。')
+  assert.equal(searchSubmitResult.delivered, true)
+
+  assert.match(actionContractToolCallIssue(
+    searchSubmitContract,
+    'browser_click',
+    { uid: '1_1', element: '搜索框' },
+    { successfulToolNames: new Set(['browser_snapshot']) },
+  ), /browser_type.*next/i, 'clicking the search field before typing is rejected by the ordered contract')
+  assert.match(actionContractToolCallIssue(
+    searchSubmitContract,
+    'browser_click',
+    { uid: '2_2', element: '清除本文按钮' },
+    { successfulToolNames: new Set(['browser_snapshot', 'browser_type']) },
+  ), /actual search-submit control/i, 'clear/voice/image controls cannot consume the one submit click')
+  assert.equal(actionContractToolCallIssue(
+    searchSubmitContract,
+    'browser_click',
+    { search_submit: true, element: 'search submit' },
+    { successfulToolNames: new Set(['browser_snapshot', 'browser_type']) },
+  ), '', 'a missing accessibility button can use the one form-submit click fallback')
+
+  let orderedSearchRounds = 0
+  const orderedSearchExecuted = []
+  const orderedSearchResult = await callLLM({
+    systemPrompt: 'Recover from invalid search-target choices without changing the fixed action order.',
+    message: '在搜索框输入 OpenAI 官网并搜索。',
+    tools: searchSubmitInjection.turnTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '在搜索框输入 OpenAI 官网并搜索。',
+      actionContract: searchSubmitContract,
+    },
+    _streamOnceForTest: async () => {
+      orderedSearchRounds += 1
+      if (orderedSearchRounds === 1) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'ordered-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+      }
+      if (orderedSearchRounds === 2) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'premature-searchbox-click', name: 'browser_click', arguments: JSON.stringify({ uid: '1_1', element: '搜索框' }) }],
+      }
+      if (orderedSearchRounds === 3) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'ordered-type', name: 'browser_type', arguments: JSON.stringify({ uid: '1_1', text: 'OpenAI 官网' }) }],
+      }
+      if (orderedSearchRounds === 4) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'invalid-clear-click', name: 'browser_click', arguments: JSON.stringify({ uid: '2_2', element: '清除本文按钮' }) }],
+      }
+      if (orderedSearchRounds === 5) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'fallback-search-submit', name: 'browser_click', arguments: JSON.stringify({ search_submit: true, element: 'search submit' }) }],
+      }
+      throw new Error('verified ordered search must converge after its one valid submit click')
+    },
+    _executeToolForTest: async (name, args) => {
+      orderedSearchExecuted.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      if (name === 'browser_click') return JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://duckduckgo.com/?q=OpenAI', title: 'OpenAI at DuckDuckGo' },
+        content: [{ type: 'text', text: 'Search results for OpenAI\nlink OpenAI\nlink OpenAI API' }],
+      })
+      return JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://duckduckgo.com/', title: 'DuckDuckGo' },
+        content: [{ type: 'text', text: 'Search the web without being tracked' }],
+      })
+    },
+  })
+  assert.deepEqual(orderedSearchExecuted.map(call => call.name),
+    ['browser_snapshot', 'browser_type', 'browser_click', 'send_message'],
+    'out-of-order focus/clear clicks stay private and cannot consume the public search sequence')
+  assert.equal(orderedSearchExecuted[1].args.replace, true)
+  assert.equal(orderedSearchExecuted[2].args.search_submit, true)
+  assert.equal(orderedSearchResult.delivered, true)
+
+  const unchangedSearchEvidence = [
+    {
+      name: 'browser_snapshot',
+      args: {},
+      result: JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://duckduckgo.com/', title: 'DuckDuckGo' },
+        content: [{ type: 'text', text: 'Search the web without being tracked' }],
+      }),
+    },
+    {
+      name: 'browser_type',
+      args: { uid: '1_1', text: 'OpenAI 官网' },
+      result: JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://duckduckgo.com/', title: 'DuckDuckGo' },
+        content: [{ type: 'text', text: 'Search the web without being tracked' }],
+      }),
+    },
+  ]
+  const unchangedSearchClick = JSON.stringify({
+    ok: true,
+    browser_preview: { url: 'https://duckduckgo.com/', title: 'DuckDuckGo' },
+    structured_content: {
+      page_change: {
+        before_url: 'https://duckduckgo.com/',
+        after_url: 'https://duckduckgo.com/',
+        url_changed: false,
+      },
+    },
+    content: [{ type: 'text', text: 'Search the web without being tracked' }],
+  })
+  assert.equal(actionContractToolSucceeded(
+    searchSubmitContract,
+    'browser_click',
+    unchangedSearchClick,
+    { uid: '1_2', element: '搜索按钮' },
+    { successfulToolEvidence: unchangedSearchEvidence },
+  ), false, 'ok=true click without URL/title/results-state change cannot complete a search')
+  assert.match(actionContractToolCallIssue(
+    searchSubmitContract,
+    'browser_type',
+    { uid: '1_1', text: 'OpenAI 官网' },
+    { attemptedToolNames: ['browser_snapshot', 'browser_type', 'browser_click'] },
+  ), /single-use/i, 'a failed submit never authorizes typing the same query again')
+
+  let failedSearchRounds = 0
+  const failedSearchExecuted = []
+  const failedSearchResult = await callLLM({
+    systemPrompt: 'Use the current search box exactly once and report failure honestly.',
+    message: '在搜索框输入 OpenAI 官网并搜索。',
+    tools: searchSubmitInjection.turnTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '在搜索框输入 OpenAI 官网并搜索。',
+      actionContract: searchSubmitContract,
+    },
+    _streamOnceForTest: async () => {
+      failedSearchRounds += 1
+      if (failedSearchRounds === 1) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'failed-search-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+      }
+      if (failedSearchRounds === 2) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'failed-search-type', name: 'browser_type', arguments: JSON.stringify({ uid: '1_1', text: 'OpenAI 官网' }) }],
+      }
+      if (failedSearchRounds === 3) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'failed-search-click', name: 'browser_click', arguments: JSON.stringify({ uid: '1_2', element: '搜索按钮' }) }],
+      }
+      if (failedSearchRounds === 4) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'false-search-completion', name: 'send_message', arguments: JSON.stringify({ target_id: 'ID:000001', content: '已搜索“OpenAI 官网”。' }) }],
+      }
+      if (failedSearchRounds === 5) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'duplicate-search-type', name: 'browser_type', arguments: JSON.stringify({ uid: '1_1', text: 'OpenAI 官网' }) }],
+      }
+      if (failedSearchRounds === 6) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{
+          id: 'honest-search-failure',
+          name: 'send_message',
+          arguments: JSON.stringify({ target_id: 'ID:000001', content: '点击搜索按钮后页面没有进入结果页，搜索没有生效。' }),
+        }],
+      }
+      return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      failedSearchExecuted.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      if (name === 'browser_click') return unchangedSearchClick
+      return unchangedSearchEvidence.find(item => item.name === name)?.result
+        || JSON.stringify({ ok: false, error: `unexpected tool ${name}` })
+    },
+  })
+  assert.deepEqual(failedSearchExecuted.map(call => call.name),
+    ['browser_snapshot', 'browser_type', 'browser_click', 'send_message'],
+    'unchanged search state permits only one type, one submit, and one honest final send')
+  assert.equal(failedSearchExecuted.at(-1).args.content, '点击搜索按钮后页面没有进入结果页，搜索没有生效。')
+  assert.doesNotMatch(failedSearchResult.content, /已搜索/)
+  assert.equal(failedSearchResult.delivered, true)
+
+  const resultClickContract = classifyActionContract('点开第二个搜索结果。', {
+    conversationWindow: browserConversation,
+  })
+  assert.equal(resultClickContract?.id, 'browser_search_result_click')
+  assert.equal(resultClickContract.resultOrdinal, 2)
+  assert.equal(resultClickContract.requireAllTools, true)
+  const resultClickInjection = finalizeToolInjection({
+    initialTools: ['send_message', 'find_tool', 'browser_navigate'],
+    actionContract: resultClickContract,
+    localReply: false,
+  })
+  assert.deepEqual(resultClickInjection.turnTools, ['send_message', 'browser_snapshot', 'browser_click'])
+
+  let resultClickRounds = 0
+  const resultClickCalls = []
+  await callLLM({
+    systemPrompt: 'Click the numbered result.',
+    message: '点开第二个搜索结果。',
+    tools: resultClickInjection.turnTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '点开第二个搜索结果。',
+      actionContract: resultClickContract,
+    },
+    _streamOnceForTest: async () => {
+      resultClickRounds += 1
+      if (resultClickRounds === 1) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'result-snapshot', name: 'browser_snapshot', arguments: '{}' }],
+      }
+      if (resultClickRounds === 2) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'result-click', name: 'browser_click', arguments: JSON.stringify({ uid: '2_2', element: '第二个搜索结果' }) }],
+      }
+      throw new Error('successful numbered-result click must end without find_tool or browser_navigate')
+    },
+    _executeToolForTest: async (name, args) => {
+      resultClickCalls.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: true, browser_preview: { url: 'https://openai.com/zh-Hans-CN/' } })
+    },
+  })
+  assert.deepEqual(resultClickCalls.map(call => call.name), ['browser_snapshot', 'browser_click', 'send_message'])
+  assert.equal(resultClickCalls.at(-1).args.content, '已点开第二个搜索结果。')
+
+  const officialSiteContract = classifyActionContract('再帮我查查 Electron 官方网站。')
+  assert.equal(officialSiteContract?.id, 'browser_official_site_lookup')
+  assert.equal(officialSiteContract.officialSiteTarget, 'Electron')
+  const officialSiteInjection = finalizeToolInjection({
+    initialTools: ['send_message', 'find_tool', 'browser_press_key', 'browser_navigate'],
+    actionContract: officialSiteContract,
+    localReply: false,
+  })
+  assert.deepEqual(officialSiteInjection.turnTools,
+    ['send_message', 'browser_navigate', 'browser_type', 'browser_click'])
+  assert.match(actionContractToolCallIssue(
+    officialSiteContract,
+    'browser_navigate',
+    { url: 'https://www.bing.com/search?q=Electron' },
+  ), /search-engine results URL/i)
+
+  let officialSiteRounds = 0
+  const officialSiteCalls = []
+  const officialSiteResult = await callLLM({
+    systemPrompt: 'Open and verify the authoritative official site.',
+    message: '再帮我查查 Electron 官方网站。',
+    tools: officialSiteInjection.turnTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '再帮我查查 Electron 官方网站。',
+      actionContract: officialSiteContract,
+    },
+    _streamOnceForTest: async () => {
+      officialSiteRounds += 1
+      if (officialSiteRounds === 1) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{
+          id: 'blocked-direct-search-url',
+          name: 'browser_navigate',
+          arguments: JSON.stringify({ url: 'https://www.bing.com/search?q=Electron' }),
+        }],
+      }
+      if (officialSiteRounds === 2) return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{
+          id: 'open-electron-official',
+          name: 'browser_navigate',
+          arguments: JSON.stringify({ url: 'https://www.electronjs.org/' }),
+        }],
+      }
+      throw new Error('verified official-site navigation must converge immediately')
+    },
+    _executeToolForTest: async (name, args) => {
+      officialSiteCalls.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      if (name === 'browser_navigate') return JSON.stringify({
+        ok: true,
+        browser_preview: { url: 'https://www.electronjs.org/', title: 'Electron' },
+        content: [{ type: 'text', text: 'Electron | Build cross-platform desktop apps with JavaScript' }],
+      })
+      return JSON.stringify({ ok: false, error: `unexpected tool ${name}` })
+    },
+  })
+  assert.deepEqual(officialSiteCalls.map(call => call.name), ['browser_navigate', 'send_message'])
+  assert.equal(officialSiteCalls[0].args.url, 'https://www.electronjs.org/')
+  assert.match(officialSiteCalls[1].args.content, /electronjs\.org/)
+  assert.equal(officialSiteResult.delivered, true)
+  assert.equal(classifyActionContract('我只是随口说说，不用查查'), null)
+
   const webContract = classifyActionContract('请联网搜索 Microsoft Playwright MCP 官方仓库')
   assert.equal(webContract?.id, 'web')
   assert.deepEqual(webContract.requiredTools, ['browser_navigate'], 'fresh web lookup requires real Playwright navigation')
   assert.equal(webContract.requiredTools.some(name => ['web_search', 'web_read', 'fetch_url', 'browser_read'].includes(name)), false)
+  const newsContract = classifyActionContract(
+    '小白龙，帮我上网看看今天有什么 AI 新闻，挑三条重要的告诉我，链接也发我一下。',
+  )
+  assert.equal(newsContract?.id, 'web_research', 'ordinary current-news wording activates verified web research')
+  assert.deepEqual(newsContract.requiredTools, ['browser_navigate', 'browser_click'])
+  assert.equal(newsContract.minimumVerifiedSources, 3)
+  assert.equal(classifyActionContract('AI 最近有啥大事？')?.id, 'web_research')
+  assert.equal(classifyActionContract('这两天科技圈发生啥了？')?.id, 'web_research')
+  assert.equal(classifyActionContract('现在比特币多少钱？')?.id, 'web')
+  assert.equal(inferWebResearchSourceCount('找 5 条最近的消息'), 5)
+  assert.equal(inferWebResearchSourceCount('挑两篇最新报道'), 2)
+  assert.equal(inferWebResearchSourceCount('这个新闻怎么回事？'), 1)
+
+  const webEvidence = (url, title, { busy = false, failure = '' } = {}) => ({
+    name: 'browser_navigate',
+    args: { url },
+    result: JSON.stringify({
+      ok: true,
+      content: [{ type: 'text', text: `${failure}${title} ${'article body '.repeat(20)}` }],
+      structured_content: {
+        snapshot: { role: 'RootWebArea', name: title, url, busy },
+      },
+    }),
+  })
+  const searchOnlyEvidence = [webEvidence(
+    'https://www.bing.com/news/search?q=AI',
+    'AI News - Search',
+  )]
+  assert.equal(collectVerifiedWebResearchSources(searchOnlyEvidence).length, 0,
+    'a search-results page is discovery, not a verified source')
+  assert.match(actionContractCompletionIssue(
+    newsContract,
+    '找到三条：https://www.bing.com/news/search?q=AI',
+    { successfulToolEvidence: searchOnlyEvidence },
+  ), /search-results page|actually opened/i)
+
+  const verifiedNewsEvidence = [
+    webEvidence('https://news.example.com/articles/alpha', 'Alpha AI release'),
+    webEvidence('https://company.example.com/news/beta', 'Beta model announcement'),
+    webEvidence('https://research.example.com/updates/gamma', 'Gamma research update'),
+  ]
+  const verifiedNewsReply = [
+    '1. Alpha https://news.example.com/articles/alpha',
+    '2. Beta https://company.example.com/news/beta',
+    '3. Gamma https://research.example.com/updates/gamma',
+  ].join('\n')
+  assert.equal(collectVerifiedWebResearchSources(verifiedNewsEvidence).length, 3)
+  assert.equal(collectVerifiedWebResearchSources([
+    webEvidence('https://one.example.com/news/gpt-next', 'OpenAI launches GPT-Next today'),
+    webEvidence('https://two.example.com/articles/gpt-next', 'OpenAI launches GPT-Next today - Another Outlet'),
+  ]).length, 1, 'near-identical headlines on different URLs count as one event')
+  assert.equal(actionContractCompletionIssue(
+    newsContract,
+    verifiedNewsReply,
+    { successfulToolEvidence: verifiedNewsEvidence },
+  ), '', 'three opened source pages plus their verified links satisfy the news research gate')
+  assert.equal(actionContractCompletionIssue(
+    newsContract,
+    `${verifiedNewsReply}.`,
+    { successfulToolEvidence: verifiedNewsEvidence },
+  ), '', 'ordinary sentence punctuation after a URL does not invalidate a verified link')
+  assert.match(actionContractCompletionIssue(
+    newsContract,
+    '只放两个链接：https://news.example.com/articles/alpha https://company.example.com/news/beta',
+    { successfulToolEvidence: verifiedNewsEvidence },
+  ), /only 2 of 3 links/i)
+  assert.equal(collectVerifiedWebResearchSources([
+    webEvidence('https://news.example.com/articles/timeout', 'Timed out article', {
+      busy: true,
+      failure: 'Navigation timeout of 10000 ms exceeded. ',
+    }),
+  ]).length, 0, 'busy or timed-out article pages cannot become verified evidence')
+
+  let researchRounds = 0
+  const researchExecuted = []
+  const researchResult = await callLLM({
+    systemPrompt: 'Search current news and verify original source pages.',
+    message: '帮我上网看看今天有什么 AI 新闻，挑三条告诉我，链接也发我。',
+    tools: newsContract.requiredTools,
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '帮我上网看看今天有什么 AI 新闻，挑三条告诉我，链接也发我。',
+      actionContract: newsContract,
+    },
+    _streamOnceForTest: async ({ messages }) => {
+      researchRounds += 1
+      if (researchRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{
+            id: 'research-search',
+            name: 'browser_navigate',
+            arguments: JSON.stringify({ url: 'https://www.bing.com/news/search?q=AI' }),
+          }],
+        }
+      }
+      if (researchRounds === 2) {
+        return {
+          content: '从搜索摘要看到三条新闻：https://www.bing.com/news/search?q=AI',
+          reasoningContent: '', aborted: false, toolCalls: [],
+        }
+      }
+      if (researchRounds === 3) {
+        assert(messages.some(item => /search-result snippets do not count/i.test(String(item.content || ''))),
+          'runtime tells the model to open original sources instead of answering from snippets')
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: verifiedNewsEvidence.map((evidence, index) => ({
+            id: `research-source-${index + 1}`,
+            name: 'browser_navigate',
+            arguments: JSON.stringify(evidence.args),
+          })),
+        }
+      }
+      return { content: verifiedNewsReply, reasoningContent: '', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      researchExecuted.push({ name, args })
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      if (name === 'browser_navigate') {
+        if (args.url.includes('bing.com/news/search')) return searchOnlyEvidence[0].result
+        const match = verifiedNewsEvidence.find(item => item.args.url === args.url)
+        return match?.result || JSON.stringify({ ok: false, error: 'unexpected URL' })
+      }
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(researchRounds, 4, 'snippet-only draft is held until three original pages are verified')
+  assert.equal(researchExecuted.filter(item => item.name === 'browser_navigate').length, 4,
+    'research opens one discovery page and three distinct source pages')
+  assert.equal(researchResult.delivered, true)
+  assert.equal(actionContractCompletionIssue(
+    newsContract,
+    researchResult.content,
+    { successfulToolEvidence: verifiedNewsEvidence },
+  ), '')
   assert.equal(classifyActionContract('打开人物卡片看看'), null,
     'person-card commands are left to model semantic intent instead of regex action contracts')
   assert.equal(classifyActionContract('人物卡片有点问题，经常错误触发'), null,
@@ -420,7 +1102,7 @@ try {
       }
       assert(messages.some(entry => {
         try {
-          const parsed = JSON.parse(String(entry.content || ''))
+          const parsed = JSON.parse(itemText(entry))
           return parsed?.content?.some(item => item?.text?.includes('heading "Example Domain" [ref=e1]'))
         } catch { return false }
       }),
@@ -618,6 +1300,194 @@ try {
     'explicit send_message content is normalized after a successful browser close')
   assert.equal(externalCloseRounds, 1,
     'external delivery also uses the runtime-owned close acknowledgement immediately')
+
+  const screenshotFile = path.join(tmp, 'runtime-screenshot.png')
+  fs.writeFileSync(screenshotFile, Buffer.from('screenshot'))
+
+  let explicitScreenshotRounds = 0
+  const explicitScreenshotCalls = []
+  const explicitScreenshotPublicCalls = []
+  const explicitScreenshotResult = await callLLM({
+    systemPrompt: 'Capture and deliver the requested screenshot.',
+    message: '把现在这个页面截个图发给我。',
+    tools: ['browser_take_screenshot', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '把现在这个页面截个图发给我。',
+      actionContract: screenshotContract,
+    },
+    _streamOnceForTest: async () => {
+      explicitScreenshotRounds += 1
+      if (explicitScreenshotRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [
+            { id: 'wrong-window', name: 'browser_set_display_mode', arguments: JSON.stringify({ mode: 'window' }) },
+            { id: 'explicit-capture', name: 'browser_take_screenshot', arguments: '{}' },
+          ],
+        }
+      }
+      if (explicitScreenshotRounds === 2) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{
+            id: 'explicit-send-image',
+            name: 'send_message',
+            arguments: JSON.stringify({
+              target_id: 'ID:000001',
+              content: '上一轮的 Example Domain 计数是 1，截图如下。',
+              image_path: screenshotFile,
+            }),
+          }],
+        }
+      }
+      throw new Error('a successful screenshot delivery must terminate before a duplicate send round')
+    },
+    _executeToolForTest: async (name, args) => {
+      explicitScreenshotCalls.push({ name, args })
+      if (name === 'browser_take_screenshot') {
+        return JSON.stringify({ ok: true, screenshot: { image_path: screenshotFile, delivered: false } })
+      }
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+    onToolCall: (name, args) => explicitScreenshotPublicCalls.push({ name, args }),
+  })
+  assert.equal(explicitScreenshotRounds, 2)
+  assert.deepEqual(explicitScreenshotCalls.map(call => call.name), ['browser_take_screenshot', 'send_message'])
+  assert.deepEqual(explicitScreenshotPublicCalls.map(call => call.name), ['browser_take_screenshot', 'send_message'],
+    'out-of-scope planning attempts are kept private and cannot pollute the observed tool sequence')
+  assert.equal(explicitScreenshotCalls[1].args.image_path, screenshotFile)
+  assert.equal(explicitScreenshotCalls[1].args.content, '',
+    'screenshot delivery removes stale facts copied from a previous turn')
+  assert.equal(explicitScreenshotResult.delivered, true)
+  assert.doesNotMatch(explicitScreenshotResult.content, /没有成功发送|发送失败/)
+
+  let failedScreenshotRounds = 0
+  const failedScreenshotCalls = []
+  const failedScreenshotResult = await callLLM({
+    systemPrompt: 'Capture and deliver the requested screenshot.',
+    message: '把现在这个页面截个图发给我。',
+    tools: ['browser_take_screenshot', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '把现在这个页面截个图发给我。',
+      actionContract: screenshotContract,
+    },
+    _streamOnceForTest: async () => {
+      failedScreenshotRounds += 1
+      if (failedScreenshotRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'failed-capture', name: 'browser_take_screenshot', arguments: '{}' }],
+        }
+      }
+      if (failedScreenshotRounds === 2) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{
+            id: 'failed-send-image',
+            name: 'send_message',
+            arguments: JSON.stringify({ target_id: 'ID:000001', content: '', image_path: screenshotFile }),
+          }],
+        }
+      }
+      return { content: '截图生成了，但图片发送失败。', reasoningContent: '', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      failedScreenshotCalls.push({ name, args })
+      if (name === 'browser_take_screenshot') {
+        return JSON.stringify({ ok: true, screenshot: { image_path: screenshotFile, delivered: false } })
+      }
+      if (name === 'send_message' && args.image_path) {
+        return JSON.stringify({ ok: false, delivered: false, message_sent: false, error: 'transport_failed' })
+      }
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(failedScreenshotCalls.filter(call => call.args.image_path === screenshotFile).length, 1,
+    'a failed real image send is not raced by an identical fallback image send')
+  assert.match(failedScreenshotResult.content, /图片发送失败/)
+
+  let pageFindRounds = 0
+  const pageFindToolCalls = []
+  const pageFindRuntimeResult = await callLLM({
+    systemPrompt: 'Find text only in the current page.',
+    message: '机器学习在这页出现几次',
+    tools: ['browser_find', 'download_file', 'run_command', 'exec_command', 'browser_navigate', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '机器学习在这页出现几次',
+      actionContract: pageFindContract,
+    },
+    _streamOnceForTest: async () => {
+      pageFindRounds += 1
+      if (pageFindRounds > 1) throw new Error('browser_find success must converge without another model round')
+      return {
+        content: '', reasoningContent: '', aborted: false,
+        toolCalls: [{ id: 'find-current-page', name: 'browser_find', arguments: JSON.stringify({ text: '机器学习' }) }],
+      }
+    },
+    _executeToolForTest: async (name, args) => {
+      pageFindToolCalls.push({ name, args })
+      if (name === 'browser_find') return pageFindEvidence[0].result
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: `unexpected tool ${name}` })
+    },
+  })
+  assert.equal(pageFindRounds, 1)
+  assert.deepEqual(pageFindToolCalls.map(call => call.name), ['browser_find', 'send_message'])
+  assert.equal(pageFindToolCalls.some(call => ['download_file', 'run_command', 'exec_command', 'browser_navigate'].includes(call.name)), false)
+  assert.equal(pageFindRuntimeResult.content, '当前页面里找到了“机器学习”，共出现 4 处。')
+  assert.equal(pageFindRuntimeResult.delivered, true)
+
+  let screenshotRounds = 0
+  const screenshotToolCalls = []
+  const screenshotResult = await callLLM({
+    systemPrompt: 'Capture and deliver the requested screenshot.',
+    message: '把当前页面截张图发给我看看',
+    tools: ['browser_take_screenshot', 'send_message'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:000001',
+      currentUserMessage: '把当前页面截张图发给我看看',
+      actionContract: screenshotContract,
+    },
+    _streamOnceForTest: async ({ messages }) => {
+      screenshotRounds += 1
+      if (screenshotRounds === 1) {
+        return {
+          content: '', reasoningContent: '', aborted: false,
+          toolCalls: [{ id: 'capture-browser', name: 'browser_take_screenshot', arguments: '{}' }],
+        }
+      }
+      if (screenshotRounds === 2) {
+        return { content: '截图已经发给你了。', reasoningContent: '', aborted: false, toolCalls: [] }
+      }
+      assert(messages.some(item => /not delivered|image_path/i.test(String(item.content || ''))))
+      return { content: '图片已经显示在浏览器卡片里。', reasoningContent: '', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      screenshotToolCalls.push({ name, args })
+      if (name === 'browser_take_screenshot') {
+        return JSON.stringify({ ok: true, screenshot: { image_path: screenshotFile, delivered: false } })
+      }
+      if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(screenshotResult.delivered, true)
+  assert.deepEqual(screenshotToolCalls.map(call => call.name), ['browser_take_screenshot', 'send_message'])
+  assert.equal(screenshotToolCalls[1].args.image_path, screenshotFile)
+  assert.equal(screenshotToolCalls[1].args.content, '')
   console.log('test-action-contract passed')
 } finally {
   closeDBForTest?.()

@@ -80,6 +80,9 @@ function createServer() {
   let brainUiPath = null
   let heartbeatCount = 0
   const settingsRequests = []
+  const resourceRequests = []
+  const messageRequests = []
+  let nextConversationId = 10_000
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1')
 
@@ -422,8 +425,40 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/message/resources') {
+      readJsonRequest(req).then((body) => {
+        resourceRequests.push(body)
+        const conversationId = nextConversationId++
+        const resources = (Array.isArray(body.resources) ? body.resources : []).map((resource, index) => ({
+          name: resource.name || `resource-${index + 1}`,
+          mime: resource.mime || 'application/octet-stream',
+          size: Number(resource.size || 0),
+          kind: String(resource.mime || '').startsWith('image/') ? 'image' : 'file',
+          url: `/media/chat/smoke-${conversationId}-${index}`,
+          path: `chat-uploads/smoke-${conversationId}-${index}`,
+        }))
+        sendJson(res, {
+          ok: true,
+          conversation_id: conversationId,
+          client_message_id: body.client_message_id,
+          resource_state: 'pending',
+          resources,
+        })
+      }).catch((error) => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
     if (url.pathname === '/message') {
-      sendJson(res, { ok: true })
+      readJsonRequest(req).then((body) => {
+        messageRequests.push(body)
+        sendJson(res, { ok: true, conversation_id: nextConversationId++ })
+      }).catch((error) => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
       return
     }
 
@@ -441,6 +476,8 @@ function createServer() {
     conversations = Array.isArray(rows) ? rows : []
   }
   server.settingsRequests = settingsRequests
+  server.resourceRequests = resourceRequests
+  server.messageRequests = messageRequests
   server.emitSse = (event) => {
     if (event?.type === 'message_received') brainUiPath = 'l1'
     if (event?.type === 'tick') {
@@ -2025,6 +2062,59 @@ try {
     throw new Error(`graph nodes were not recentered after resize: ${JSON.stringify(resizedGraph)}`)
   }
 
+  const resourceRequestCountBeforeDrop = server.resourceRequests.length
+  const messageRequestCountBeforeDrop = server.messageRequests.length
+  await page.evaluate(() => {
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['drag resource smoke'], '拖入说明.txt', { type: 'text/plain' }))
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      window.dispatchEvent(new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      }))
+    }
+  })
+  await page.waitForFunction(() => {
+    const resource = document.querySelector('.msg-resource[data-resource-state="pending"]')
+    return resource?.textContent?.includes('拖入说明.txt')
+  })
+  const stagedResourceUi = await page.evaluate(() => ({
+    input: document.querySelector('#msg-input')?.value,
+    state: document.querySelector('.msg-resource[data-resource-state="pending"]')?.dataset.resourceState,
+    name: document.querySelector('.msg-resource[data-resource-state="pending"] .chat-resource-name')?.textContent?.trim(),
+    pendingLabel: document.querySelector('.msg-resource[data-resource-state="pending"] .chat-resource-state')?.textContent?.trim(),
+  }))
+  if (server.resourceRequests.length !== resourceRequestCountBeforeDrop + 1
+      || server.messageRequests.length !== messageRequestCountBeforeDrop
+      || stagedResourceUi.input !== ''
+      || stagedResourceUi.state !== 'pending'
+      || stagedResourceUi.name !== '拖入说明.txt'
+      || !stagedResourceUi.pendingLabel?.includes('等待')) {
+    throw new Error(`dropped resources were not staged independently: ${JSON.stringify({
+      resourceRequests: server.resourceRequests.length - resourceRequestCountBeforeDrop,
+      messageRequests: server.messageRequests.length - messageRequestCountBeforeDrop,
+      ...stagedResourceUi,
+    })}`)
+  }
+  const stagedPayload = server.resourceRequests.at(-1)
+  if (stagedPayload.resources?.[0]?.name !== '拖入说明.txt'
+      || !String(stagedPayload.resources?.[0]?.data_url || '').startsWith('data:text/plain;base64,')) {
+    throw new Error(`dropped resource payload is incomplete: ${JSON.stringify(stagedPayload)}`)
+  }
+
+  const guidedMessageResponse = page.waitForResponse(response => (
+    new URL(response.url()).pathname === '/message'
+    && response.request().method() === 'POST'
+  ))
+  await page.fill('#msg-input', '请总结刚才拖入的文件')
+  await page.click('#send-btn')
+  await guidedMessageResponse
+  if (server.messageRequests.length !== messageRequestCountBeforeDrop + 1
+      || server.messageRequests.at(-1)?.content !== '请总结刚才拖入的文件') {
+    throw new Error(`follow-up instruction did not start resource processing: ${JSON.stringify(server.messageRequests.at(-1))}`)
+  }
+
   await page.setViewportSize({ width: 320, height: 480 })
   await page.waitForTimeout(500)
   await page.evaluate(() => {
@@ -2221,7 +2311,7 @@ try {
   if (englishActivation.title !== 'Activate Bailongma'
       || englishActivation.heading !== 'Activate Bailongma'
       || englishActivation.submit !== 'Activate and continue'
-      || englishActivation.customToggle !== 'Or use a custom endpoint (local model)') {
+      || englishActivation.customToggle !== 'Or use a custom Responses API endpoint') {
     throw new Error(`English activation localization failed: ${JSON.stringify(englishActivation)}`)
   }
 

@@ -132,8 +132,43 @@ export function stripMarkers(text, { stripThink = true } = {}) {
     .trim()
 }
 
+export function dedupeAdjacentReplyText(text = '') {
+  const value = String(text || '')
+  // Repeated source/code lines can be meaningful; leave fenced artifacts byte
+  // for byte. This guard targets ordinary natural-language final replies only.
+  if (value.includes('```')) return value
+
+  const lines = value.split(/\r?\n/)
+  const dedupedLines = []
+  let previousLine = ''
+  for (const line of lines) {
+    const normalized = line.trim().replace(/\s+/g, ' ')
+    if (normalized && normalized === previousLine) continue
+    dedupedLines.push(line)
+    previousLine = normalized
+  }
+
+  const joined = dedupedLines.join('\n')
+  const units = joined.match(/[^。！？!?\n]+[。！？!?]+|\n+|[^。！？!?\n]+$/g)
+  if (!units) return joined
+  const out = []
+  let previousSentence = ''
+  for (const unit of units) {
+    if (/^\n+$/.test(unit)) {
+      out.push(unit)
+      previousSentence = ''
+      continue
+    }
+    const normalized = unit.trim().replace(/\s+/g, ' ')
+    if (normalized && normalized === previousSentence) continue
+    out.push(unit)
+    previousSentence = normalized
+  }
+  return out.join('')
+}
+
 export function sanitizeAssistantReplyForDelivery(text) {
-  return stripLooseThinkingPrelude(stripMarkers(text))
+  return dedupeAdjacentReplyText(stripLooseThinkingPrelude(stripMarkers(text)))
 }
 
 export function createAssistantReplyStreamSanitizer() {

@@ -565,8 +565,16 @@ globalThis.bailongmaChromeBridge = Object.freeze({
   },
   getTarget: async () => resolveBrowserEmbedCdpTarget(),
   closePage: () => browserEmbedHost.closePage(),
+  recoverPage: async () => {
+    browserEmbedHost.closePage()
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      throw new Error('BaiLongma main window is unavailable for browser recovery')
+    }
+    await browserEmbedHost.prime(mainWindow)
+    return resolveBrowserEmbedCdpTarget()
+  },
   clearData: options => browserDataStore.clearData(options),
-  getState: () => browserEmbedHost.getTarget(),
+  getState: () => browserEmbedHost.getState(mainWindow),
 })
 global.bailongmaAppControl = {
   restart() {
@@ -589,7 +597,7 @@ function sendUpdaterStatus(payload = {}) {
   })
 }
 
-const EXPECTED_BETTER_SQLITE3_VERSION = '12.8.0'
+const EXPECTED_BETTER_SQLITE3_VERSION = require('../package.json').dependencies?.['better-sqlite3']
 
 function validatePackagedNativeModules() {
   if (IS_DEV) return
@@ -601,6 +609,10 @@ function validatePackagedNativeModules() {
   const virtualModuleRoot = path.join(appPath, 'node_modules', 'better-sqlite3')
   const nativePath = path.join(moduleRoot, 'build', 'Release', 'better_sqlite3.node')
   const issues = []
+
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(EXPECTED_BETTER_SQLITE3_VERSION || '')) {
+    issues.push(`better-sqlite3 must use an exact package version; found ${EXPECTED_BETTER_SQLITE3_VERSION || 'missing'}`)
+  }
 
   try {
     const nativeStat = fs.statSync(nativePath)
@@ -1547,6 +1559,11 @@ function setupAutoUpdater() {
   }
 
   autoUpdater.autoDownload = false
+  // Marks updater traffic so the update gateway can issue short-lived OSS URLs.
+  // This is an application marker, not a user credential.
+  autoUpdater.requestHeaders = {
+    'X-Bailongma-Updater': 'BailongmaUpdater/2',
+  }
   // Avoid applying an already downloaded update while Windows is shutting down.
   // The renderer still installs explicitly through updater:quit-and-install.
   autoUpdater.autoInstallOnAppQuit = false

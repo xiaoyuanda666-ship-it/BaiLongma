@@ -1,8 +1,8 @@
 // 回合上下文追踪器（Turn Trace）
 //
 // 目的：诊断"agent 把自己说的话和用户说的话搞混"这类**生成层**问题。要看清根因，必须能
-// 还原模型每一轮实际看到的 messages[]（含每条消息的 role）以及它的思考过程（reasoning_content /
-// <think> / 正文 / 工具调用）。本模块就是这条取证通道：callLLM 在每个 turn 把这些原样记下来，
+// 还原模型每一轮实际看到的 Responses input Items 以及它的思考、正文与工具调用。
+// 本模块就是这条取证通道：callLLM 在每个 turn 把这些原样记下来，
 // 后台页面 /turn-trace 逐回合回放。
 //
 // 设计要点：
@@ -37,13 +37,25 @@ function safeParseArgs(raw) {
   try { return JSON.parse(raw) } catch { return { __raw: String(raw) } }
 }
 
+function responseItemText(value) {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return value == null ? '' : String(value)
+  return value
+    .map(part => typeof part === 'string' ? part : (part?.text || part?.content || ''))
+    .filter(Boolean)
+    .join('')
+}
+
 // 把一条原始 message 转成可序列化、带上限的快照。保留 role 与原文（role 错配正是要查的东西）。
 function snapshotMessage(m) {
   if (!m || typeof m !== 'object') return { role: 'unknown', content: '' }
-  const out = { role: m.role || 'unknown' }
+  const out = { role: m.role || m.type || 'unknown' }
+  if (m.type) out.type = m.type
+  if (m.id) out.id = m.id
+  if (m.call_id) out.call_id = m.call_id
   if (typeof m.name === 'string') out.name = m.name
   if (m.tool_call_id) out.tool_call_id = m.tool_call_id
-  const { text, truncated } = capText(m.content || '')
+  const { text, truncated } = capText(responseItemText(m.content))
   out.content = text
   if (truncated) out.truncated = truncated
   if (Array.isArray(m.tool_calls) && m.tool_calls.length) {
@@ -53,6 +65,17 @@ function snapshotMessage(m) {
     }))
   }
   if (m.reasoning_content) out.reasoning_content = capText(m.reasoning_content).text
+  if (m.type === 'function_call') {
+    out.tool_calls = [{ name: m.name || '?', args: safeParseArgs(m.arguments) }]
+  }
+  if (m.type === 'function_call_output') out.content = capText(m.output || '').text
+  if (m.type === 'reasoning') {
+    out.reasoning_content = [m.content, m.summary]
+      .flat()
+      .filter(Boolean)
+      .map(part => part?.text || '')
+      .join('')
+  }
   return out
 }
 
@@ -170,7 +193,7 @@ function summarize(t) {
     if (t.rounds[i].content) { preview = t.rounds[i].content; break }
   }
   if (!preview) preview = t.meta?.userMessage || ''
-  const roleRibbon = (t.messages || []).map(m => (m.role || '?')[0].toUpperCase()).join('')
+  const roleRibbon = (t.messages || []).map(m => (m.role || m.type || '?')[0].toUpperCase()).join('')
   return {
     id: t.id,
     seq: t.seq,

@@ -221,6 +221,7 @@ export class ThoughtStream {
     this.startedAt = Date.now();
     this.curLine = null;
     this.thinkingEl = null;
+    this.commentaryEl = null;
     this.lastToolEl = null;
     this.statusEl = null;
     this.statusTimer = null;
@@ -277,6 +278,7 @@ export class ThoughtStream {
     }
 
     this.thinkingEl = null;
+    this.commentaryEl = null;
 
     this.el.appendChild(this.curLine);
     this.trim();
@@ -372,6 +374,23 @@ export class ThoughtStream {
     }
     this.thinkingEl = null;
     this.clearStatus();
+  }
+
+  appendCommentary(text) {
+    const chunk = String(text || "");
+    if (!chunk) return;
+    if (!this.curLine) {
+      this.newLine(this.thinkingLabel);
+      this.thinkingLine = this.curLine;
+    }
+    if (!this.commentaryEl || !this.commentaryEl.parentElement) {
+      this.commentaryEl = document.createElement("div");
+      this.commentaryEl.className = "line-text line-commentary";
+      this.curLine.appendChild(this.commentaryEl);
+    }
+    this.commentaryEl.textContent += chunk;
+    this.trim();
+    this.scrollToLatest();
   }
 
   parseJsonResult(result) {

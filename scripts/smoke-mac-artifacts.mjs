@@ -4,7 +4,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { extractFile } from '@electron/asar'
 import pkg from '../package.json' with { type: 'json' }
+import { verifyExternalBlockmapForArtifact } from './publish-updates-lib.mjs'
+import { assertReleaseSignature, listMachOFiles } from './macos-signing-lib.mjs'
+import {
+  assertMacUpdaterConfig,
+  assertMacUpdaterConfigFile,
+  updaterConfigPathForApp,
+} from './macos-updater-config.mjs'
 
 const root = path.resolve(import.meta.dirname, '..')
 const productName = pkg.productName || 'Bailongma'
@@ -14,7 +22,8 @@ const supportedTargets = [
   { label: 'x64', machArch: 'x86_64' },
   { label: 'arm64', machArch: 'arm64' },
 ]
-const requestedLabels = process.argv.slice(2)
+const requestedArgs = process.argv.slice(2)
+const requestedLabels = requestedArgs.filter(label => label !== '--no-notarize')
 const unknownLabels = requestedLabels.filter(label => !supportedTargets.some(target => target.label === label))
 if (unknownLabels.length > 0) {
   throw new Error(`Unsupported mac artifact target(s): ${unknownLabels.join(', ')}`)
@@ -22,6 +31,15 @@ if (unknownLabels.length > 0) {
 const targets = requestedLabels.length > 0
   ? supportedTargets.filter(target => requestedLabels.includes(target.label))
   : supportedTargets
+const buildMetadataPath = path.join(root, 'dist', 'mac-build-metadata.json')
+let buildMetadata = null
+try {
+  buildMetadata = JSON.parse(fs.readFileSync(buildMetadataPath, 'utf8'))
+} catch {}
+const recordedNoNotarization = buildMetadata?.version === version
+  && buildMetadata?.notarized === false
+  && targets.every(target => buildMetadata?.archs?.includes(target.label))
+const skipNotarization = requestedArgs.includes('--no-notarize') || recordedNoNotarization
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -45,6 +63,22 @@ function run(command, args, options = {}) {
 function assertFile(filePath, label) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`${label} is missing: ${filePath}`)
+  }
+}
+
+function assertPackagedBetterSqliteVersion(appPath, label) {
+  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar')
+  assertFile(asarPath, `${label} app.asar`)
+  const packagedApp = JSON.parse(extractFile(asarPath, 'package.json').toString('utf8'))
+  const expected = packagedApp.dependencies?.['better-sqlite3']
+  const packagedSqlite = JSON.parse(
+    extractFile(asarPath, 'node_modules/better-sqlite3/package.json').toString('utf8'),
+  )
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(expected || '')) {
+    throw new Error(`${label} does not pin better-sqlite3 to an exact version: ${expected || 'missing'}`)
+  }
+  if (packagedSqlite.version !== expected) {
+    throw new Error(`${label} packages better-sqlite3 ${packagedSqlite.version || 'unknown'}, expected ${expected}`)
   }
 }
 
@@ -119,13 +153,55 @@ function detachDmg(mountPoint) {
 
 function smokeTarget(target) {
   const dmgPath = path.join(root, 'dist', `${productName}-${version}-mac-${target.label}.dmg`)
+  const zipPath = path.join(root, 'dist', `${productName}-${version}-mac-${target.label}.zip`)
+  const unpackedAppPath = path.join(root, 'dist', target.label === 'x64' ? 'mac' : 'mac-arm64', `${productName}.app`)
   assertFile(dmgPath, `${target.label} DMG`)
+  assertFile(zipPath, `${target.label} ZIP`)
+  assertFile(unpackedAppPath, `${target.label} unpacked app`)
+  assertMacUpdaterConfigFile(
+    updaterConfigPathForApp(unpackedAppPath),
+    target.label,
+    `${target.label} unpacked app app-update.yml`,
+  )
+  assertFile(`${dmgPath}.blockmap`, `${target.label} DMG blockmap`)
+  assertFile(`${zipPath}.blockmap`, `${target.label} ZIP blockmap`)
+  verifyExternalBlockmapForArtifact(`${dmgPath}.blockmap`, dmgPath)
+  verifyExternalBlockmapForArtifact(`${zipPath}.blockmap`, zipPath)
+  run('unzip', ['-tq', zipPath])
+
+  const zipPlistDir = fs.mkdtempSync(path.join(os.tmpdir(), `bailongma-${target.label}-zip-`))
+  const zipPlist = path.join(zipPlistDir, 'Info.plist')
+  const extractedPlist = spawnSync('unzip', [
+    '-p',
+    zipPath,
+    `${productName}.app/Contents/Info.plist`,
+  ], { cwd: root, encoding: null, maxBuffer: 4 * 1024 * 1024 })
+  if (extractedPlist.error || extractedPlist.status !== 0 || !extractedPlist.stdout?.length) {
+    throw new Error(`${target.label} ZIP does not contain a readable app Info.plist`)
+  }
+  fs.writeFileSync(zipPlist, extractedPlist.stdout, { mode: 0o600 })
+  const extractedUpdaterConfig = spawnSync('unzip', [
+    '-p',
+    zipPath,
+    `${productName}.app/Contents/Resources/app-update.yml`,
+  ], { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 })
+  if (extractedUpdaterConfig.error || extractedUpdaterConfig.status !== 0 || !extractedUpdaterConfig.stdout?.trim()) {
+    throw new Error(`${target.label} ZIP is missing a readable app-update.yml`)
+  }
+  assertMacUpdaterConfig(extractedUpdaterConfig.stdout, target.label, `${target.label} ZIP app-update.yml`)
 
   let mountPoint
   try {
+    assertPlistString(zipPlist, 'CFBundleShortVersionString', new RegExp(`^${version.replaceAll('.', '\\.')}$`), `${target.label} ZIP Info.plist`)
     mountPoint = mountDmg(dmgPath)
     const appPath = path.join(mountPoint, `${productName}.app`)
     assertFile(appPath, `${target.label} app bundle`)
+    assertPackagedBetterSqliteVersion(appPath, `${target.label} DMG`)
+    assertMacUpdaterConfigFile(
+      updaterConfigPathForApp(appPath),
+      target.label,
+      `${target.label} DMG app-update.yml`,
+    )
 
     const plistPath = path.join(appPath, 'Contents', 'Info.plist')
     assertFile(plistPath, `${target.label} Info.plist`)
@@ -133,6 +209,12 @@ function smokeTarget(target) {
       plistPath,
       'NSAppleEventsUsageDescription',
       /Music\.app/i,
+      `${target.label} Info.plist`,
+    )
+    assertPlistString(
+      plistPath,
+      'CFBundleShortVersionString',
+      new RegExp(`^${version.replaceAll('.', '\\.')}$`),
       `${target.label} Info.plist`,
     )
 
@@ -152,6 +234,11 @@ function smokeTarget(target) {
     assertSingleArch(speechHelperPath, target.machArch, `${target.label} native speech helper`)
     assertSingleArch(sqliteNodePath, target.machArch, `${target.label} better-sqlite3 native module`)
     assertCodeSigned(appPath, `${target.label} app`, { deep: true })
+    run('codesign', ['--display', '--verbose=4', executablePath])
+    for (const codePath of listMachOFiles(appPath)) {
+      assertSingleArch(codePath, target.machArch, `${target.label} nested code`)
+      assertReleaseSignature(codePath, `${target.label} nested code`)
+    }
     assertCodeSigned(speechHelperPath, `${target.label} native speech helper`)
     assertDeveloperTeam(appPath, `${target.label} app`)
     assertDeveloperTeam(speechHelperPath, `${target.label} native speech helper`)
@@ -159,14 +246,21 @@ function smokeTarget(target) {
     assertEntitlement(appPath, 'com.apple.security.automation.apple-events', `${target.label} app`)
     assertEntitlement(rendererHelperPath, 'com.apple.security.device.audio-input', `${target.label} renderer helper`)
     assertEntitlement(speechHelperPath, 'com.apple.security.device.audio-input', `${target.label} native speech helper`)
+    if (!skipNotarization) {
+      run('xcrun', ['stapler', 'validate', '-v', dmgPath])
+      run('xcrun', ['stapler', 'validate', '-v', unpackedAppPath])
+      run('spctl', ['--assess', '--type', 'execute', '--verbose=4', appPath])
+      run('spctl', ['--assess', '--type', 'open', '--context', 'context:primary-signature', '--verbose=4', dmgPath])
+    }
 
     if (fs.existsSync(sqliteTestExtensionPath)) {
       throw new Error(`${target.label} package still includes better-sqlite3 test_extension.node`)
     }
 
-    console.log(`[smoke:mac-artifacts] ${target.label} OK`)
+    console.log(`[smoke:mac-artifacts] ${target.label} OK${skipNotarization ? ' (Developer ID signed, not notarized)' : ''}`)
   } finally {
     if (mountPoint) detachDmg(mountPoint)
+    fs.rmSync(zipPlistDir, { recursive: true, force: true })
   }
 }
 

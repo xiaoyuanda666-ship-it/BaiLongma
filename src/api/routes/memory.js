@@ -129,7 +129,8 @@ export async function handleMemoryRoutes(req, res, url) {
       : null
     const includeSystemSignals = url.searchParams.get('includeSystemSignals') === 'true'
     const rows = db.prepare(`
-      SELECT id, role, from_id, to_id, content, timestamp, channel, external_party_id, focus_absorbed, focus_topic, open_question
+      SELECT id, role, from_id, to_id, content, timestamp, channel, external_party_id,
+             focus_absorbed, focus_topic, open_question, resource_state, resource_metadata
       FROM conversations
       WHERE (? OR NOT (from_id = 'SYSTEM' AND channel = 'APP_SIGNAL'))
         ${beforeId ? 'AND id < ?' : ''}

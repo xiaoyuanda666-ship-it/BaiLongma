@@ -53,6 +53,9 @@ export const paths = {
   sandboxMusicDir:    ensureDir(path.join(USER_DIR, 'sandbox', 'music')),
   sandboxNotesDir:    ensureDir(path.join(USER_DIR, 'sandbox', 'notes')),
   sandboxDownloadsDir:ensureDir(path.join(USER_DIR, 'sandbox', 'downloads')),
+  // 用户拖进聊天窗口的原始资源。放在 sandbox 内，让开启文件沙箱时 Agent
+  // 仍能在用户给出后续指令后读取；聊天历史通过 /media/chat/<hash> 展示。
+  sandboxChatUploadsDir: ensureDir(path.join(USER_DIR, 'sandbox', 'chat-uploads')),
   sandboxAudioDir:    ensureDir(path.join(USER_DIR, 'sandbox', 'audio')),
   sandboxArticlesDir: ensureDir(path.join(USER_DIR, 'sandbox', 'articles')),
   sandboxLyricsDir:   ensureDir(path.join(USER_DIR, 'sandbox', 'lyrics')),

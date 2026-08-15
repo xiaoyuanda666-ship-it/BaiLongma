@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 import { config } from '../config.js'
+import { persistChatMediaBuffer } from '../chat-media.js'
 import { createMergedAbortSignal } from '../capabilities/abort-utils.js'
 import { assertWebUrlAllowed } from '../capabilities/tools/web/url-policy.js'
 import { getRuntimeMcpServers } from './config.js'
@@ -436,7 +437,9 @@ function compactContentItem(item = {}) {
       type: item.type,
       mimeType: item.mimeType,
       bytes: typeof item.data === 'string' ? Math.floor(item.data.length * 0.75) : 0,
-      note: 'binary payload omitted from text-only Bailongma MCP MVP',
+      note: item.type === 'image'
+        ? 'binary payload persisted separately when this is a browser screenshot; use screenshot.image_path for delivery'
+        : 'binary payload omitted from the text tool result',
     }
   }
   return { type: String(item.type || 'unknown'), value: String(item.text || '').slice(0, 2000) }
@@ -447,6 +450,7 @@ function formatMcpToolResult(tool, result, {
   serverConfig = null,
   browserPreview = null,
   browserLifecycle = null,
+  browserScreenshot = null,
 } = {}) {
   const isBuiltInChrome = serverConfig?.builtIn === true && serverConfig?.chromeDevtools === true
   const rawContent = Array.isArray(result?.content) ? result.content : []
@@ -461,8 +465,11 @@ function formatMcpToolResult(tool, result, {
     content: hydratedContent.map(compactContentItem),
   }
   if (result?.structuredContent !== undefined) payload.structured_content = result.structuredContent
-  if (result?.isError === true) payload.error = 'MCP tool returned isError=true'
+  if (result?.isError === true) {
+    payload.error = String(result?.structuredContent?.error || textFromMcpResult(result) || 'MCP tool returned isError=true')
+  }
   if (browserPreview) payload.browser_preview = browserPreview
+  if (browserScreenshot) payload.screenshot = browserScreenshot
   if (browserLifecycle) Object.assign(payload, browserLifecycle)
   const serialized = JSON.stringify(payload, null, 2)
   if (serialized.length <= MAX_TOOL_RESULT_CHARS) return serialized
@@ -517,7 +524,11 @@ function extractChromePages(result = {}) {
     pages.push({
       id: Number(match[1]),
       selected: /\[selected\]\s*$/i.test(line),
-      url: match[2].match(/\((https?:\/\/[^)]+)\)/)?.[1] || '',
+      // Error documents (chrome-error://), bootstrap pages (about:blank), and
+      // ordinary HTTP(S) pages all belong to the same managed WebContents.
+      // Keeping only HTTP(S) here made the target disappear after a failed
+      // navigation even though its page id was still valid.
+      url: match[2].match(/\(([^)]+)\)/)?.[1] || '',
     })
   }
   return pages
@@ -533,7 +544,9 @@ async function bindEmbeddedBrowserPage(connection, bridge, context = {}) {
   )
   const pages = extractChromePages(listResult)
   const expectedUrls = new Set([target.debugUrl, target.url].filter(Boolean).map(String))
+  const sameManagedView = connection.embeddedTarget?.webContentsId === target.webContentsId
   const page = pages.find(candidate => expectedUrls.has(candidate.url))
+    || (sameManagedView ? pages.find(candidate => candidate.id === connection.embeddedPageId) : null)
   if (!page) {
     throw new Error(`BaiLongma live browser target was not found in DevTools pages (${target.targetId || 'unknown target'})`)
   }
@@ -624,6 +637,49 @@ function textFromMcpResult(result = {}) {
     .join('\n')
 }
 
+function normalizeBrowserFindResult(value, expectedQuery = '') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const query = String(value.query || expectedQuery || '').trim()
+  const totalMatches = Number(value.total_matches)
+  const currentMatch = Number(value.current_match)
+  if (!query || !Number.isInteger(totalMatches) || totalMatches < 0) return null
+  if (!Number.isInteger(currentMatch) || currentMatch < 0 || currentMatch > totalMatches) return null
+  return {
+    query,
+    found: totalMatches > 0,
+    total_matches: totalMatches,
+    current_match: currentMatch,
+    case_sensitive: value.case_sensitive === true,
+    source: String(value.source || 'rendered_page_text'),
+    url: String(value.url || ''),
+    title: String(value.title || ''),
+  }
+}
+
+function extractBrowserFindResult(result = {}, expectedQuery = '') {
+  const structuredCandidates = [
+    result?.structuredContent?.page_find,
+    result?.structuredContent?.result,
+    result?.structuredContent,
+  ]
+  for (const candidate of structuredCandidates) {
+    const normalized = normalizeBrowserFindResult(candidate, expectedQuery)
+    if (normalized) return normalized
+  }
+
+  const text = textFromMcpResult(result).trim()
+  const candidates = []
+  for (const match of text.matchAll(/```json\s*([\s\S]*?)```/gi)) candidates.push(match[1])
+  candidates.push(text)
+  for (const candidate of candidates) {
+    try {
+      const normalized = normalizeBrowserFindResult(JSON.parse(String(candidate || '').trim()), expectedQuery)
+      if (normalized) return normalized
+    } catch {}
+  }
+  return null
+}
+
 function resultContainsProtectedLogin(result) {
   const values = []
   const visit = value => {
@@ -646,12 +702,8 @@ const USER_ONLY_LOGIN_TOOLS = new Set([
 async function resolveChromeToolSteps(name, args, connection, context = {}) {
   if (connection?.embeddedPageId != null && name === 'browser_tabs') {
     const action = String(args?.action || 'list').toLowerCase()
-    if (action === 'new') {
-      return {
-        steps: [{ remoteName: 'navigate_page', arguments: { type: 'url', url: String(args?.url || 'about:blank') } }, { remoteName: 'take_snapshot', arguments: {} }],
-        leadingContent: [],
-        closurePerformed: false,
-      }
+    if (action !== 'list') {
+      throw new TypeError('BaiLongma manages one live page; browser_tabs supports action="list" only. Use browser_navigate to replace it.')
     }
     const target = connection.embeddedTarget || {}
     return {
@@ -704,7 +756,15 @@ async function ensureBuiltInChromeConnectionUnlocked(deps = {}) {
   })
   const current = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)
   if (current?.status === 'connected' && JSON.stringify(current.config) === JSON.stringify(desired)) {
-    await bindEmbeddedBrowserPage(current, bridge)
+    try {
+      await bindEmbeddedBrowserPage(current, bridge)
+    } catch (error) {
+      const state = typeof bridge.getState === 'function' ? await bridge.getState() : null
+      const recoverable = Boolean(state?.error) || /^chrome-error:/i.test(String(state?.debugUrl || state?.url || ''))
+      if (!recoverable || typeof bridge.recoverPage !== 'function') throw error
+      await bridge.recoverPage()
+      await bindEmbeddedBrowserPage(current, bridge)
+    }
     return current
   }
   if (current) {
@@ -712,7 +772,15 @@ async function ensureBuiltInChromeConnectionUnlocked(deps = {}) {
     await closeConnection(current)
   }
   const connection = await connectServerOnce(desired, deps)
-  await bindEmbeddedBrowserPage(connection, bridge)
+  try {
+    await bindEmbeddedBrowserPage(connection, bridge)
+  } catch (error) {
+    const state = typeof bridge.getState === 'function' ? await bridge.getState() : null
+    const recoverable = Boolean(state?.error) || /^chrome-error:/i.test(String(state?.debugUrl || state?.url || ''))
+    if (!recoverable || typeof bridge.recoverPage !== 'function') throw error
+    await bridge.recoverPage()
+    await bindEmbeddedBrowserPage(connection, bridge)
+  }
   return connection
 }
 
@@ -740,6 +808,73 @@ function writeChromePreviewImage(result) {
   } catch {
     return ''
   }
+}
+
+function persistChromeScreenshot(result) {
+  const image = (Array.isArray(result?.content) ? result.content : [])
+    .find(item => item?.type === 'image' && typeof item?.data === 'string' && item.data.length > 0)
+  if (!image) return null
+  try {
+    const mime = String(image.mimeType || 'image/png').toLowerCase()
+    const ext = mime === 'image/jpeg' ? '.jpg' : mime === 'image/webp' ? '.webp' : '.png'
+    const persisted = persistChatMediaBuffer(Buffer.from(image.data, 'base64'), {
+      mime,
+      ext,
+    })
+    return {
+      image_path: persisted.path,
+      image_url: persisted.url,
+      mime_type: persisted.mime,
+      bytes: persisted.size,
+      delivered: false,
+      instruction: 'To show this screenshot to the user, call send_message with image_path set to screenshot.image_path. Do not claim it was delivered before send_message succeeds.',
+    }
+  } catch (error) {
+    return {
+      delivered: false,
+      error: `Screenshot capture succeeded but persistence failed: ${error?.message || String(error)}`,
+    }
+  }
+}
+
+function browserNavigationFailure(result = {}) {
+  const text = textFromMcpResult(result)
+  if (!/(?:Unable to navigate|Navigation (?:failed|timeout)|net::ERR_[A-Z_]+|chrome-error:\/\/chromewebdata)/i.test(text)) return ''
+  return text.split(/\r?\n/).find(line => /(?:Unable to navigate|Navigation (?:failed|timeout)|net::ERR_[A-Z_]+)/i.test(line))
+    || 'Browser navigation failed'
+}
+
+async function closeManagedBrowserWithoutCdp(name, context = {}) {
+  const bridge = chromeBridgeForDeps(context.mcpDeps || {})
+  if (typeof bridge?.closePage !== 'function') return null
+  const run = builtInChromeQueue.catch(() => {}).then(async () => {
+    await bridge.closePage()
+    const connection = connections.get(BUILTIN_CHROME_DEVTOOLS_ID)
+    if (connection) {
+      connection.embeddedPageId = null
+      connection.embeddedTarget = null
+    }
+    return JSON.stringify({
+      ok: true,
+      source: 'mcp',
+      server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+      server_name: 'BaiLongma Dedicated Chrome',
+      tool: name,
+      remote_tool: name,
+      content: [],
+      browser_preview: {
+        mode: '',
+        state: 'closed',
+        action: name,
+        surface: 'bailongma_live_browser',
+        visible_window: false,
+        profile: 'dedicated',
+        page_closed: true,
+      },
+    }, null, 2)
+  })
+  builtInChromeQueue = run.then(() => undefined, () => undefined)
+  return run
 }
 
 async function captureChromeBrowserPreview(connection, tool, result, context = {}) {
@@ -833,6 +968,21 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
   const validation = await validateBuiltInChromeArgs(name, args, context)
   if (!validation.ok) return validation.result
   const safeArgs = validation.args
+  if (name === 'browser_close' && safeArgs?.page_id == null) {
+    try {
+      const closed = await closeManagedBrowserWithoutCdp(name, context)
+      if (closed) return closed
+    } catch (error) {
+      return JSON.stringify({
+        ok: false,
+        source: 'mcp',
+        server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+        remote_tool: name,
+        code: 'BROWSER_CLOSE_FAILED',
+        error: error?.message || String(error),
+      }, null, 2)
+    }
+  }
   const failureResult = error => JSON.stringify({
     ok: false,
     source: 'mcp',
@@ -861,8 +1011,10 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
       const { steps, closurePerformed = false } = stepPlan
       const parts = [...(stepPlan.leadingContent || [])]
       let finalResult = { content: [] }
+      let browserFindResult = null
       const bridge = chromeBridgeForDeps(context.mcpDeps || {})
-      const beforeActionTarget = name === 'browser_click' && typeof bridge?.getTarget === 'function'
+      const tracksPageChange = ['browser_click', 'browser_navigate_back', 'browser_navigate_forward'].includes(name)
+      const beforeActionTarget = tracksPageChange && typeof bridge?.getTarget === 'function'
         ? await bridge.getTarget()
         : null
       let recoverableClickError = null
@@ -896,6 +1048,23 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
             text: `Click navigation wait ended early; verifying the live page: ${error?.message || String(error)}`,
           })
           continue
+        }
+        if (name === 'browser_find' && step.browserFindCount === true) {
+          browserFindResult = extractBrowserFindResult(result, safeArgs.text)
+        }
+        if (step.remoteName === 'navigate_page') {
+          const failure = browserNavigationFailure(result)
+          if (failure) {
+            result = {
+              ...result,
+              isError: true,
+              structuredContent: {
+                ...(result?.structuredContent || {}),
+                code: 'BROWSER_NAVIGATION_FAILED',
+                error: failure,
+              },
+            }
+          }
         }
         parts.push(...(Array.isArray(result?.content) ? result.content : []))
         finalResult = result || finalResult
@@ -933,13 +1102,17 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
         parts.push({ type: 'text', text: '## Viewport state' })
         parts.push(...(Array.isArray(viewportResult?.content) ? viewportResult.content : []))
       }
+      const afterActionTarget = beforeActionTarget && typeof bridge?.getTarget === 'function'
+        ? await bridge.getTarget()
+        : null
+      const beforeUrl = String(beforeActionTarget?.url || beforeActionTarget?.debugUrl || '')
+      const afterUrl = String(afterActionTarget?.url || afterActionTarget?.debugUrl || '')
       if (recoverableClickError) {
-        const afterActionTarget = typeof bridge?.getTarget === 'function'
+        const verifiedAfterTarget = typeof bridge?.getTarget === 'function'
           ? await bridge.getTarget()
           : null
-        const beforeUrl = String(beforeActionTarget?.url || beforeActionTarget?.debugUrl || '')
-        const afterUrl = String(afterActionTarget?.url || afterActionTarget?.debugUrl || '')
-        if (!afterUrl || afterUrl === beforeUrl) {
+        const verifiedAfterUrl = String(verifiedAfterTarget?.url || verifiedAfterTarget?.debugUrl || afterUrl)
+        if (!verifiedAfterUrl || verifiedAfterUrl === beforeUrl) {
           return {
             isError: true,
             content: parts.concat({
@@ -950,13 +1123,60 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
         }
         parts.push({
           type: 'text',
-          text: `Click navigation confirmed by live WebContents URL: ${afterUrl}`,
+          text: `Click navigation confirmed by live WebContents URL: ${verifiedAfterUrl}`,
         })
       }
       const combined = {
         ...finalResult,
         content: parts,
         __bailongmaClosurePerformed: closurePerformed && finalResult?.isError !== true,
+      }
+      if (beforeActionTarget) {
+        combined.structuredContent = {
+          ...(combined.structuredContent || {}),
+          page_change: {
+            before_url: beforeUrl,
+            after_url: afterUrl,
+            url_changed: Boolean(beforeUrl && afterUrl && beforeUrl !== afterUrl),
+          },
+        }
+      }
+      if (['browser_navigate_back', 'browser_navigate_forward'].includes(name)
+          && beforeUrl && (!afterUrl || afterUrl === beforeUrl) && combined.isError !== true) {
+        combined.isError = true
+        combined.structuredContent = {
+          ...(combined.structuredContent || {}),
+          code: 'BROWSER_HISTORY_UNAVAILABLE',
+          error: `${name === 'browser_navigate_back' ? 'Back' : 'Forward'} navigation did not change the live page. The requested browser history entry is unavailable.`,
+        }
+        combined.content.unshift({ type: 'text', text: combined.structuredContent.error })
+      }
+      if (name === 'browser_find') {
+        if (browserFindResult) {
+          combined.structuredContent = {
+            ...(combined.structuredContent || {}),
+            page_find: browserFindResult,
+          }
+          combined.content.unshift({
+            type: 'text',
+            text: `Current-page find: ${JSON.stringify(browserFindResult)}`,
+          })
+        } else {
+          combined.isError = true
+          combined.structuredContent = {
+            ...(combined.structuredContent || {}),
+            code: 'BROWSER_FIND_COUNT_UNAVAILABLE',
+            error: 'The current page text could not be counted reliably. The browser stayed on the same page; do not switch to downloads, shell commands, or another URL.',
+          }
+          combined.content.unshift({
+            type: 'text',
+            text: combined.structuredContent.error,
+          })
+        }
+      }
+      if (name === 'browser_take_screenshot' && combined.isError !== true) {
+        combined.__bailongmaScreenshot = persistChromeScreenshot(combined)
+        if (!combined.__bailongmaScreenshot?.image_path) combined.isError = true
       }
       if (combined.__bailongmaClosurePerformed === true) {
         const bridge = chromeBridgeForDeps(context.mcpDeps || {})
@@ -986,7 +1206,11 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
       // has one selected target, so another action must not slip between an
       // action result and the card preview it is meant to represent.
       const formattedPromise = captureChromeBrowserPreview(connection, publicTool, result, context)
-        .then(browserPreview => formatMcpToolResult(publicTool, result, { serverConfig: connection.config, browserPreview }))
+        .then(browserPreview => formatMcpToolResult(publicTool, result, {
+          serverConfig: connection.config,
+          browserPreview,
+          browserScreenshot: result.__bailongmaScreenshot || null,
+        }))
       connection.callQueue = formattedPromise.then(() => undefined, () => undefined)
       return await formattedPromise
     } catch (error) {

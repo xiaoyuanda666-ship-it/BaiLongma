@@ -268,7 +268,7 @@ async function loadFresh(json) {
   assert(customChain.includes(DEFAULT_MIMO_MODEL), 'G: custom MiMo model still keeps built-in fallbacks')
 }
 
-// Scenario H: Zhipu defaults to GLM-5.1 and validates with a lightweight no-thinking ping.
+// Scenario H: Zhipu defaults to GLM-5.1 and validates through Responses.
 {
   const { DEFAULT_ZHIPU_MODEL, ZHIPU_PROVIDER, getProviderModelFallbacks, __internals } = await loadFresh({ schemaVersion: 4 })
   assert(DEFAULT_ZHIPU_MODEL === 'glm-5.1', 'H: Zhipu default model is GLM-5.1')
@@ -279,7 +279,8 @@ async function loadFresh(json) {
   const customChain = getProviderModelFallbacks(ZHIPU_PROVIDER, 'future-glm-model')
   assert(customChain.length === 1 && customChain[0] === 'future-glm-model', 'H: custom Zhipu model is preserved')
   const ping = __internals.buildPingParams(ZHIPU_PROVIDER, DEFAULT_ZHIPU_MODEL)
-  assert(ping.thinking?.type === 'disabled', 'H: Zhipu activation ping disables thinking')
+  assert(Array.isArray(ping.input) && ping.input[0]?.type === 'message', 'H: Zhipu activation ping uses Responses input Items')
+  assert(ping.max_output_tokens === 32, 'H: Zhipu activation ping uses max_output_tokens')
 }
 
 // Scenario I: provider files preserve old keys and allow switching back without re-entering a key.

@@ -2580,9 +2580,11 @@ function handle({ type, data = {}, ts = null }) {
       }
       break;
     case "stream_chunk":
-      // 思考流：只驱动 token 速率指示器，不进聊天（保持 dashboard 纯净）
+      // 推理摘要不进入聊天；commentary 是模型明确标记的可见过程说明，
+      // 只显示在认知流里。二者都与 final_answer 聊天气泡严格分离。
       currentStream().clearStatus();
       bumpTokens(data.text);
+      if (data.mode === "commentary") currentStream().appendCommentary(data.text);
       // 正文流：累积 + 实时重渲染气泡（剥离协议标记 / 藏半截标记）；语音轮喂给逐句合成队列
       if (data.mode === "text" && liveReplyActive) {
         liveRawText += data.text;
@@ -2818,13 +2820,34 @@ function handle({ type, data = {}, ts = null }) {
       // 外部渠道判定：channel 非空且非本地，或 from_id 仍带外部前缀（兼容连接器直接 emit 的事件）
       const ch = String(data.channel || "").toUpperCase();
       const isExternal =
-        (ch && ch !== "TUI" && ch !== "API" && ch !== "SYSTEM" && ch !== "REMINDER" && ch !== "APP_SIGNAL" && ch !== "VOICE" && ch !== "语音识别")
+        (ch && ch !== "TUI" && ch !== "API" && ch !== "SYSTEM" && ch !== "REMINDER" && ch !== "APP_SIGNAL" && ch !== "VOICE" && ch !== "语音识别" && ch !== "RESOURCE")
         || (data.from_id && /^(wechat|discord|feishu|wecom):/i.test(data.from_id));
       if (isExternal) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
         addMsg("external", data.content, { label, alert: false, messageId: data.conversation_id || data.conversationId || "" });
         openChat(true);
       } else {
+        if (ch === "RESOURCE") {
+          const reconciled = chat?.reconcileResourceMessage?.(
+            data.client_message_id || data.clientMessageId,
+            data.conversation_id || data.conversationId,
+            data.resources || [],
+            data.resource_state || "pending",
+          );
+          if (!reconciled) {
+            addMsg("user", data.content, {
+              label: t("shell.resourceLabel"),
+              alert: false,
+              pending: false,
+              messageId: data.conversation_id || data.conversationId || "",
+              channel: "RESOURCE",
+              resources: data.resources || [],
+              resourceState: data.resource_state || "pending",
+            });
+          }
+          openChat();
+          break;
+        }
         const reconciled = chat?.reconcileSentMessage?.(
           data.client_message_id || data.clientMessageId,
           data.conversation_id || data.conversationId,
@@ -2842,6 +2865,9 @@ function handle({ type, data = {}, ts = null }) {
       }
       break;
     }
+    case "resources_consumed":
+      chat?.markResourceMessagesConsumed?.(data.conversation_ids || data.conversationIds || []);
+      break;
     case "agent_name_updated":
       setAgentName(data.name);
       break;

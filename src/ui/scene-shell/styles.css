@@ -74,6 +74,66 @@
   pointer-events: auto;          /* #stage 关掉了指针事件,surface 自身要恢复交互 */
 }
 
+/* 顶层卡片关闭按钮:常态不打扰内容，只在鼠标 hover 到卡片时显示。
+ * focus-visible 是键盘用户的可访问性兜底，不会改变鼠标交互规则。 */
+.surface.is-dismissible { padding-right: 54px; }
+.surface-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(154, 167, 184, 0.24);
+  border-radius: 50%;
+  background: rgba(11, 14, 20, 0.72);
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-3px) scale(0.92);
+  transition:
+    opacity 160ms var(--ease-out),
+    visibility 160ms,
+    transform 160ms var(--ease-out),
+    color 140ms,
+    background 140ms,
+    border-color 140ms;
+  backdrop-filter: blur(6px);
+}
+.surface-close::before,
+.surface-close::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 12px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+}
+.surface-close::before { transform: translate(-50%, -50%) rotate(45deg); }
+.surface-close::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.surface.is-dismissible:hover > .surface-close,
+.surface-close:focus-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+.surface-close:hover,
+.surface-close:focus-visible {
+  color: #fff;
+  background: rgba(255, 107, 107, 0.82);
+  border-color: rgba(255, 107, 107, 0.92);
+  outline: none;
+}
+
 /* intent 分区:shell 自行把语义重要性映射成呈现强度与落位。
  * ambient = 角落、低饱和、收缩;inform = 常规;confront = 居中、放大、抢焦点。 */
 .surface[data-intent="ambient"] {
@@ -166,14 +226,6 @@
 }
 .i-img.loaded { opacity: 1; transform: scale(1); }
 .i-cap { font-size: 14px; color: var(--text-dim); margin-top: 10px; }
-.i-close {
-  position: absolute; top: 8px; right: 8px; width: 30px; height: 30px;
-  border: none; border-radius: 50%; cursor: pointer;
-  background: rgba(0, 0, 0, 0.5); color: #fff; font-size: 20px; line-height: 1;
-  opacity: 0; transition: opacity 200ms; backdrop-filter: blur(4px);
-}
-.k-image:hover .i-close { opacity: 1; }
-
 /* ── kind: choice ───────────────────────────────────────────────────── */
 .c-prompt { margin: 0 0 16px; }
 .c-opts { display: flex; flex-wrap: wrap; gap: 10px; }

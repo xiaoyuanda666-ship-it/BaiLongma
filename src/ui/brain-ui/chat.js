@@ -46,6 +46,7 @@ export function initChat({
   const chatPinButton = document.getElementById("chat-pin-button");
   const sendBtn = document.getElementById("send-btn");
   const pasteAttachments = document.getElementById("paste-attachments");
+  const dropOverlay = document.getElementById("chat-drop-overlay");
 
   let inputLocked = false;
   const pendingLocalSends = new Set();
@@ -73,6 +74,9 @@ export function initChat({
   const PUSH_TO_TALK_PLACEHOLDER = t("shell.holdSpace");
   const MAX_PASTED_IMAGES = 8;
   const MAX_PASTED_IMAGE_BYTES = 12 * 1024 * 1024;
+  const MAX_DROPPED_RESOURCES = 8;
+  const MAX_DROPPED_RESOURCE_BYTES = 20 * 1024 * 1024;
+  const MAX_DROPPED_RESOURCE_TOTAL_BYTES = 40 * 1024 * 1024;
 
   function normalizeMessageId(value) {
     if (value === undefined || value === null || value === "") return "";
@@ -133,6 +137,89 @@ export function initChat({
     const date = timestamp ? new Date(timestamp) : new Date();
     if (!Number.isFinite(date.getTime())) return "";
     return formatDateTime(date, { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  function parseResourceMetadata(value) {
+    if (Array.isArray(value)) return value.filter(item => item && typeof item === "object");
+    try {
+      const parsed = JSON.parse(String(value || ""));
+      return Array.isArray(parsed) ? parsed.filter(item => item && typeof item === "object") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function formatResourceBytes(value) {
+    const bytes = Math.max(0, Number(value) || 0);
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+
+  function resourceExtension(name = "") {
+    const match = String(name || "").match(/\.([a-z0-9]{1,8})$/i);
+    return (match?.[1] || "FILE").toUpperCase();
+  }
+
+  function resourceStateText(state = "pending", detail = "") {
+    if (state === "uploading") return t("shell.resourceUploading");
+    if (state === "consumed") return t("shell.resourceConsumed");
+    if (state === "failed") return detail || t("shell.resourceFailed");
+    return t("shell.resourcePending");
+  }
+
+  function createResourceMessageBody(resources = [], state = "pending", detail = "") {
+    const body = document.createElement("div");
+    body.className = "chat-resource-body";
+    const list = document.createElement("div");
+    list.className = "chat-resource-list";
+
+    resources.forEach(resource => {
+      const href = String(resource.url || resource.preview_url || "");
+      const item = document.createElement(href ? "a" : "div");
+      item.className = "chat-resource-item";
+      if (href && item.tagName === "A") {
+        item.href = href;
+        item.target = "_blank";
+        item.rel = "noopener noreferrer";
+      }
+
+      if (resource.kind === "image" || String(resource.mime || "").startsWith("image/")) {
+        const image = document.createElement("img");
+        image.className = "chat-resource-thumb";
+        image.src = String(resource.preview_url || resource.url || "");
+        image.alt = String(resource.name || "image");
+        image.draggable = false;
+        item.appendChild(image);
+      } else {
+        const icon = document.createElement("span");
+        icon.className = "chat-resource-icon";
+        icon.textContent = resourceExtension(resource.name);
+        item.appendChild(icon);
+      }
+
+      const copy = document.createElement("span");
+      copy.className = "chat-resource-copy";
+      const name = document.createElement("span");
+      name.className = "chat-resource-name";
+      name.textContent = String(resource.name || "resource");
+      name.title = name.textContent;
+      const resourceDetail = document.createElement("span");
+      resourceDetail.className = "chat-resource-detail";
+      resourceDetail.textContent = [
+        String(resource.mime || "").replace(/^application\//, ""),
+        formatResourceBytes(resource.size),
+      ].filter(Boolean).join(" · ");
+      copy.append(name, resourceDetail);
+      item.appendChild(copy);
+      list.appendChild(item);
+    });
+
+    const status = document.createElement("div");
+    status.className = "chat-resource-state";
+    status.textContent = resourceStateText(state, detail);
+    body.append(list, status);
+    return body;
   }
 
   function setComposerLocked(locked, reason = "") {
@@ -279,6 +366,18 @@ export function initChat({
         .map(r => {
           // 外部渠道判定：channel 非空且不是本地（TUI/API），或 from_id 仍带外部前缀（兼容历史数据）
           const channel = (r.channel || "").toUpperCase();
+          if (r.role === "user" && channel === "RESOURCE") {
+            return {
+              role: "user",
+              text: r.content,
+              label: t("shell.resourceLabel"),
+              messageId: r.id,
+              timestamp: r.timestamp,
+              channel,
+              resources: parseResourceMetadata(r.resource_metadata || r.resourceMetadata),
+              resourceState: r.resource_state || r.resourceState || "pending",
+            };
+          }
           const isExternal =
             r.role === "user"
             && ((channel && channel !== "TUI" && channel !== "API" && channel !== "SYSTEM" && channel !== "REMINDER" && channel !== "APP_SIGNAL" && channel !== "VOICE" && channel !== "语音识别")
@@ -287,7 +386,7 @@ export function initChat({
             const label = friendlyChannelLabel(r.channel) || r.from_id;
             return { role: "external", text: r.content, label, messageId: r.id, timestamp: r.timestamp };
           }
-          return { role: r.role, text: r.content, messageId: r.id, timestamp: r.timestamp };
+          return { role: r.role, text: r.content, messageId: r.id, timestamp: r.timestamp, channel };
         });
       return { messages, rowCount: rows.length };
     } catch { return null; }
@@ -322,13 +421,25 @@ export function initChat({
       forceScroll = false,
       prepend = false,
       timestamp = null,
+      channel = "",
+      resources = [],
+      resourceState = "",
+      resourceDetail = "",
     } = options;
-    const defaultLabel = role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer";
+    const isResourceMessage = String(channel || "").toUpperCase() === "RESOURCE" || resources.length > 0;
+    const defaultLabel = isResourceMessage
+      ? t("shell.resourceLabel")
+      : (role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer");
     const labelText = label || defaultLabel;
     if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
     const shouldScrollToBottom = !prepend && (forceScroll || isNearChatBottom());
     const div = document.createElement("div");
     div.className = `msg msg-${role}`;
+    if (isResourceMessage) {
+      div.classList.add("msg-resource");
+      div.dataset.resourceState = resourceState || "pending";
+      div.dataset.resourcePreview = JSON.stringify(resources);
+    }
     const normalizedId = normalizeMessageId(messageId);
     if (normalizedId) div.dataset.messageId = normalizedId;
     const normalizedClientMessageId = normalizeMessageId(clientMessageId);
@@ -352,7 +463,9 @@ export function initChat({
     });
     meta.appendChild(timeSpan);
     div.appendChild(meta);
-    div.appendChild(createMarkdownBody(text));
+    div.appendChild(isResourceMessage
+      ? createResourceMessageBody(resources, resourceState || "pending", resourceDetail)
+      : createMarkdownBody(text));
     if (prepend) chatMessages.insertBefore(div, chatMessages.firstChild);
     else chatMessages.appendChild(div);
 
@@ -370,7 +483,7 @@ export function initChat({
     }
 
     if (!prepend) scrollChatToBottomIfFollowing(shouldScrollToBottom);
-    return true;
+    return div;
   }
 
   function reconcileSentMessage(clientMessageId, conversationId) {
@@ -388,6 +501,59 @@ export function initChat({
     return true;
   }
 
+  function updateResourceMessageElement(element, {
+    resources = null,
+    state = "pending",
+    detail = "",
+    conversationId = "",
+  } = {}) {
+    if (!element) return false;
+    const previousResources = parseResourceMetadata(element.dataset.resourcePreview || "[]");
+    if (resources) {
+      for (const resource of previousResources) {
+        if (String(resource.preview_url || "").startsWith("blob:")) {
+          try { URL.revokeObjectURL(resource.preview_url); } catch {}
+        }
+      }
+    }
+    const nextResources = resources || previousResources;
+    element.classList.add("msg-resource");
+    element.dataset.resourceState = state;
+    element.dataset.resourcePreview = JSON.stringify(nextResources);
+    if (conversationId) {
+      element.dataset.messageId = normalizeMessageId(conversationId);
+      renderedMessageIds.add(normalizeMessageId(conversationId));
+    }
+    element.querySelector(".chat-resource-body")?.replaceWith(
+      createResourceMessageBody(nextResources, state, detail),
+    );
+    return true;
+  }
+
+  function reconcileResourceMessage(clientMessageId, conversationId, resources = [], state = "pending") {
+    const clientId = normalizeMessageId(clientMessageId);
+    const element = pendingClientMessages.get(clientId)
+      || (clientId ? chatMessages.querySelector(`[data-client-message-id="${CSS.escape(clientId)}"]`) : null);
+    if (!element) return false;
+    pendingClientMessages.delete(clientId);
+    return updateResourceMessageElement(element, {
+      resources,
+      state,
+      conversationId,
+    });
+  }
+
+  function markResourceMessagesConsumed(ids = []) {
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const normalized = normalizeMessageId(id);
+      if (!normalized) continue;
+      const element = chatMessages.querySelector(`[data-message-id="${CSS.escape(normalized)}"]`);
+      if (element?.classList.contains("msg-resource")) {
+        updateResourceMessageElement(element, { state: "consumed" });
+      }
+    }
+  }
+
   function restoreChatHistory() {
     if (historySyncPromise) return historySyncPromise;
     historySyncPromise = fetchChatHistory().then(page => {
@@ -401,6 +567,9 @@ export function initChat({
         messageId: i.messageId,
         source: "history",
         timestamp: i.timestamp,
+        channel: i.channel,
+        resources: i.resources || [],
+        resourceState: i.resourceState || "",
       }));
       if (!historyInitialized || !oldestHistoryId) {
         oldestHistoryId = normalizeMessageId(messages[0]?.messageId);
@@ -445,6 +614,9 @@ export function initChat({
           source: "history",
           prepend: true,
           timestamp: item.timestamp,
+          channel: item.channel,
+          resources: item.resources || [],
+          resourceState: item.resourceState || "",
         });
       }
       oldestHistoryId = normalizeMessageId(messages[0]?.messageId) || oldestHistoryId;
@@ -626,6 +798,133 @@ export function initChat({
     renderPastedImages();
     openChat();
   }
+
+  function droppedFilePreview(file) {
+    const mime = String(file?.type || "application/octet-stream");
+    const resource = {
+      name: String(file?.name || "resource"),
+      mime,
+      size: Number(file?.size || 0),
+      kind: mime.startsWith("image/") ? "image" : "file",
+    };
+    if (resource.kind === "image") {
+      try { resource.preview_url = URL.createObjectURL(file); } catch {}
+    }
+    return resource;
+  }
+
+  function addFailedResourceMessage(resources, detail) {
+    const element = addMsg("user", resources.map(item => item.name).join("\n"), {
+      label: t("shell.resourceLabel"),
+      channel: "RESOURCE",
+      resources,
+      resourceState: "failed",
+      resourceDetail: detail,
+      dedupe: false,
+      forceScroll: true,
+    });
+    openChat();
+    return element;
+  }
+
+  async function stageDroppedResourceFiles(files = []) {
+    const selected = Array.from(files || []).filter(file => file instanceof File);
+    if (!selected.length) return;
+    const previews = selected.slice(0, MAX_DROPPED_RESOURCES).map(droppedFilePreview);
+    const totalBytes = selected.reduce((sum, file) => sum + Number(file.size || 0), 0);
+    if (
+      selected.length > MAX_DROPPED_RESOURCES
+      || selected.some(file => Number(file.size || 0) > MAX_DROPPED_RESOURCE_BYTES)
+      || totalBytes > MAX_DROPPED_RESOURCE_TOTAL_BYTES
+    ) {
+      addFailedResourceMessage(previews, t("shell.resourceTooLarge"));
+      return;
+    }
+
+    const clientMessageId = newClientMessageId();
+    const element = addMsg("user", previews.map(item => item.name).join("\n"), {
+      label: t("shell.resourceLabel"),
+      channel: "RESOURCE",
+      resources: previews,
+      resourceState: "uploading",
+      clientMessageId,
+      dedupe: false,
+      forceScroll: true,
+    });
+    openChat();
+
+    try {
+      const resources = await Promise.all(selected.map(async file => ({
+        name: file.name || "resource",
+        mime: file.type || "application/octet-stream",
+        size: file.size || 0,
+        data_url: await readFileAsDataUrl(file),
+      })));
+      const response = await fetch(`${apiBase}/message/resources`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from_id: "ID:000001",
+          client_id: getUiClientId(),
+          client_message_id: clientMessageId,
+          resources,
+        }),
+      });
+      let responseBody = {};
+      try { responseBody = await response.json(); } catch {}
+      if (!response.ok) throw new Error(responseBody.error || `HTTP ${response.status}`);
+      reconcileResourceMessage(
+        responseBody.client_message_id || clientMessageId,
+        responseBody.conversation_id || responseBody.conversationId,
+        responseBody.resources || previews,
+        responseBody.resource_state || "pending",
+      );
+    } catch (error) {
+      pendingClientMessages.delete(clientMessageId);
+      updateResourceMessageElement(element, {
+        state: "failed",
+        detail: error?.message || t("shell.resourceFailed"),
+      });
+      console.warn("[drop resources]", error?.message || error);
+    }
+  }
+
+  let fileDragDepth = 0;
+  function isFileDrag(event) {
+    return Array.from(event?.dataTransfer?.types || []).includes("Files");
+  }
+  function isOwnedDropzone(event) {
+    return Boolean(event?.target?.closest?.(".aivideo-dropzone"));
+  }
+  function hideDropOverlay() {
+    fileDragDepth = 0;
+    if (dropOverlay) dropOverlay.hidden = true;
+  }
+
+  window.addEventListener("dragenter", event => {
+    if (!isFileDrag(event) || isOwnedDropzone(event) || event.defaultPrevented) return;
+    event.preventDefault();
+    fileDragDepth += 1;
+    if (dropOverlay) dropOverlay.hidden = false;
+  });
+  window.addEventListener("dragover", event => {
+    if (!isFileDrag(event) || isOwnedDropzone(event) || event.defaultPrevented) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (dropOverlay) dropOverlay.hidden = false;
+  });
+  window.addEventListener("dragleave", event => {
+    if (!isFileDrag(event) || isOwnedDropzone(event)) return;
+    fileDragDepth = Math.max(0, fileDragDepth - 1);
+    if (fileDragDepth === 0 && dropOverlay) dropOverlay.hidden = true;
+  });
+  window.addEventListener("drop", event => {
+    if (!isFileDrag(event) || isOwnedDropzone(event) || event.defaultPrevented) return;
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer?.files || []);
+    hideDropOverlay();
+    void stageDroppedResourceFiles(files);
+  });
 
   async function send({ channel = null, label = null, text = null } = {}) {
     if (inputLocked) return;
@@ -1031,6 +1330,8 @@ export function initChat({
     openChat,
     restoreChatHistory,
     reconcileSentMessage,
+    reconcileResourceMessage,
+    markResourceMessagesConsumed,
     send,
     unlockAudioOnFirstGesture,
   };

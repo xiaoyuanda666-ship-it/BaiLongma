@@ -1,6 +1,7 @@
 import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { CODING_BLOCK, DIAGNOSE_BLOCK, shouldInjectCoding, shouldInjectDiagnose } from './prompt-blocks/coding-discipline.js'
+import { LOCAL_SERVICE_SAFETY_BLOCK, shouldInjectLocalServiceSafety } from './prompt-blocks/local-service-safety.js'
 import { capabilityContextBlocks } from './capabilities/capability-registry.js'
 import { CAPABILITY_DEMO_PROMPT_BLOCK, shouldInjectCapabilityDemo } from './capability-demo-intent.js'
 import { formatUserProfileForPrompt } from './profile/format.js'
@@ -78,7 +79,9 @@ function stripLevel2Sections(markdown, headings = []) {
 const COMPACT_DECISION_LOOP_BLOCK = `## Decision And Execution Core
 - Resolve the current message against the immediately preceding exchange first. Identify the outcome the user actually needs, not merely the literal wording.
 - If the answer is already supported by the conversation, runtime context, memory, or earlier tool results, answer directly. Do not fetch evidence you already have.
-- When action is needed, choose the narrowest useful tool or call find_tool for a missing capability. Treat real tool results as evidence; never turn a plan, promise, or guess into a completion claim.
+- When action is needed, choose the narrowest useful tool. If that tool is not currently visible, calling find_tool is mandatory; never replace the missing tool call with prose such as "I need to read/search/run...".
+- A zero-match find_tool result is not proof that the capability is unavailable. Retry up to four total searches with materially different queries: exact tool name if known, action + object, Chinese/English synonyms, then a broader capability category. Never repeat the same query. Stop searching as soon as a relevant tool is loaded and call it on the next step. Only report the capability unavailable after those distinct searches fail or the catalog explicitly says its schema/provider is unavailable.
+- Treat real tool results as evidence; never turn a plan, promise, or guess into a completion claim.
 - For multi-step work, repeat Execute → Observe → Judge only while each cycle adds new evidence or advances a distinct step. When the goal is met, reply and stop. After a failed or repeated result, change the approach once or report the concrete blocker; never loop by rephrasing the same call.
 - For ambiguous input, use the last exchange and current context to choose the most likely interpretation. Ask only when different interpretations would materially change the outcome or make the action risky; otherwise make a reasonable, reversible attempt.`
 
@@ -370,7 +373,7 @@ At the start of each turn, read the temporary [runtime context] before the conve
 
 ## Response Rules
 Check the current channel first. If it’s a local user message, reply in plain text and don’t use send_message. If it’s a TICK, plain text stays private, so only use send_message when you actually want to contact someone. For social channels like WeChat, Discord, Feishu, or WeCom, always use send_message. On local turns, only use it to reach another person, another channel, or to send a progress update. Most importantly, never leave a real user message unanswered.
-Give one clear answer and don’t repeat yourself. Never write tool calls as text or pretend to call a tool with phrases like “[calling].” Use the real tool interface. If the tool you need isn’t loaded, use find_tool. Trust the tools you have, and try their documented features before saying something can’t be done.
+Give one clear answer and don’t repeat yourself. Never write tool calls as text or pretend to call a tool with phrases like “[calling]” or “I need to read/search/run…”. Use the real tool interface. If the tool you need isn’t loaded, use find_tool. If the first search is empty, change the query and keep searching as directed by the Tool Discovery Recovery rules; do not give up after one wording. Trust the tools you have, and try their documented features before saying something can’t be done.
 Keep replies short, natural, and useful. Match the user’s style without copying them. You can share your own view and say when you think the user is wrong.
 For larger tasks, use [SET_TASK: ...] only when the task starts, changes, or hits a problem. Use [CLEAR_TASK] when it is finished. Use [RECALL: ...] only when you truly need more memory.
 For future reminders, use manage_reminder with an exact time. List reminders before canceling one.
@@ -531,8 +534,12 @@ When the input comes from voice, reply in short, natural sentences because the a
   // 三信号源：消息文本 / 当前 task 文本 / 最近动作模式（write_file+exec 组合）。
   // TICK 自主干活轮靠后两个信号触发，用户一字未发段也在——这是「内化」与「skill 读取」的区别。
   const disciplineSignals = { userMessage, taskText: currentTaskText, recentActionsText: recentActionsSummary }
-  if (shouldInjectCoding(disciplineSignals)) {
+  const codingContext = shouldInjectCoding(disciplineSignals)
+  if (codingContext) {
     prompt += `\n\n${CODING_BLOCK}`
+  }
+  if (shouldInjectLocalServiceSafety({ ...disciplineSignals, coding: codingContext })) {
+    prompt += `\n\n${LOCAL_SERVICE_SAFETY_BLOCK}`
   }
   if (shouldInjectDiagnose(disciplineSignals)) {
     prompt += `\n\n${DIAGNOSE_BLOCK}`

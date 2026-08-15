@@ -35,6 +35,7 @@ assert.equal(signingIsRequired([], { BAILONGMA_REQUIRE_WINDOWS_SIGNING: 'true' }
 
 assert.equal(pkg.scripts['build:win'], 'node scripts/build-win.mjs')
 assert.equal(pkg.scripts['build:win:release'], 'node scripts/build-win.mjs --require-signing')
+assert.equal(pkg.scripts['release:win'], 'node scripts/build-win.mjs --require-signing && node scripts/publish-win-updates.mjs')
 assert.equal(pkg.scripts['smoke:win-artifacts'], 'node ./scripts/smoke-win-artifacts.mjs')
 assert.deepEqual(pkg.build.win.target[0].arch, ['x64'])
 for (const required of ['electron/**/*', 'src/**/*', 'skills/**/*', 'package.json']) {

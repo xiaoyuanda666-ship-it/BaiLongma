@@ -7,6 +7,7 @@ export const CHANNEL_NORMALIZE = {
   FEISHU: 'FEISHU',
   TUI: 'TUI',
   API: 'TUI',
+  RESOURCE: 'TUI',
   voice: 'TUI',
   VOICE: 'TUI',
   '语音识别': 'TUI',

@@ -119,6 +119,50 @@ for (const messageBody of [
     `explicit browser size switch is executable in the first round: ${messageBody}`)
 }
 
+for (const messageBody of [
+  '看看这个页面有没有机器学习',
+  '机器学习在这页出现几次',
+  '帮我在当前页面里找一下机器学习',
+]) {
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(routed.includes('browser_find'), `current-page find is directly executable: ${messageBody}`)
+  assert.ok(['download_file', 'run_command', 'exec_command'].every(name => !routed.includes(name)),
+    `current-page find does not inject shell/download fallbacks: ${messageBody}`)
+}
+
+for (const messageBody of [
+  '查查 Electron 官方网站',
+  '查查看 Electron 官网',
+  '找找 Electron 官方网站',
+  '帮我看看 Electron 官网',
+  '再帮我查查 Electron 官方网站',
+]) {
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `concrete colloquial online lookup is executable without discovery: ${messageBody}`)
+}
+for (const messageBody of ['我只是随口说说，不用查查', '别帮我找找网站，我不需要']) {
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(BROWSER_TOOLS.every(name => !routed.includes(name)),
+    `negated colloquial lookup does not activate the browser: ${messageBody}`)
+}
+
+for (const messageBody of [
+  '不是详情页，我要回搜索结果列表页',
+  '不对，回搜索结果列表',
+  '我说的是结果页',
+  '别进详情，回列表',
+  '回刚才的搜索结果页',
+]) {
+  const routed = selectTools({
+    messageBody,
+    isTick: false,
+    recentActionLog: [{ tool: 'browser_click' }],
+  })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `results-list correction keeps direct browser continuity: ${messageBody}`)
+}
+
 assert.equal(findCapabilitiesByQuery('用大的窗口打开')[0]?.tools[0], 'browser_set_display_mode',
   'find_tool prioritizes the display switch for a spoken size request')
 
@@ -197,6 +241,23 @@ assert.ok(BROWSER_TOOLS.every(name => !continued.includes(name)) && continued.in
 assert.ok([...FORBIDDEN_BROWSER_TOOLS, ...STATELESS_WEB_TOOLS].every(name => !continued.includes(name)),
   'browser continuity cannot restore legacy, unsafe, or removed web tools')
 
+for (const messageBody of [
+  '刷新一下。', '往下翻一屏。', '往上翻一屏。', '返回。', '再往前。', '放大一点。',
+]) {
+  const routed = selectTools({
+    messageBody,
+    isTick: false,
+    recentActionLog: [{ tool: 'browser_snapshot' }],
+  })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `recent browser state resolves a terse browser command directly: ${messageBody}`)
+}
+for (const messageBody of ['刷新一下。', '返回。', '放大一点。']) {
+  const routed = selectTools({ messageBody, isTick: false, recentActionLog: [] })
+  assert.ok(BROWSER_TOOLS.every(name => !routed.includes(name)),
+    `ambiguous terse wording does not activate browser tools without browser continuity: ${messageBody}`)
+}
+
 const unrelatedAfterBrowser = selectTools({
   messageBody: 'explain this project architecture',
   isTick: false,
@@ -229,6 +290,9 @@ assert.match(browserContext, /Match search results against the user's full meani
 assert.match(browserContext, /remote GitHub page[\s\S]*Do not switch to read_file, list_dir, find_tool for local files/)
 assert.match(browserContext, /Final replies should report only the key result and real failures/)
 assert.match(browserContext, /browser_find/)
+assert.match(browserContext, /query, found, total_matches, and current_match/)
+assert.match(browserContext, /Never navigate away, download the page, call run_command\/exec_command\/curl\/grep/)
+assert.match(browserContext, /window mode is not operating-system fullscreen/i)
 assert.match(browserContext, /browser_snapshot rather than a screenshot/)
 assert.match(browserContext, /CAPTCHA\/challenge page is a hard stop[\s\S]*Do not navigate to another provider/)
 assert.match(browserContext, /Chrome DevTools uid values[\s\S]*latest raw uid/)

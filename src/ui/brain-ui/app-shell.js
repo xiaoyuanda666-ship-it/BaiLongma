@@ -197,6 +197,13 @@ const createSecondaryPanel = () => `
 
 const createConsole = () => `
 <section class="console" id="chat-area">
+  <div class="chat-drop-overlay" id="chat-drop-overlay" hidden aria-hidden="true">
+    <div class="chat-drop-overlay-card">
+      <span class="chat-drop-overlay-icon" aria-hidden="true">＋</span>
+      <strong>松开以加入聊天记录</strong>
+      <small>文件会等待你接下来的文字或语音指令</small>
+    </div>
+  </div>
   <div class="compact-voice-strip" id="compact-voice-strip" aria-live="polite">
     <span class="compact-voice-indicator" aria-hidden="true"></span>
     <span class="compact-voice-label">语音识别</span>
@@ -328,7 +335,7 @@ const createSettingsModal = () => `
                 <option value="deepseek">DeepSeek</option>
                 <option value="minimax">MiniMax</option>
                 <option value="mimo">小米 MiMo</option>
-                <option value="custom">自定义端点（本地/其他）</option>
+                <option value="custom">自定义 Responses API 端点</option>
               </select>
             </div>
             <div class="settings-row" id="settings-model-row">
@@ -339,7 +346,7 @@ const createSettingsModal = () => `
               <label class="settings-label" for="settings-official-custom-model">自定义模型名</label>
               <input class="settings-input" id="settings-official-custom-model" type="text" placeholder="如 kimi-k2.8, gpt-5.2, glm-6" autocomplete="off" spellcheck="false">
             </div>
-            <!-- 自定义端点字段（选择"自定义端点"时显示） -->
+            <!-- 自定义 Responses API 端点字段 -->
             <div id="settings-custom-llm-section" style="display:none;">
               <div class="settings-row">
                 <label class="settings-label" for="settings-custom-baseurl">Base URL</label>
@@ -374,10 +381,10 @@ const createSettingsModal = () => `
             </div>
           </div>
           <div class="settings-section">
-            <div class="settings-section-label">思考模式</div>
-            <p class="settings-hint">默认关闭：直接作答，响应更快、更省 token。开启后模型会先推理再回答，复杂任务更可靠（具体想多深由模型自己决定），但响应更慢。遇到难题想要更高质量时再开启。</p>
+            <div class="settings-section-label">推理强度</div>
+            <p class="settings-hint">默认使用较低推理强度；开启后通过 Responses API 请求 high 强度。仅在当前模型支持 reasoning 时生效。</p>
             <div class="settings-row">
-              <label class="settings-label" for="settings-thinking">启用思考模式</label>
+              <label class="settings-label" for="settings-thinking">使用高强度推理</label>
               <label class="settings-toggle">
                 <input type="checkbox" id="settings-thinking">
                 <span class="settings-toggle-track"></span>

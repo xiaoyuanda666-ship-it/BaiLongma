@@ -76,10 +76,16 @@ export function recordOutboundFailure({ toId, channel, externalTargetId, content
   return failure
 }
 
-function claimOutbound({ toId, channel, externalTargetId, content }) {
+function claimOutbound({ toId, channel, externalTargetId, content, turnId = '' }) {
   const now = Date.now()
   pruneOutboundClaims(now)
-  const key = createOutboundAttemptKey({ toId, channel, externalTargetId, content })
+  // This lock prevents two delivery paths inside one turn (explicit send and
+  // runtime fallback) from racing. Identical answers to two distinct user
+  // turns are legitimate and must not suppress one another.
+  const key = JSON.stringify([
+    createOutboundAttemptKey({ toId, channel, externalTargetId, content }),
+    String(turnId || ''),
+  ])
   if (recentOutboundClaims.has(key)) return false
   recentOutboundClaims.set(key, now)
   return true
@@ -335,7 +341,10 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     recordOutboundFailure({ toId: resolvedId, channel: requestedChannel, externalTargetId: '', content: outboundContent, reason: delivery.error })
     return makeDeliveryFailure({ targetId: resolvedId, channel: requestedChannel, error: 'delivery_route_unavailable', reason: delivery.error })
   }
-  if (media && (delivery.isLocal || !delivery.externalTargetId || !/^wechat:clawbot:/i.test(delivery.externalTargetId))) {
+  // The local TUI renders persisted /media/chat Markdown directly. Other
+  // external transports still need a binary-upload implementation; today
+  // that is available through WeChat ClawBot only.
+  if (media && !delivery.isLocal && (!delivery.externalTargetId || !/^wechat:clawbot:/i.test(delivery.externalTargetId))) {
     const resolvedTarget = delivery.externalTargetId || (delivery.isLocal ? 'TUI' : 'unknown')
     return `错误：媒体消息当前仅支持微信 ClawBot（wechat:clawbot:*），当前解析目标为 ${resolvedTarget}`
   }
@@ -381,6 +390,7 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     channel: channelLabel,
     externalTargetId: delivery.externalTargetId || '',
     content: outboundContent,
+    turnId: context.replyTurnId || context.turnId || '',
   })) {
     return makeDeliveryFailure({
       targetId: resolvedId,

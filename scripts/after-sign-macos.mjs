@@ -1,86 +1,63 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { Arch } from 'builder-util'
+import {
+  DEVELOPER_TEAM,
+  signAppRecursively,
+  submitForNotarization,
+  verifySignedApp,
+} from './macos-signing-lib.mjs'
+import { assertMacUpdaterConfigFile, updaterConfigPathForApp } from './macos-updater-config.mjs'
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const root = path.resolve(import.meta.dirname, '..')
 const entitlementsPath = path.join(root, 'build', 'entitlements.mac.plist')
-const relativeSpeechHelper = path.join(
-  'Contents', 'Resources', 'app.asar.unpacked', 'build', 'native-speech-recognizer',
-)
-const relativeNodeRuntime = path.join('Contents', 'Resources', 'node-runtime', 'node')
-const disableTimestamp = String(process.env.BAILONGMA_CODESIGN_TIMESTAMP || '').trim().toLowerCase() === 'none'
-const timestampArgs = disableTimestamp ? ['--timestamp=none'] : []
+const notaryProfile = process.env.BAILONGMA_NOTARY_PROFILE || 'BailongmaNotary'
 
 function run(command, args) {
-  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8' })
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   if (result.error) throw result.error
   if (result.status !== 0) {
-    const detail = String(result.stderr || result.stdout || '').trim()
-    throw new Error(`${command} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`)
+    const detail = `${result.stderr || ''}\n${result.stdout || ''}`.trim()
+    throw new Error(`${command} ${args.join(' ')} failed${detail ? `\n${detail}` : ''}`)
   }
-  return `${result.stdout || ''}\n${result.stderr || ''}`
+  return `${result.stdout || ''}\n${result.stderr || ''}`.trim()
 }
 
-function signingIdentity(appPath) {
-  const configured = String(process.env.CSC_NAME || process.env.BAILONGMA_CODESIGN_IDENTITY || '').trim()
-  if (configured) return configured
-  const detail = run('codesign', ['--display', '--verbose=4', appPath])
-  const authority = detail.match(/^Authority=(Developer ID Application: .+)$/m)?.[1]?.trim()
-  if (!authority) throw new Error('Could not recover the Developer ID Application identity from the signed app')
-  return authority
-}
-
-/**
- * electron-builder signs bare entries from mac.binaries without applying
- * entitlementsInherit. The native speech helper is such an entry, yet it owns
- * AVAudioEngine input. Re-sign it explicitly, then re-seal only the outer app
- * bundle so the helper keeps its own audio-input entitlement.
- */
 export default async function afterSignMac(context) {
   if (context.electronPlatformName !== 'darwin') return
-  // electron-builder passes the architecture output directory here (for
-  // example dist/mac-arm64), rather than the .app bundle itself.
+  const arch = Arch[context.arch]
+  const expectedArch = arch === 'x64' ? 'x86_64' : 'arm64'
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
-  const speechHelperPath = path.join(appPath, relativeSpeechHelper)
-  const nodeRuntimePath = path.join(appPath, relativeNodeRuntime)
-  if (!fs.existsSync(speechHelperPath)) {
-    throw new Error(`Native speech helper is missing from packaged app: ${speechHelperPath}`)
+  const speechHelperPath = path.join(appPath, 'Contents', 'Resources', 'app.asar.unpacked', 'build', 'native-speech-recognizer')
+  const nodeRuntimePath = path.join(appPath, 'Contents', 'Resources', 'node-runtime', 'node')
+  for (const requiredPath of [speechHelperPath, nodeRuntimePath, entitlementsPath]) {
+    if (!fs.existsSync(requiredPath)) throw new Error(`Required macOS signing input is missing: ${requiredPath}`)
   }
-  if (!fs.existsSync(nodeRuntimePath)) {
-    throw new Error(`Bundled Node runtime is missing from packaged app: ${nodeRuntimePath}`)
-  }
-  if (!fs.existsSync(entitlementsPath)) {
-    throw new Error(`macOS entitlements are missing: ${entitlementsPath}`)
-  }
+  assertMacUpdaterConfigFile(updaterConfigPathForApp(appPath), arch, `${arch} signed app updater config`)
 
-  const identity = signingIdentity(appPath)
-  // Re-sign the complete bundle first. This is normally a no-op after
-  // electron-builder's own signing, but makes the hook robust when a nested
-  // framework was left with a stale signature by a signer retry.
-  run('codesign', [
-    '--force', '--deep', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, ...timestampArgs, appPath,
-  ])
-  run('codesign', [
-    '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, ...timestampArgs, speechHelperPath,
-  ])
-  // The Chrome DevTools MCP server runs in this standalone Node process. Node
-  // initializes V8 JIT on startup; under the hardened runtime it crashes with
-  // SIGTRAP unless its own signature has the JIT entitlements. `--deep` does
-  // not reliably apply them to an executable stored under Resources/.
-  run('codesign', [
-    '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, ...timestampArgs, nodeRuntimePath,
-  ])
-  // Do not use --deep here: it would sign the helper again without its own
-  // entitlement file. The outer signature only needs resealing after the
-  // nested helper changed.
-  run('codesign', [
-    '--force', '--options', 'runtime', '--entitlements', entitlementsPath,
-    '--sign', identity, ...timestampArgs, appPath,
-  ])
-  run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath])
-  console.log('[after-sign:mac] signed native speech helper and Node runtime with required entitlements')
+  const signed = signAppRecursively(appPath, { entitlementsPath, speechHelperPath, nodeRuntimePath })
+  const verified = verifySignedApp(appPath, { expectedArch, speechHelperPath, nodeRuntimePath })
+  if (process.env.BAILONGMA_NOTARY_MODE === 'skip') {
+    console.log(`[after-sign:mac] signed ${signed.machOFiles.length} Mach-O files and ${signed.bundles.length} nested bundles; verified ${verified.machOCount} timestamped code objects; notarization skipped by request`)
+    return
+  }
+  const archivePath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}-${arch}-notary.zip`)
+  try {
+    run('ditto', ['-c', '-k', '--keepParent', appPath, archivePath])
+    const staged = process.env.BAILONGMA_NOTARY_MODE === 'submit'
+    const submission = submitForNotarization(archivePath, { profile: notaryProfile, teamId: DEVELOPER_TEAM, cwd: root, wait: !staged })
+    if (staged) {
+      const statePath = path.join(context.outDir, `notary-app-${arch}.json`)
+      fs.writeFileSync(statePath, `${JSON.stringify({ kind: 'app', arch, id: submission.id, appPath }, null, 2)}\n`, { mode: 0o600 })
+      console.log(`[after-sign:mac] submitted ${arch} app as ${submission.id}; finalization will wait and staple it`)
+    } else {
+      console.log(`[after-sign:mac] Apple accepted ${arch} app submission ${submission.id}`)
+      run('xcrun', ['stapler', 'staple', '-v', appPath])
+      run('xcrun', ['stapler', 'validate', '-v', appPath])
+    }
+  } finally {
+    fs.rmSync(archivePath, { force: true })
+  }
+  console.log(`[after-sign:mac] signed ${signed.machOFiles.length} Mach-O files and ${signed.bundles.length} nested bundles; verified ${verified.machOCount} timestamped code objects`)
 }

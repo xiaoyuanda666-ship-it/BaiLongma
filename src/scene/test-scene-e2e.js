@@ -1,7 +1,8 @@
 // Scene 端到端集成测试 —— 用真实 WebSocket 跑通 core 传输链(SCENE-PROTOCOL §2/§3/§8)。
 //
 // 覆盖:握手(hello→welcome→snapshot)、sceneStore 变更→scene.patch 广播(rev/base 正确)、
-// resync→全量快照、intent 上行→处理器收到。用 scene-server.js 本体 + 真 ws 客户端,无 DB 依赖。
+// resync→全量快照、intent 上行→处理器收到、dismiss→移除卡片。
+// 用 scene-server.js 本体 + 真 ws 客户端,无 DB 依赖。
 // 跑:`node src/scene/test-scene-e2e.js`(需要 ws 包,已是项目依赖)。
 
 import http from 'http'
@@ -89,6 +90,17 @@ async function main() {
   await sleep(60)
   const got = intents.find(i => i.name === 'select')
   ok('intent 上行被处理器收到', !!got && got.surface === 'c1' && got.data?.value === 'a')
+
+  // 6) dismiss 是顶层卡片的通用关闭意图 → SceneStore 移除 + 广播 remove patch
+  sceneStore.set('dismiss-me', { kind: 'text', data: { body: '可关闭卡片' } })
+  await waitFor(inbox, m => m.type === 'scene.patch' && m.ops?.[0]?.surface?.id === 'dismiss-me')
+  inbox.length = 0
+  client.send(JSON.stringify({ v: 1, type: 'intent', surface: 'dismiss-me', name: 'dismiss', data: {}, ts: Date.now() }))
+  const dismissPatch = await waitFor(inbox, m => m.type === 'scene.patch' && m.ops?.[0]?.op === 'remove')
+  ok('dismiss 广播 remove patch', dismissPatch?.ops?.[0]?.id === 'dismiss-me')
+  ok('dismiss 从 SceneStore 移除 surface', sceneStore.get('dismiss-me') === null)
+  const gotDismiss = intents.find(i => i.name === 'dismiss' && i.surface === 'dismiss-me')
+  ok('dismiss 仍上行给意图处理器', !!gotDismiss)
 
   client.close()
   server.close()

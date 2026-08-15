@@ -87,7 +87,7 @@ export function buildModelCatalogText() {
       : (ids.join(', ') || '—')
     lines.push(`■ ${info.label}（provider id: ${key}）— ${modelStr}`)
   }
-  lines.push('■ 自定义端点（custom）— 任意 OpenAI 兼容服务，自填 baseURL + 模型名（本地 Ollama、中转代理等）')
+  lines.push('■ 自定义端点（custom）— 任意 OpenAI Responses API 兼容服务，自填 baseURL + 模型名')
   lines.push('')
   lines.push('注：本清单由 config.js 的 PROVIDER_CONFIG 自动生成，新增 provider 或模型会自动反映。')
   lines.push('配置入口：⚙ → 模型设置。填入 API Key 后系统 Auto 模式会自动识别归属，无需手动选 provider。')

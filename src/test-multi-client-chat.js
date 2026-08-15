@@ -121,6 +121,66 @@ try {
     assert.equal(event.data.turn_id, 'turn-multi-client-test')
   }
 
+  const screenshotPath = path.join(tmp, 'browser-screenshot.png')
+  fs.writeFileSync(screenshotPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl8a1cAAAAASUVORK5CYII=', 'base64'))
+  const mediaDelivery = JSON.parse(await deliverMessage({
+    target_id: 'ID:000001',
+    channel: 'TUI',
+    content: '',
+    image_path: screenshotPath,
+  }, {
+    currentChannel: 'TUI',
+    replyClientId: clientA,
+    replyTurnId: 'turn-local-screenshot-test',
+  }))
+  assert.equal(mediaDelivery.ok, true)
+  const [mediaA, mediaB] = await Promise.all([
+    streamA.nextEvent('message'),
+    streamB.nextEvent('message'),
+  ])
+  for (const event of [mediaA, mediaB]) {
+    assert.match(event.data.content, /^!\[[^\]]+\]\(\/media\/chat\/[a-f0-9]+\.png\)$/)
+    assert.equal(event.data.media_kind, 'image')
+    assert.equal(event.data.media_path, screenshotPath)
+    assert.equal(event.data.target_client_id, clientA)
+  }
+  const duplicateMediaDelivery = JSON.parse(await deliverMessage({
+    target_id: 'ID:000001',
+    channel: 'TUI',
+    content: '',
+    image_path: screenshotPath,
+  }, {
+    currentChannel: 'TUI',
+    replyClientId: clientA,
+    replyTurnId: 'turn-local-screenshot-test',
+  }))
+  assert.equal(mediaDelivery.delivered, true,
+    'the first real screenshot delivery remains authoritative')
+  assert.equal(duplicateMediaDelivery.delivered, false)
+  assert.equal(duplicateMediaDelivery.error, 'duplicate_outbound_race',
+    'the transport rejects an identical race without changing the first success fact')
+
+  const nextTurnMediaDelivery = JSON.parse(await deliverMessage({
+    target_id: 'ID:000001',
+    channel: 'TUI',
+    content: '',
+    image_path: screenshotPath,
+  }, {
+    currentChannel: 'TUI',
+    replyClientId: clientA,
+    replyTurnId: 'turn-local-screenshot-followup',
+  }))
+  assert.equal(nextTurnMediaDelivery.delivered, true,
+    'an identical reply to a new user turn is delivered instead of being mistaken for a race')
+  const [nextTurnMediaA, nextTurnMediaB] = await Promise.all([
+    streamA.nextEvent('message'),
+    streamB.nextEvent('message'),
+  ])
+  for (const event of [nextTurnMediaA, nextTurnMediaB]) {
+    assert.equal(event.data.turn_id, 'turn-local-screenshot-followup')
+    assert.equal(event.data.media_path, screenshotPath)
+  }
+
   await streamA.reader.cancel()
   emitEvent('voice_reconnect_probe', {
     target_client_id: clientA,
@@ -136,6 +196,8 @@ try {
   const rows = await fetch(`${baseUrl}/conversations?limit=10`).then(response => response.json())
   assert(rows.some(row => row.id === posted.conversation_id && row.content === userText))
   assert(rows.some(row => row.role === 'jarvis' && row.content === replyText))
+  assert(rows.some(row => row.role === 'jarvis' && /\/media\/chat\/[a-f0-9]+\.png/.test(row.content)),
+    'local screenshot delivery is persisted as renderable chat media')
 
   console.log('Multi-client chat sync and directed voice routing tests passed')
 } finally {

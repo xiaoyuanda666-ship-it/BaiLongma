@@ -12,12 +12,12 @@ if (!apiKey) {
 }
 
 const BASE = 'https://api.xiaomimimo.com/v1'
-const ENDPOINT = `${BASE}/chat/completions`
+const ENDPOINT = `${BASE}/responses`
 
 const body = {
   model,
-  messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
-  max_tokens: 16,
+  input: [{ role: 'user', content: 'Reply with exactly: hello' }],
+  max_output_tokens: 16,
   temperature: 0,
   stream: false,
 }
@@ -59,7 +59,7 @@ try {
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({ apiKey, baseURL: BASE, timeout: 12000 })
   const t0 = Date.now()
-  const resp = await client.chat.completions.create(body)
+  const resp = await client.responses.create(body)
   const ms = Date.now() - t0
   console.log(`   ok (${ms}ms):`, JSON.stringify(resp).slice(0, 500))
   results.push({ ok: true })

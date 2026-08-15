@@ -64,9 +64,9 @@ export const SELF_KNOWLEDGE_TOPICS = {
       {
         title: 'LLM 调用与提示词组装',
         content: `■ llm.js
-  - 封装 OpenAI 兼容 API（DeepSeek、MiniMax、Qwen、Moonshot、Zhipu、OpenAI、小米 MiMo、自定义端点）
-  - 支持流式输出、工具调用（tool_calls）、<think> 推理块
-  - 工具循环：模型出 tool_call → executor 执行 → 结果回灌 → 继续，直到收尾
+	  - 统一使用 OpenAI Responses API（供应商与自定义端点必须支持 /responses）
+	  - 按类型化语义事件处理正文、推理、函数调用与完成/截断/失败状态
+	  - 工具循环：模型出 function_call Item → executor 执行 → function_call_output 回灌 → 继续，直到收尾
   - 内置耗时工具的进度兜底（执行慢工具前替模型先应一声）、投递权威判定（delivered 为唯一权威）
 
 ■ prompt.js —— 系统提示词组装（buildSystemPrompt）
@@ -164,8 +164,9 @@ ${TOOL_CATALOG_TEXT}`,
 统一工作流：
   browser_navigate（首次调用自动启动浏览器，并在结果中附带页面结构和 target ref）→ browser_click / browser_type / browser_fill_form 等具体动作（动作结果自动附带更新后的 snapshot）→ 直接依据最新结果继续。不要在每次导航或动作后例行调用 browser_snapshot；只有页面被动变化、结果缺少 snapshot 或需要局部刷新时才调用它，长页面优先用 browser_find 定位。
 浏览器后退、前进和刷新分别使用 browser_navigate_back、browser_navigate_forward 和 browser_reload。不得重新打开当前 URL 冒充“前进”或“刷新”；真实工具不可用或失败时必须如实说明。点击只有在最终 URL 或页面状态真实变化时才能宣称完成导航。搜索结果必须匹配用户的完整语义，最终回复只汇报关键结果和真实失败，不拼接逐步操作旁白。
+新闻、最新动态和多结果检索中，搜索结果页只用于发现候选，不算已核验来源。最终采用的每一条都必须打开原文并从最新 snapshot 核验；用户要求 N 条就核验 N 个不同事件的原文页面。忙碌页、导航超时、空壳页和仅有搜索摘要的页面都不能计数，数量不足时如实报告，不用模型记忆或猜测补足。最终链接必须指向本轮实际打开过的来源。
 当用户把任务明确限定在网页、浏览器或 GitHub 远端页面时，远端不存在就是结论，不得擅自降级为 read_file、list_dir、find_tool 本地文件搜索或 shell 本地搜索；只有当前消息同时明确要求检查本地项目时才允许。用户明确说不要使用本地文件工具时，该轮绝对禁止。
-浏览器同一时间只控制白龙马内置 Chromium 的当前页面。browser_tabs 可列出、选择、新建或按 page_id 关闭标签页；检索时优先在当前页原地导航。内置浏览器可跨回复保留；BaiLongma 退出时只会关闭自己启动的实例，绝不关闭用户自行打开的浏览器。普通 browser_close 绝不删除 Cookie、登录态、站点存储、缓存和历史；只有当前用户明确要求删除“白龙马/Agent/你自带的浏览器数据”时，才能调用专用 browser_clear_data。
+浏览器同一时间只控制白龙马内置 Chromium 的一个实时页面。browser_tabs 只用于如实列出这个页面，不承诺同时保留多个标签；需要打开另一个地址时用 browser_navigate 原地替换。内置浏览器可跨回复保留；BaiLongma 退出时只会关闭自己管理的页面，绝不关闭用户自行打开的浏览器。普通 browser_close 绝不删除 Cookie、登录态、站点存储、缓存和历史；只有当前用户明确要求删除“白龙马/Agent/你自带的浏览器数据”时，才能调用专用 browser_clear_data。
 浏览器有三种清晰的表面：①“你的浏览器 / 小窗口浏览器”是 Brain UI 中的实时 WebContentsView；②“我的浏览器 / 大窗口浏览器”把同一个 WebContentsView 移入带原生标题栏和窗口控制的大窗口，URL、标题、历史与 webContents id 连续不变；③“电脑浏览器 / 系统或默认浏览器”是用户日常浏览器，使用 system_browser_open 打开后 Agent 不可继续控制，且绝不共享 Cookie、历史、密码或扩展数据。
 browser_set_display_mode 只切换同一实时页面的呈现：mode=card 嵌入 Brain UI，mode=window 移入可拖动、可关闭的大窗口；不导航、不刷新也不创建新 target。交互登录、X、Google OAuth、二维码、验证码及用户接管一律使用 mode=window。账号、密码、MFA、验证码和 OAuth 同意全由用户完成；完成或取消后必须以 browser_snapshot 观察真实页面状态，不能猜测或声称登录成功。
 浏览器显示由运行时按任务自动选择：非交互读取可显示实时 card；登录、填写、回复、发布、上传、支付或用户接管优先使用原生大窗口。card 绝不使用截图替代实时页面，也不共享或导入用户默认浏览器 Profile。

@@ -839,6 +839,7 @@ export function insertConversation({
   channel = '', external_party_id = '',
   focus_topic = null, open_question = 0, thread_id = null,
   delivery_status = '',
+  resource_state = '', resource_metadata = '',
 }) {
   const db = getDB()
   const fromId = normalizeConversationPartyId(from_id)
@@ -846,10 +847,47 @@ export function insertConversation({
   const topic = focus_topic == null ? currentFocusTopic : String(focus_topic || '')
   const threadId = thread_id == null ? currentThreadId : String(thread_id || '')
   const info = db.prepare(`
-    INSERT INTO conversations (role, from_id, to_id, content, timestamp, channel, external_party_id, focus_topic, open_question, thread_id, delivery_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(role, fromId, toId, content, timestamp, channel || '', external_party_id || '', topic, open_question ? 1 : 0, threadId, delivery_status || '')
+    INSERT INTO conversations (
+      role, from_id, to_id, content, timestamp, channel, external_party_id,
+      focus_topic, open_question, thread_id, delivery_status, resource_state, resource_metadata
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    role, fromId, toId, content, timestamp, channel || '', external_party_id || '',
+    topic, open_question ? 1 : 0, threadId, delivery_status || '',
+    resource_state || '', typeof resource_metadata === 'string' ? resource_metadata : JSON.stringify(resource_metadata || ''),
+  )
   return Number(info.lastInsertRowid) || 0
+}
+
+export function getPendingConversationResources(fromId) {
+  const normalizedId = normalizeConversationPartyId(fromId)
+  if (!normalizedId) return []
+  return getDB().prepare(`
+    SELECT ${CONVERSATION_COLUMNS}
+    FROM conversations
+    WHERE role = 'user'
+      AND from_id = ?
+      AND channel = 'RESOURCE'
+      AND resource_state = 'pending'
+    ORDER BY id ASC
+  `).all(normalizedId)
+}
+
+export function markConversationResourcesConsumed(ids = []) {
+  const normalizedIds = [...new Set((Array.isArray(ids) ? ids : [])
+    .map(value => Number(value))
+    .filter(value => Number.isInteger(value) && value > 0))]
+  if (normalizedIds.length === 0) return 0
+  const placeholders = normalizedIds.map(() => '?').join(', ')
+  const info = getDB().prepare(`
+    UPDATE conversations
+    SET resource_state = 'consumed'
+    WHERE channel = 'RESOURCE'
+      AND resource_state = 'pending'
+      AND id IN (${placeholders})
+  `).run(...normalizedIds)
+  return info.changes || 0
 }
 
 export function updateConversationDeliveryStatus(id, status) {
@@ -1206,7 +1244,8 @@ export function upsertUserProfile(profile = {}) {
 const RECENT_RAW_CONTEXT_FLOOR = 60
 const CONVERSATION_COLUMNS = `
   id, role, from_id, to_id, content, channel, timestamp, created_at,
-  external_party_id, focus_absorbed, focus_topic, open_question, thread_id, delivery_status
+  external_party_id, focus_absorbed, focus_topic, open_question, thread_id, delivery_status,
+  resource_state, resource_metadata
 `
 
 function normalizeConversationLimit(limit, fallback = 20) {
@@ -1254,6 +1293,7 @@ export function getRecentConversationTimeline(limit = 20, maxHours = 24, { inclu
     const rows = db.prepare(`
       SELECT ${CONVERSATION_COLUMNS} FROM conversations
       WHERE timestamp >= ?
+      AND channel <> 'RESOURCE'
       ORDER BY timestamp DESC, id DESC
       LIMIT ?
     `).all(cutoff, safeLimit)
@@ -1264,6 +1304,7 @@ export function getRecentConversationTimeline(limit = 20, maxHours = 24, { inclu
   const rows = db.prepare(`
     SELECT ${CONVERSATION_COLUMNS} FROM conversations
     WHERE timestamp >= ?
+    AND channel <> 'RESOURCE'
     ORDER BY timestamp DESC, id DESC
     LIMIT ?
   `).all(cutoff, safeLimit)

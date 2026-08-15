@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.1.655",
+  "version": "2.2.113",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -14,15 +14,27 @@
     "start:backend": "chcp 65001 >nul && node --env-file=.env src/index.js",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
     "dev": "chcp 65001 >nul && node --env-file=.env --watch src/index.js",
-    "build": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
+    "build": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
     "build:win": "node scripts/build-win.mjs",
     "build:win:release": "node scripts/build-win.mjs --require-signing",
-    "build:linux": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs --platform=linux --arch=x64 && node scripts/prepare-node-runtime.mjs --platform=linux --arch=x64 && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 -a x64 && node ./node_modules/electron-builder/cli.js --linux AppImage --x64",
+    "build:linux": "node scripts/build-linux.mjs",
     "build:mac": "node scripts/build-mac.mjs",
+    "build:mac:no-notarize": "node scripts/build-mac.mjs --no-notarize",
     "build:mac:x64": "node scripts/build-mac.mjs x64",
     "build:mac:arm64": "node scripts/build-mac.mjs arm64",
     "build:mac:universal-speech": "node scripts/build-macos-speech.mjs universal --required",
-    "publish": "node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
+    "upload:mac": "node scripts/publish-mac-updates.mjs",
+    "upload:mac:dry-run": "node scripts/publish-mac-updates.mjs --dry-run --skip-smoke",
+    "release:mac": "node scripts/build-mac.mjs && node scripts/publish-mac-updates.mjs",
+    "release:ui": "node tools/release-console/server.mjs",
+    "release:ui:test": "node --test tools/release-console/test/*.test.mjs",
+    "upload:win": "node scripts/publish-win-updates.mjs",
+    "upload:win:dry-run": "node scripts/publish-win-updates.mjs --dry-run --skip-smoke",
+    "release:win": "node scripts/build-win.mjs --require-signing && node scripts/publish-win-updates.mjs",
+    "upload:linux": "node scripts/publish-linux-updates.mjs",
+    "upload:linux:dry-run": "node scripts/publish-linux-updates.mjs --dry-run --skip-smoke",
+    "release:linux": "node scripts/build-linux.mjs && node scripts/publish-linux-updates.mjs",
+    "publish": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
     "test:i18n": "node ./src/test-i18n.js",
@@ -47,7 +59,9 @@
     "test:browser-challenge": "node ./src/test-browser-challenge-guard.js",
     "test:no-fake-detection": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-no-fake-tool-detection.js\"",
     "test:config-upgrade": "node ./src/test-config-upgrade.js",
+    "test:llm-responses": "node ./src/test-llm-responses.js && node ./src/test-llm-responses-loop.js",
     "test:media-modules": "node ./src/test-media-modules.js",
+    "test:chat-resources": "electron ./src/test-chat-resources.js",
     "test:db-schema-module": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-db-schema-module.js\"",
     "test:activation-intro": "node ./src/test-activation-intro-gate.js",
     "test:voice-continuous": "node ./src/test-voice-continuous.js",
@@ -62,6 +76,9 @@
     "test:chrome-devtools": "node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs",
     "test:browser-packaging": "node ./scripts/test-playwright-packaging.mjs",
     "test:windows-build": "node ./scripts/test-windows-build.mjs",
+    "test:linux-build": "node ./scripts/test-linux-build.mjs",
+    "test:update-publish": "node ./scripts/test-macos-updater-config.mjs && node ./scripts/test-publish-updates.mjs",
+    "test:native-deps": "node ./scripts/test-native-dependency-versions.mjs",
     "test:browser-core": "node ./src/test-web-url-policy.js && node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs && node ./src/test-browser-display.js && node ./src/test-browser-agent-integration.js && node ./src/test-browser-challenge-guard.js && node ./src/test-web-read.js && node ./src/test-web-search.js",
     "test:network-audit": "node ./electron/test-network-audit-utils.cjs && node ./electron/test-network-diagnostics.cjs && node ./scripts/test-compare-network-captures.mjs",
     "test:network-audit:real": "electron ./electron/test-network-diagnostics-real.cjs",
@@ -71,6 +88,7 @@
     "test:browser-real": "electron ./electron/test-browser-real-workflow.cjs",
     "smoke:mac-artifacts": "node ./scripts/smoke-mac-artifacts.mjs",
     "smoke:win-artifacts": "node ./scripts/smoke-win-artifacts.mjs",
+    "smoke:linux-artifacts": "node ./scripts/smoke-linux-artifacts.mjs",
     "repair:memories:dry": "electron ./scripts/repair-memory-quality.js",
     "repair:memories": "electron ./scripts/repair-memory-quality.js --apply",
     "probe:config-upgrade": "node ./scripts/probe-config-upgrade.mjs",
@@ -85,7 +103,7 @@
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@playwright/mcp": "0.0.78",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "12.8.0",
     "chrome-devtools-mcp": "1.6.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
@@ -262,8 +280,10 @@
     },
     "mac": {
       "icon": "build/icon.icns",
+      "identity": "Yuanda Xiao (XD5VMPN37G)",
       "forceCodeSigning": true,
       "hardenedRuntime": true,
+      "timestamp": "http://timestamp.apple.com/ts01",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "signIgnore": [
@@ -300,6 +320,25 @@
     "linux": {
       "icon": "build/icon.png",
       "category": "Utility",
+      "files": [
+        "!**/node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
+        "!**/node_modules/onnxruntime-node/bin/napi-v3/win32/**/*",
+        "!**/node_modules/sherpa-onnx-darwin-*/**/*",
+        "!**/node_modules/sherpa-onnx-win-*/**/*",
+        "!build/native-speech-recognizer"
+      ],
+      "asarUnpack": [
+        "**/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+        "**/node_modules/chrome-devtools-mcp/**",
+        "**/node_modules/@huggingface/transformers/**",
+        "**/node_modules/sharp/**",
+        "**/node_modules/@img/sharp-linux-x64/**",
+        "**/node_modules/onnxruntime-node/**",
+        "**/node_modules/sherpa-onnx-node/**",
+        "**/node_modules/sherpa-onnx-linux-x64/**",
+        "src/voice/**",
+        "!build/native-speech-recognizer"
+      ],
       "target": [
         {
           "target": "AppImage",
@@ -311,6 +350,7 @@
       "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
     },
     "dmg": {
+      "sign": false,
       "title": "${productName} ${version}-${arch}",
       "backgroundColor": "#202a2f",
       "window": {
@@ -338,6 +378,8 @@
         "channel": "latest"
       }
     ],
-    "afterSign": "./scripts/after-sign-macos.mjs"
+    "afterPack": "./scripts/after-pack-macos.mjs",
+    "afterSign": "./scripts/after-sign-macos.mjs",
+    "afterAllArtifactBuild": "./scripts/after-all-artifacts-macos.mjs"
   }
 }

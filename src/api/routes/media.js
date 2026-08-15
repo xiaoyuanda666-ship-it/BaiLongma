@@ -156,7 +156,11 @@ export async function handleMediaRoutes(req, res, url) {
   if (req.method === 'GET' && url.pathname.startsWith('/media/chat/')) {
     const raw = url.pathname.slice('/media/chat/'.length)
     const filename = path.basename(decodeURIComponent(raw))
-    const mediaDir = paths.mediaDir
+    // 普通聊天媒体仍在 data/media；用户拖入的待处理资源存放在 sandbox/chat-uploads，
+    // 以便开启文件沙箱时 Agent 也能读取。URL 命名空间保持统一，历史记录无需区分来源。
+    const mediaDir = fs.existsSync(path.join(paths.mediaDir, filename))
+      ? paths.mediaDir
+      : paths.sandboxChatUploadsDir
     const filePath = path.join(mediaDir, filename)
     if (!ensureInside(res, mediaDir, filePath, { allowRoot: false })) return true
     const contentType = mimeFromChatMediaExt(path.extname(filename).toLowerCase())

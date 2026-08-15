@@ -6,7 +6,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { extractFile, listPackage } from '@electron/asar'
-import { assertPeX64 } from './build-win.mjs'
+import { assertPeX64, inspectWindowsSignature } from './build-win.mjs'
+import { inspectExternalBlockmap } from './publish-updates-lib.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -17,18 +18,35 @@ const appAsar = path.join(resources, 'app.asar')
 const appUnpacked = `${appAsar}.unpacked`
 const installer = path.join(root, 'dist', `Bailongma-Setup-${pkg.version}.exe`)
 const latestYml = path.join(root, 'dist', 'latest.yml')
+const blockmap = `${installer}.blockmap`
+const requireSigning = process.argv.slice(2).includes('--require-signing')
+const unknownArgs = process.argv.slice(2).filter(arg => arg !== '--require-signing')
+if (unknownArgs.length > 0) throw new Error(`Unknown argument(s): ${unknownArgs.join(', ')}`)
 
 if (process.platform !== 'win32' || process.arch !== 'x64') {
   throw new Error(`Windows artifact smoke requires Windows x64, got ${process.platform}-${process.arch}`)
 }
 
-for (const [file, label] of [[exe, 'packaged app'], [appAsar, 'app.asar'], [installer, 'NSIS installer'], [latestYml, 'latest.yml']]) {
+for (const [file, label] of [
+  [exe, 'packaged app'],
+  [appAsar, 'app.asar'],
+  [installer, 'NSIS installer'],
+  [blockmap, 'NSIS blockmap'],
+  [latestYml, 'latest.yml'],
+]) {
   assert.ok(fs.existsSync(file) && fs.statSync(file).isFile() && fs.statSync(file).size > 0, `${label} is missing or empty: ${file}`)
 }
 assertPeX64(exe, 'packaged Bailongma executable')
 assertPeX64(path.join(resources, 'node-runtime', 'node.exe'), 'bundled Node runtime')
 assertPeX64(path.join(appUnpacked, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'), 'packaged better-sqlite3 binding')
 assertPeX64(path.join(appUnpacked, 'node_modules', 'onnxruntime-node', 'bin', 'napi-v3', 'win32', 'x64', 'onnxruntime_binding.node'), 'packaged ONNX Runtime binding')
+inspectExternalBlockmap(blockmap)
+
+if (requireSigning) {
+  const signature = inspectWindowsSignature(installer)
+  assert.equal(String(signature.Status).toLowerCase(), 'valid',
+    `Windows installer must have a valid Authenticode signature: ${signature.StatusMessage || signature.Status}`)
+}
 
 assert.equal(fs.existsSync(path.join(appUnpacked, 'build', 'native-speech-recognizer')), false,
   'Windows package must not contain the macOS native speech helper')

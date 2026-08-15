@@ -619,7 +619,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     const cfgLlmDot = document.getElementById("settings-cfg-llm-dot");
     const cfgMedia = document.getElementById("settings-cfg-media");
     const cfgMediaDot = document.getElementById("settings-cfg-media-dot");
-    if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"}`;
+    if (cfgLlm) cfgLlm.textContent = `${llm.provider || "—"} · ${llm.model || "—"} · ${llm.apiFormat || "responses"}`;
     if (cfgLlmDot) {
       cfgLlmDot.textContent = "●";
       cfgLlmDot.className = `settings-config-dot ${llm.activated ? "active" : "inactive"}`;
@@ -1070,9 +1070,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
           body: JSON.stringify({ thinking }),
         });
         const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || "思考模式保存失败");
+        if (!res.ok || !data.ok) throw new Error(data.error || "推理强度保存失败");
         if (cachedLlm) cachedLlm.thinking = data.thinking;
-        return { message: data.thinking ? "思考模式已开启 · 下一轮生效" : "思考模式已关闭 · 下一轮生效" };
+        return { message: data.thinking ? "已切换为高推理强度 · 下一轮生效" : "已切换为默认推理强度 · 下一轮生效" };
       } catch (error) {
         thinkingToggle.checked = !thinking;
         throw error;

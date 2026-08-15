@@ -75,8 +75,8 @@ export class Shell {
   }
 
   // ── 挂载一个顶层 surface:外壳 + kind 内容 + enter ───────────────────
-  _mount(surface, staggerIndex = 0) {
-    const el = this._buildSurface(surface)
+  _mount(surface, staggerIndex = 0, { dismissible = true } = {}) {
+    const el = this._buildSurface(surface, { dismissible })
     el.classList.add('is-entering')
     el.style.setProperty('--stagger', `${staggerIndex * 90}ms`)
     el.addEventListener('animationend', () => el.classList.remove('is-entering'), { once: true })
@@ -85,7 +85,7 @@ export class Shell {
   }
 
   // 构建 surface 外壳 + 内容(不含 enter class)。供顶层与递归子级共用。
-  _buildSurface(surface) {
+  _buildSurface(surface, { dismissible = true } = {}) {
     const el = document.createElement('div')
     el.className = 'surface'
     el.dataset.id = surface.id
@@ -93,6 +93,19 @@ export class Shell {
     this._applyShell(el, surface)
     const kind = getKind(surface.kind)
     const ctx = this._ctx(surface)
+    if (dismissible) {
+      el.classList.add('is-dismissible')
+      const close = document.createElement('button')
+      close.type = 'button'
+      close.className = 'surface-close'
+      close.title = '关闭卡片'
+      close.setAttribute('aria-label', '关闭卡片')
+      close.addEventListener('click', (event) => {
+        event.stopPropagation()
+        ctx.emit('dismiss', {})
+      })
+      el.appendChild(close)
+    }
     el.appendChild(kind.render(surface.data || {}, ctx))
     return el
   }
@@ -137,7 +150,8 @@ export class Shell {
       },
       // 递归渲染一个子 surface(带外壳 + enter),供 layout 使用。
       renderChild(child, staggerIndex = 0) {
-        return self._mount(child, staggerIndex)
+        // 子 surface 不是 SceneStore 里的独立顶层项，不放置无法独立关闭的重复按钮。
+        return self._mount(child, staggerIndex, { dismissible: false })
       },
       // 递归 morph 一个已存在的子元素。
       morphChild(childEl, prevChild, nextChild) {

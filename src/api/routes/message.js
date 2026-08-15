@@ -1,7 +1,14 @@
-import { pushMessage } from '../../inbound-message.js'
+import { persistInboundMessage, pushMessage } from '../../inbound-message.js'
+import { getPendingConversationResources, markConversationResourcesConsumed } from '../../db.js'
 import { emitEvent } from '../../events.js'
 import { getAgentName } from '../agent.js'
 import { appendInboundChatMediaMarkdown } from '../inbound-media.js'
+import {
+  buildChatResourceDisplayContent,
+  CHAT_RESOURCE_CHANNEL,
+  MAX_CHAT_RESOURCE_TOTAL_BYTES,
+  persistDroppedChatResources,
+} from '../../chat-resources.js'
 import { jsonResponse, readJsonBody } from '../utils.js'
 
 const INBOUND_MESSAGE_DEDUPE_TTL_MS = 10_000
@@ -41,7 +48,70 @@ function claimInboundMessage({ fromId, channel, content, clientMessageId }) {
 }
 
 export async function handleMessageRoutes(req, res, url) {
-  if (req.method !== 'POST' || url.pathname !== '/message') return false
+  if (req.method !== 'POST') return false
+
+  if (url.pathname === '/message/resources') {
+    let resourceClaim = null
+    try {
+      // Base64 adds roughly one third; leave room for JSON fields while retaining a
+      // strict total decoded-resource limit in persistDroppedChatResources.
+      const body = await readJsonBody(req, { maxBytes: Math.ceil(MAX_CHAT_RESOURCE_TOTAL_BYTES * 1.45) })
+      const fromId = body.from_id || body.fromId || 'ID:000001'
+      const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
+      const clientId = normalizeUiClientId(
+        body.client_id
+          ?? body.clientId
+          ?? req.headers['x-bailongma-client-id']
+          ?? '',
+      )
+      const resources = persistDroppedChatResources(body.resources)
+      const content = buildChatResourceDisplayContent(resources)
+      resourceClaim = claimInboundMessage({
+        fromId,
+        channel: CHAT_RESOURCE_CHANNEL,
+        content,
+        clientMessageId,
+      })
+      if (!resourceClaim.claimed) {
+        jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
+        return true
+      }
+
+      const staged = persistInboundMessage(fromId, content, CHAT_RESOURCE_CHANNEL, {
+        clientId,
+        clientMessageId: normalizeClientMessageId(clientMessageId),
+        resourceState: 'pending',
+        resourceMetadata: resources,
+      })
+      emitEvent('message_in', {
+        from_id: staged.fromId,
+        content,
+        channel: CHAT_RESOURCE_CHANNEL,
+        timestamp: staged.timestamp,
+        conversation_id: staged.conversationId,
+        client_id: clientId,
+        client_message_id: normalizeClientMessageId(clientMessageId),
+        resource_state: 'pending',
+        resources,
+      })
+      jsonResponse(res, 200, {
+        ok: true,
+        agent_name: getAgentName(),
+        conversation_id: staged.conversationId,
+        client_id: clientId,
+        client_message_id: normalizeClientMessageId(clientMessageId),
+        resource_state: 'pending',
+        content,
+        resources,
+      })
+    } catch (error) {
+      if (resourceClaim?.claimed && resourceClaim.key) recentInboundMessages.delete(resourceClaim.key)
+      jsonResponse(res, error?.statusCode || 400, { error: error?.message || 'failed to stage resources' })
+    }
+    return true
+  }
+
+  if (url.pathname !== '/message') return false
 
   let claim = null
   try {
@@ -75,7 +145,19 @@ export async function handleMessageRoutes(req, res, url) {
     if (enhanced.media.length) meta.attachments = enhanced.media
     if (clientId) meta.clientId = clientId
     if (clientMessageId) meta.clientMessageId = normalizeClientMessageId(clientMessageId)
+    // 资源消息本身从不入队。只有这条真实文字/语音消息到达时才消费它们，
+    // 并把权威资源行附在 queue entry 上，保证本轮工具选择和提示能拿到路径。
+    const pendingResources = getPendingConversationResources(from_id)
+    if (pendingResources.length) meta.pendingResources = pendingResources
     const queued = pushMessage(from_id, queuedContent, channel, meta)
+    if (pendingResources.length) {
+      markConversationResourcesConsumed(pendingResources.map(row => row.id))
+      emitEvent('resources_consumed', {
+        conversation_ids: pendingResources.map(row => row.id),
+        instruction_conversation_id: queued?.conversationId || 0,
+        client_id: clientId,
+      })
+    }
     const conversationId = queued?.conversationId || 0
     if (String(channel || '').toLowerCase() === 'voice' || channel === '语音识别') {
       console.log(

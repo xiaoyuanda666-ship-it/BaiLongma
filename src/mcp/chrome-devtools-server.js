@@ -59,9 +59,9 @@ const DESCRIPTORS = Object.freeze({
   browser_navigate_forward: { description: 'Go forward in the active BaiLongma Chrome tab and return a fresh snapshot.', schema: objectSchema() },
   browser_reload: { description: 'Reload the active BaiLongma Chrome tab and return a fresh snapshot.', schema: objectSchema({ ignore_cache: boolean('Ignore cached resources when reloading.') }) },
   browser_snapshot: { description: 'Read the active BaiLongma Chrome page as an accessibility snapshot. Prefer this over screenshots.', schema: objectSchema({ verbose: boolean('Include additional accessibility-tree details.') }) },
-  browser_find: { description: 'Refresh the page accessibility snapshot so the requested text can be found. This is read-only.', schema: objectSchema({ text: string('Text to find in the page snapshot.') }, ['text']) },
-  browser_click: { description: 'Click an element in BaiLongma dedicated Chrome. Never use this for accounts.google.com, X login, CAPTCHA, MFA, or OAuth consent; the user operates those personally.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.') }) },
-  browser_type: { description: 'Focus an element and type ordinary non-authentication text. Account credentials, MFA, CAPTCHA and OAuth flows are user-only.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.'), text: string('Text to type.') }, ['text']) },
+  browser_find: { description: 'Find text in the current BaiLongma Chrome page without navigating. Returns structured query, found, total_matches, and current_match fields counted from the current rendered page text.', schema: objectSchema({ text: string('Exact text to find and count in the current rendered page.') }, ['text']) },
+  browser_click: { description: 'Click an element in BaiLongma dedicated Chrome. For a browser-search submission only, when the accessibility snapshot exposes a search field but no submit-button uid, call this once with search_submit=true and element="search submit"; BaiLongma submits the focused field\'s real form. Never use this for accounts.google.com, X login, CAPTCHA, MFA, or OAuth consent; the user operates those personally.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.'), search_submit: boolean('True only for the one search-submit click when the current search form has no exposed submit-button uid.') }) },
+  browser_type: { description: 'Focus an element and type ordinary non-authentication text. Set replace=true to replace an existing field value instead of appending; browser search contracts set this automatically. Account credentials, MFA, CAPTCHA and OAuth flows are user-only.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.'), text: string('Text to type.'), replace: boolean('Replace the field\'s current value with text.') }, ['text']) },
   browser_fill_form: { description: 'Fill ordinary non-authentication form fields. Credentials, MFA, CAPTCHA and OAuth fields must be completed by the user.', schema: objectSchema({ fields: { type: 'array', items: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), value: string('Value to enter.') }, ['value']) }, elements: { type: 'array', items: objectSchema({ uid: string(uid), value: string('Value to enter.') }, ['uid', 'value']) } }) },
   browser_select_option: { description: 'Select an option using its snapshot uid and visible value.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), value: string('Visible option value.') }, ['value']) },
   browser_press_key: { description: 'Press a key in BaiLongma Chrome. Do not use it to submit login, MFA, CAPTCHA, or OAuth consent.', schema: objectSchema({ key: string('Key or combination such as Enter or Control+L.') }, ['key']) },
@@ -69,11 +69,11 @@ const DESCRIPTORS = Object.freeze({
   browser_drag: { description: 'Drag one snapshot element onto another.', schema: objectSchema({ from_uid: string(uid), to_uid: string(uid), source: string(uid), target: string(uid) }) },
   browser_wait_for: { description: 'Wait for text to appear on the active page and return a snapshot.', schema: objectSchema({ text: string('Text to wait for.'), timeout: number('Optional timeout in milliseconds.') }, ['text']) },
   browser_handle_dialog: { description: 'Handle a non-authentication browser dialog.', schema: objectSchema({ action: { type: 'string', enum: ['accept', 'dismiss'] }, prompt_text: string('Optional prompt text.') }, ['action']) },
-  browser_tabs: { description: 'List, select, open, or close tabs in BaiLongma dedicated Chrome.', schema: objectSchema({ action: { type: 'string', enum: ['list', 'select', 'new', 'close'] }, page_id: number('Chrome DevTools MCP page id.'), index: number('Chrome DevTools MCP page id.'), url: string('HTTP(S) URL for a new tab.') }) },
-  browser_take_screenshot: { description: 'Take a screenshot of the active BaiLongma Chrome page.', schema: objectSchema({ full_page: boolean('Capture the entire page.'), type: { type: 'string', enum: ['png', 'jpeg', 'webp'] } }) },
+  browser_tabs: { description: 'List the one live page managed by BaiLongma. Multiple simultaneous managed tabs are not supported; use browser_navigate to replace the current page.', schema: objectSchema({ action: { type: 'string', enum: ['list'] } }) },
+  browser_take_screenshot: { description: 'Capture the active BaiLongma Chrome page. The result includes a persisted image_path; if the user asked to receive or see the image, immediately deliver that path with send_message(image_path=...). Capture alone is not delivery.', schema: objectSchema({ full_page: boolean('Capture the entire page.'), type: { type: 'string', enum: ['png', 'jpeg', 'webp'] } }) },
   browser_console_messages: { description: 'List console messages from the active BaiLongma Chrome page.', schema: objectSchema({ page_size: number('Maximum number of messages.') }) },
   browser_resize: { description: 'Resize the active BaiLongma Chrome window viewport.', schema: objectSchema({ width: number('Viewport width.'), height: number('Viewport height.') }, ['width', 'height']) },
-  browser_close: { description: 'Close a BaiLongma Chrome tab without deleting its dedicated profile data. Without page_id, close the selected tab; if it is the last tab, create a blank replacement first because Chrome DevTools MCP never closes the final tab.', schema: objectSchema({ page_id: number('Chrome DevTools MCP page id. If omitted, the selected tab is closed safely.') }) },
+  browser_close: { description: 'Close BaiLongma\'s one managed live page without deleting its dedicated profile data. A later browser action creates a fresh managed page automatically.', schema: objectSchema() },
 })
 
 function firstUid(args = {}) {
@@ -88,6 +88,81 @@ function requireUid(args, name) {
 
 function snapshotStep(verbose = false) {
   return { remoteName: 'take_snapshot', arguments: verbose ? { verbose: true } : {} }
+}
+
+function searchSubmitStep() {
+  return {
+    remoteName: 'evaluate_script',
+    browserSearchSubmit: true,
+    arguments: {
+      function: `() => {
+        const __bailongmaSearchSubmit = true
+        const active = document.activeElement
+        const candidates = [
+          active,
+          ...document.querySelectorAll('input[type="search"], [role="searchbox"], form[role="search"] input, input[name="q"], input[name="query"], input[id*="search" i]')
+        ].filter((element, index, values) => element && values.indexOf(element) === index)
+        const field = candidates.find(element => {
+          if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return false
+          if (element.disabled || element.readOnly) return false
+          const rect = element.getBoundingClientRect()
+          return rect.width > 0 && rect.height > 0
+        })
+        if (!field) return { submitted: false, reason: 'search_field_not_found', url: location.href }
+        const form = field.form || field.closest('form')
+        if (!form) return { submitted: false, reason: 'search_form_not_found', url: location.href }
+        const submitter = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])')
+        const beforeUrl = location.href
+        if (typeof form.requestSubmit === 'function') {
+          if (submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement) form.requestSubmit(submitter)
+          else form.requestSubmit()
+          return { submitted: true, method: 'requestSubmit', before_url: beforeUrl }
+        }
+        if (submitter && typeof submitter.click === 'function') {
+          submitter.click()
+          return { submitted: true, method: 'click', before_url: beforeUrl }
+        }
+        HTMLFormElement.prototype.submit.call(form)
+        return { submitted: true, method: 'form.submit', before_url: beforeUrl }
+      }`,
+    },
+  }
+}
+
+function browserFindCountStep(text = '') {
+  const query = String(text || '').trim()
+  if (!query) throw new TypeError('browser_find requires non-empty text')
+  const serializedQuery = JSON.stringify(query)
+  return {
+    remoteName: 'evaluate_script',
+    browserFindCount: true,
+    arguments: {
+      function: `() => {
+        const query = ${serializedQuery}.normalize('NFKC')
+        const searchableText = String(document.body?.innerText || document.documentElement?.innerText || '').normalize('NFKC')
+        const needle = query.toLocaleLowerCase()
+        const haystack = searchableText.toLocaleLowerCase()
+        let totalMatches = 0
+        let offset = 0
+        while (needle && offset <= haystack.length - needle.length) {
+          const index = haystack.indexOf(needle, offset)
+          if (index < 0) break
+          totalMatches += 1
+          offset = index + Math.max(needle.length, 1)
+        }
+        return {
+          query,
+          found: totalMatches > 0,
+          total_matches: totalMatches,
+          current_match: totalMatches > 0 ? 1 : 0,
+          case_sensitive: false,
+          source: 'rendered_page_text',
+          url: location.href,
+          title: document.title
+        }
+      }`,
+    },
+  }
 }
 
 export function isBuiltInBrowserToolAllowed(name) {
@@ -188,17 +263,28 @@ export function adaptBrowserToolCall(name, args = {}) {
     case 'browser_navigate_forward': return [{ remoteName: 'navigate_page', arguments: { type: 'forward' } }, snapshotStep()]
     case 'browser_reload': return [{ remoteName: 'navigate_page', arguments: { type: 'reload', ...(args.ignore_cache === true ? { ignoreCache: true } : {}) } }, snapshotStep()]
     case 'browser_snapshot': return [snapshotStep(args.verbose === true)]
-    case 'browser_find': return [snapshotStep(true)]
+    case 'browser_find': return [browserFindCountStep(args.text), snapshotStep(true)]
     // Do not trust the click tool's inline snapshot as the final page state.
     // A link may commit navigation just after the DOM click completes, so take
     // a separate snapshot after the click/navigation lifecycle settles.
-    case 'browser_click': return [
-      { remoteName: 'click', arguments: { uid: requireUid(args, normalized) } },
-      snapshotStep(),
-    ]
+    case 'browser_click': return args.search_submit === true
+      ? [searchSubmitStep(), snapshotStep()]
+      : [
+          { remoteName: 'click', arguments: { uid: requireUid(args, normalized), includeSnapshot: true } },
+          snapshotStep(),
+        ]
     case 'browser_type': {
       const text = String(args.text ?? args.value ?? '')
       if (!text) throw new TypeError('browser_type requires text')
+      if (args.replace === true) {
+        return [{
+          remoteName: 'fill_form',
+          arguments: {
+            elements: [{ uid: requireUid(args, normalized), value: text }],
+            includeSnapshot: true,
+          },
+        }]
+      }
       const steps = []
       if (firstUid(args)) steps.push({ remoteName: 'click', arguments: { uid: requireUid(args, normalized) } })
       steps.push({ remoteName: 'type_text', arguments: { text } }, snapshotStep())
@@ -221,9 +307,7 @@ export function adaptBrowserToolCall(name, args = {}) {
     case 'browser_handle_dialog': return [{ remoteName: 'handle_dialog', arguments: { action: String(args.action || ''), ...(args.prompt_text ? { promptText: String(args.prompt_text) } : {}) } }, snapshotStep()]
     case 'browser_tabs': {
       const action = String(args.action || 'list').toLowerCase()
-      if (action === 'new') return [{ remoteName: 'new_page', arguments: { url: String(args.url || 'about:blank') } }, snapshotStep()]
-      if (action === 'select') return [{ remoteName: 'select_page', arguments: { pageId: Number(args.page_id ?? args.index), bringToFront: true } }, snapshotStep()]
-      if (action === 'close') return [{ remoteName: 'close_page', arguments: { pageId: Number(args.page_id ?? args.index) } }, { remoteName: 'list_pages', arguments: {} }]
+      if (action !== 'list') throw new TypeError('BaiLongma manages one live page; browser_tabs supports action="list" only. Use browser_navigate to replace it.')
       return [{ remoteName: 'list_pages', arguments: {} }]
     }
     case 'browser_take_screenshot': return [{ remoteName: 'take_screenshot', arguments: { format: String(args.type || 'png'), ...(args.full_page === true ? { fullPage: true } : {}) } }]

@@ -86,23 +86,25 @@ export const selfcheck = {
 
   // morph:running→running 原地更新计数/名称(扫描条不断);跨态(→done)整块交叉淡化重建。
   morph(el_, prev = {}, next = {}) {
+    const root = el_.querySelector(':scope > .k-selfcheck')
+    if (!root) return
     const same = isDone(prev) === isDone(next)
     if (same && !isDone(next)) {
-      const icon = el_.querySelector('.sc-icon')
-      const counter = el_.querySelector('.sc-counter')
-      const name = el_.querySelector('.sc-name')
+      const icon = root.querySelector('.sc-icon')
+      const counter = root.querySelector('.sc-counter')
+      const name = root.querySelector('.sc-name')
       if (icon) setText(icon, next.icon || '🔍')
       if (counter) setText(counter, `${next.step || 1} / ${next.total || 3}`)
       if (name) setText(name, `正在检查${next.name || ''}`)
       return
     }
     // 结构变了(running↔done 或 done→done):交叉淡化后整块重建。
-    el_.classList.add('fade-swap')
-    el_.style.opacity = '0'
+    root.classList.add('fade-swap')
+    root.style.opacity = '0'
     requestAnimationFrame(() => {
-      el_.replaceChildren(selfcheck.render(next))
-      // render 返回的是带 .k-selfcheck 的容器;这里 el_ 是 .surface 外壳,直接收其内容。
-      requestAnimationFrame(() => { el_.style.opacity = '' })
+      const fresh = selfcheck.render(next)
+      root.replaceWith(fresh)
+      requestAnimationFrame(() => { fresh.style.opacity = '' })
     })
   },
 }

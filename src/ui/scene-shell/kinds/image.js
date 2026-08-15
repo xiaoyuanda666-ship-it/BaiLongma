@@ -1,10 +1,10 @@
 // kind: image —— 展示一张图片(内容比描述更直接时)。
-// data: { url, title?, alt? }  ·  上行 intent:dismiss(用户关闭)。
+// data: { url, title?, alt? }。顶层 surface 的通用关闭能力由 shell 外壳统一提供。
 
 import { el, setText } from './dom.js'
 
 export const image = {
-  render(data = {}, ctx = {}) {
+  render(data = {}) {
     const img = el('img', {
       class: 'i-img',
       src: data.url || '',
@@ -12,16 +12,8 @@ export const image = {
       // 图片解码完成再淡入,避免"先白块后跳图"。
       onload: (e) => e.target.classList.add('loaded'),
     })
-    const close = el('button', {
-      class: 'i-close',
-      title: '关闭',
-      text: '×',
-      // 仅显示 + 上报;关不关、关了之后做什么,由 Agent 决策(见 SCENE-PROTOCOL §3.4)。
-      onclick: () => ctx.emit && ctx.emit('dismiss', {}),
-    })
     return el('figure', { class: 'k-image' }, [
       img,
-      close,
       data.title ? el('figcaption', { class: 'i-cap', text: data.title }) : null,
     ])
   },

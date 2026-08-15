@@ -66,6 +66,16 @@ assert(!sys1.includes('round1 dir'), 'system does NOT contain dynamic directions
 assert(!sys2.includes('do thing'), 'system does NOT contain active task content')
 assert(!sys1.includes('## Memory'), 'system does NOT contain memory section header')
 
+const codingServicePrompt = buildSystemPrompt({
+  ...baseSystemArgs,
+  userMessage: '写一个网页小游戏然后在我电脑浏览器打开',
+  currentChannel: 'TUI',
+})
+assert(codingServicePrompt.includes('## Coding Discipline'), 'coding request receives coding discipline')
+assert(codingServicePrompt.includes('## Local Service Safety'), 'coding request receives local service safety')
+assert(codingServicePrompt.includes('bind to 127.0.0.1'), 'local service block carries loopback default')
+assert(!sys1.includes('## Local Service Safety'), 'unrelated stable prompt omits local service safety')
+
 // 2) Context block varies with dynamic fields, and is wrapped in <context>.
 const ctx1 = buildContextBlock({
   memories: 'round1 mem',

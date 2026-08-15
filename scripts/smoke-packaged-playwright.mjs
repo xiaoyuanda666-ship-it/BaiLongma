@@ -43,6 +43,18 @@ function packagedTarget(platform = process.platform, arch = process.arch) {
       artifactPattern: new RegExp(`^Bailongma-.*-mac-${arch}\\.dmg$`, 'i'),
     }
   }
+  if (platform === 'linux' && arch === 'x64') {
+    const unpacked = path.join(distDir, 'linux-unpacked')
+    return {
+      platform,
+      arch,
+      hostPlatform: 'ubuntu24.04-x64',
+      exe: path.join(unpacked, 'bailongma'),
+      resources: path.join(unpacked, 'resources'),
+      chromiumExecutableParts: ['chrome-linux64', 'chrome'],
+      artifactPattern: /^Bailongma-.*-linux-x64\.AppImage$/i,
+    }
+  }
   throw new Error(`packaged Playwright MCP smoke is not configured for ${platform}-${arch}`)
 }
 

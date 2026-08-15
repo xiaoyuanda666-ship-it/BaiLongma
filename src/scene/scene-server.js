@@ -55,6 +55,11 @@ export function handleSceneConnection(ws) {
         send(ws, sceneStore.snapshot())
         break
       case 'intent':
+        // dismiss 是用户对顶层 surface 的直接关闭意图：由真相源移除，
+        // 再广播 remove patch，保持所有界面客户端一致，而不是只在点击端隐藏 DOM。
+        if (msg.name === 'dismiss' && typeof msg.surface === 'string' && msg.surface) {
+          sceneStore.set(msg.surface, null)
+        }
         if (onIntent) { try { onIntent(msg) } catch { /* 处理器出错不影响连接 */ } }
         break
       case 'pong':

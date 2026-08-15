@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bailongma Release Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LOCAL RELEASE OPERATIONS</div>
+      <h1>Bailongma Release Console</h1>
+    </div>
+    <div class="header-meta">
+      <span id="connectionBadge" class="badge neutral">● 连接中</span>
+      <span id="versionBadge" class="badge neutral">v—</span>
+      <button id="refreshButton" class="button secondary">刷新全部</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel span-2">
+      <div class="section-head"><div><span class="index">01</span><h2>系统状态</h2></div><span id="refreshedAt" class="muted">尚未刷新</span></div>
+      <div id="systemGrid" class="status-grid skeleton">正在检查 SSH、HTTPS、网关和 Git…</div>
+    </section>
+
+    <section class="panel span-2">
+      <div class="section-head"><div><span class="index">02</span><h2>产物扫描</h2></div><span id="artifactSummary" class="badge neutral">等待扫描</span></div>
+      <div class="table-wrap">
+        <table><thead><tr><th>架构</th><th>产物</th><th>文件名</th><th>大小</th><th>SHA-512</th><th>修改时间</th><th>状态</th></tr></thead><tbody id="artifactRows"></tbody></table>
+      </div>
+      <p class="footnote">文件由本地后端直接读取；浏览器不会上传或接收 dist 文件内容。</p>
+    </section>
+
+    <section class="panel span-2">
+      <div class="section-head"><div><span class="index">03</span><h2>发布前检查</h2></div><button id="preflightButton" class="button secondary">运行完整检查</button></div>
+      <div class="notice">codesign 通过不代表 Apple 公证通过。stable 还必须通过公证票据、stapler 和 Gatekeeper。</div>
+      <div id="preflightGrid" class="preflight-grid empty">尚未运行完整检查</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head"><div><span class="index">04</span><h2>发布配置</h2></div></div>
+      <form id="releaseForm">
+        <label>版本号<input id="versionInput" readonly></label>
+        <fieldset><legend>架构</legend><label class="check"><input type="checkbox" name="arch" value="x64" checked> macOS x64</label><label class="check"><input type="checkbox" name="arch" value="arm64" checked> macOS arm64</label></fieldset>
+        <label>渠道<select id="channel"><option value="stable">stable</option><option disabled>beta（预留）</option><option disabled>internal（预留）</option></select></label>
+        <label>灰度比例<select id="staging"><option>5</option><option>10</option><option>25</option><option>50</option><option selected>100</option></select></label>
+        <label>执行方式<select id="mode"><option value="upload">上传现有产物</option><option value="build">构建并上传</option></select></label>
+        <label>Release notes<textarea id="releaseNotes" rows="6" maxlength="20000" placeholder="说明此版本面向用户的变化"></textarea></label>
+        <label class="check wide"><input id="testBuild" type="checkbox"> 标记为测试构建（仅允许 Dry Run，不可发布 stable）</label>
+        <button id="planButton" type="button" class="button secondary wide">生成 / 更新发布计划</button>
+      </form>
+    </section>
+
+    <section class="panel">
+      <div class="section-head"><div><span class="index">05</span><h2>发布计划</h2></div><span id="planSize" class="badge neutral">—</span></div>
+      <div id="planView" class="plan empty">配置后生成计划</div>
+    </section>
+
+    <section class="panel span-2 execution-panel">
+      <div class="section-head"><div><span class="index">06</span><h2>执行进度</h2></div><span id="taskState" class="state state-DRAFT">DRAFT</span></div>
+      <div id="stateRail" class="state-rail"></div>
+      <div class="progress-line"><div id="progressBar"></div></div>
+      <div id="progressStats" class="progress-stats">0 B / 0 B · 0 B/s · ETA —</div>
+      <div id="serviceStatuses" class="service-strip"><span>OSS: pending</span><span>香港源站: pending</span><span>验证: pending</span></div>
+
+      <div class="action-grid">
+        <div class="dry-zone">
+          <h3>安全验证</h3><p>只在本地计算哈希与生成清单，不执行远程写入。Apple 检查失败仍可运行。</p>
+          <button id="dryRunButton" class="button dry">只做 Dry Run</button>
+        </div>
+        <div class="danger-zone">
+          <h3>正式 stable 发布</h3><p>不可变文件上传并验证后，最后切换两个架构的 latest-mac.yml。不会覆盖同版本。</p>
+          <label class="check confirm"><input id="confirmCheckbox" type="checkbox"> 我已核对完整发布计划并确认执行正式发布</label>
+          <label>输入完整版本号确认<input id="confirmVersion" autocomplete="off" placeholder="必须与 package.json 完全一致"></label>
+          <button id="publishButton" class="button danger" disabled>正式发布 stable</button>
+        </div>
+      </div>
+      <button id="cancelButton" class="button secondary cancel" disabled>取消当前任务</button>
+
+      <details id="logDetails" open>
+        <summary>脱敏日志 <span id="logCount">0</span><span class="summary-actions"><button id="copyLogs" type="button" class="link-button">复制</button><label class="check inline"><input id="autoScroll" type="checkbox" checked> 自动滚动</label></span></summary>
+        <pre id="logs">等待任务…</pre>
+      </details>
+    </section>
+
+    <section class="panel span-2">
+      <div class="section-head"><div><span class="index">07</span><h2>发布历史</h2></div><span class="muted">用户目录 · 每次发布一个 JSON</span></div>
+      <div class="table-wrap"><table><thead><tr><th>Release ID</th><th>版本</th><th>架构</th><th>模式</th><th>Git</th><th>开始 / 结束</th><th>结果</th></tr></thead><tbody id="historyRows"></tbody></table></div>
+    </section>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

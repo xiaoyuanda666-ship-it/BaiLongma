@@ -25,6 +25,7 @@ const FORBIDDEN_CHROME_TOOLS = [
 ]
 
 const { BUILTIN_TOOL_NAMES, TOOL_SCHEMAS } = await import('./capabilities/builtin-tools.js')
+const { BROWSER_CAPABILITY_TOOLS } = await import('./capabilities/capability-registry.js')
 const { getToolSchemas } = await import('./capabilities/schemas.js')
 const { executeTool } = await import('./capabilities/executor.js')
 const { evaluateToolPolicy } = await import('./capabilities/tool-policy.js')
@@ -142,8 +143,19 @@ try {
     'generic browser discovery loads display-mode selection before navigation')
   assert.ok(browserDiscovery.loaded.includes('browser_navigate'),
     'generic browser discovery still loads navigation after display-mode selection')
-  assert.ok(browserDiscovery.loaded.length <= 8,
-    'browser discovery respects the find_tool schema-loading limit')
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => browserDiscovery.loaded.includes(name)),
+    'browser discovery loads every available browser capability tool without truncation')
+  assert.ok(browserDiscovery.loaded.length > 8,
+    'find_tool no longer applies the former eight-schema loading limit')
+  const exactCloseDiscovery = JSON.parse(await executeTool(
+    'find_tool',
+    { query: 'browser_close 关闭浏览器' },
+    { source: 'test', currentUserMessage: '关闭浏览器' },
+  ))
+  assert.equal(exactCloseDiscovery.loaded[0], 'browser_close',
+    'an exact tool-name query ranks browser_close first')
+  assert.ok(exactCloseDiscovery.loaded.length > 10,
+    'exact browser discovery keeps every broader browser match instead of truncating at ten')
   assert.equal(
     evaluateToolPolicy('browser_navigate', { url: 'https://example.com' }, { autonomous: true }).allowed,
     false,

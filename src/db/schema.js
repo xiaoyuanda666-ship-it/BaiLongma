@@ -33,6 +33,8 @@ export function initializeSchema(db) {
   // external dispatch so they can be rendered immediately; therefore their
   // existence alone is not proof that the recipient received the message.
   try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN resource_state TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN resource_metadata TEXT NOT NULL DEFAULT ''`) } catch {}
 
   // 迁移：FTS5 tokenizer 从默认 unicode61 升级到 trigram。
   // 默认 tokenizer 把中文整段当成一个 token（"咖啡偏好"被存为一个整体），
@@ -81,6 +83,8 @@ export function initializeSchema(db) {
       content     TEXT    NOT NULL,
       channel     TEXT    NOT NULL DEFAULT '',
       delivery_status TEXT NOT NULL DEFAULT '',
+      resource_state TEXT NOT NULL DEFAULT '',
+      resource_metadata TEXT NOT NULL DEFAULT '',
       timestamp   TEXT    NOT NULL,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
@@ -91,7 +95,10 @@ export function initializeSchema(db) {
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE conversations ADD COLUMN delivery_status TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN resource_state TEXT NOT NULL DEFAULT ''`) } catch {}
+  try { db.exec(`ALTER TABLE conversations ADD COLUMN resource_metadata TEXT NOT NULL DEFAULT ''`) } catch {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_delivery_status ON conversations(delivery_status)`) } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_resource_state ON conversations(resource_state)`) } catch {}
   // A local TUI row is created and broadcast as one synchronous operation, so
   // historical local assistant rows are safe to backfill as delivered. Do not
   // infer this for external channels: older rows were also retained on failed

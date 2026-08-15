@@ -48,6 +48,11 @@ import { collectAgents, buildAgentContextBlock, buildDelegationDiscoveryContext 
 import { refreshSkills, selectSkillsForMessage, formatSkillsForContext } from './skills/registry.js'
 import { tryAutoConfigureKey } from './key-auto-config.js'
 import { PRIMARY_USER_ID, normalizeChannel, isExternalChannel, isVoiceChannel } from './identity.js'
+import {
+  buildPendingResourceInjectorContext,
+  CHAT_RESOURCE_CHANNEL,
+  mergePendingResourcesIntoConversationWindow,
+} from './chat-resources.js'
 import { truncateToolResultForUI } from './runtime/tool-result-preview.js'
 import { buildLLMMessages } from './runtime/messages.js'
 import { hasVerifiedScheduledDelivery } from './runtime/scheduled-tasks.js'
@@ -55,7 +60,7 @@ import { parseMarkers } from './runtime/markers.js'
 import { createConsciousnessLoop } from './runtime/consciousness-loop.js'
 import { buildAutonomousTickDirections } from './runtime/tick-policy.js'
 import { buildStrictEvaluationContext, resolveStrictEvaluationMode } from './runtime/strict-evaluation.js'
-import { resolveActionContractForTurn } from './runtime/action-contract.js'
+import { filterMemoriesForActionContract, resolveActionContractForTurn } from './runtime/action-contract.js'
 import { withStartupTimeout } from './runtime/startup-timeout.js'
 import { refreshUserProfile } from './profile/infer.js'
 import { isSoftwareInstallRequest } from './software-install-intent.js'
@@ -427,10 +432,10 @@ function buildToolContextForProcess(msg, injection, turnId = '') {
     replyTurnId: turnId || null,
     voiceReply,
     currentUserMessage: msg?.content || null,
-    // A presentation is a model decision, not a browser fallback. Every turn
-    // begins unselected; browser_set_display_mode is the only operation that
-    // may set this to card or window before a page operation can run.
-    browserDisplayState: { mode: null },
+    // Ordinary page work starts in the compact card. The model only needs the
+    // explicit display tool when the user requests a size or a takeover flow
+    // (login/CAPTCHA/video) requires the large window.
+    browserDisplayState: { mode: 'card' },
     // 自我感知信号：传给工具执行层（如 upsert_memory 守门），让"镜像污染"在写入长期记忆前就被拦截
     selfPerception: injection.selfPerception || null,
 
@@ -619,6 +624,7 @@ function detectChannelSwitch(msg, conversationWindow) {
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]
     if (!row) continue
+    if (String(row.channel || '').toUpperCase() === CHAT_RESOURCE_CHANNEL) continue
     const isSelf = row.role === 'user'
       && row.from_id === msg.fromId
       && row.timestamp === msg.timestamp
@@ -712,6 +718,12 @@ async function runTurn(input, label, msg = null) {
   const isScheduledTask = runtimeLane === 'l3'
   const isUserTurn = runtimeLane === 'l1'
   const semanticInput = isScheduledTask ? (msg?.reminderTask || msg?.content || '') : input
+  const pendingResourceContext = isUserTurn
+    ? buildPendingResourceInjectorContext(msg?.pendingResources || [])
+    : ''
+  const injectorInput = pendingResourceContext
+    ? `${semanticInput}\n\n${pendingResourceContext}`
+    : semanticInput
   const silentSignal = msg?.silent === true
   if (isTick) state.tickCounter += 1
   const priority = getProcessPriority(msg)
@@ -798,11 +810,37 @@ async function runTurn(input, label, msg = null) {
 
     // 1. Injector
     const injection = await runInjector({
-      message: semanticInput,
+      message: injectorInput,
       state,
       currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
     })
+    if (msg?.pendingResources?.length) {
+      // 即使用户把“聊天消息上下文条数”调到 1，也不能把本轮刚消费的资源挤出窗口。
+      // 它们是当前指令的输入，不是可被普通历史裁剪掉的旧聊天。
+      injection.conversationWindow = mergePendingResourcesIntoConversationWindow(
+        injection.conversationWindow || [],
+        msg.pendingResources,
+      )
+    }
     throwIfAborted(controller.signal)
+    const strictEvaluation = isUserTurn
+      ? resolveStrictEvaluationMode(semanticInput || '', {
+          strictEvaluation: msg?.strictEvaluation,
+          forbiddenTools: msg?.forbiddenTools,
+        })
+      : null
+    const preliminaryActionContract = isUserTurn && !silentSignal
+      ? resolveActionContractForTurn(msg?.content || semanticInput || '', {
+          conversationWindow: injection.conversationWindow || [],
+          runtimeContext: (injection.actionLog || [])
+            .map(entry => String(entry?.tool || ''))
+            .filter(name => /^browser_(?!clear_data)/i.test(name))
+            .join(' '),
+          strictEvaluation,
+        })
+      : null
+    const turnMemories = filterMemoriesForActionContract(injection.memories, preliminaryActionContract)
+    const turnActivePolicies = filterMemoriesForActionContract(injection.activePolicies, preliminaryActionContract)
 
     // 1b. 线索模型（DynamicMemoryPool.md 第 8 章）—— 专注栈的继任者。
     // 只有用户消息走归属判定（纯启发式，零 LLM 延迟）；TICK 永不参与判定也永不触发降温
@@ -896,6 +934,22 @@ async function runTurn(input, label, msg = null) {
     }
 
     const directions = [...(injection.directions || [])]
+    if (pendingResourceContext) {
+      directions.unshift(
+        'The current text/voice message is the instruction for the staged user resources shown in conversation history. Treat them as one user turn. Use the exact sandbox_path values when a tool needs a local file; do not ask the user to upload them again.',
+      )
+    }
+    if (preliminaryActionContract?.restrictTools === true) {
+      const required = preliminaryActionContract.requiredTools.join(', ')
+      directions.unshift(
+        `Authoritative runtime action scope for this turn: call only ${required}, followed by send_message if delivery is needed. Do not call find_tool or any alternative browser, keyboard, download, shell, navigation, display, or fallback tool outside that exact list, even if an older memory suggests it.`,
+      )
+      if (preliminaryActionContract.id === 'browser_screenshot') {
+        directions.unshift('Screenshot contract: keep the current card/window mode unchanged. Call browser_take_screenshot directly, then send exactly screenshot.image_path with no unrelated caption or facts from earlier turns.')
+      } else if (preliminaryActionContract.id === 'browser_display_mode') {
+        directions.unshift('Browser display contract: browser_set_display_mode changes the Bailongma card/window presentation. Do not use page zoom or keyboard shortcuts such as Control+Equal.')
+      }
+    }
     if (isUserTurn && msg) {
       directions.unshift('Language reminder for this user turn: determine the reply language only from the user\'s current message, not from conversation history, memories, profile, interface language, location, ASR/TTS provider, or agent name. Mirror the current message language unless the user explicitly requests another output language. Proper names may keep their original spelling, but the surrounding sentence must still use the current message language.')
     }
@@ -932,8 +986,8 @@ async function runTurn(input, label, msg = null) {
 
     if (keyConfigFailDir) directions.unshift(keyConfigFailDir)
 
-    const memoriesText = formatMemoriesForPrompt(injection.memories, injection.recallMemories)
-    const activePoliciesText = formatActivePoliciesForPrompt(injection.activePolicies)
+    const memoriesText = formatMemoriesForPrompt(turnMemories, injection.recallMemories)
+    const activePoliciesText = formatActivePoliciesForPrompt(turnActivePolicies)
     const directionsText = directions.join('\n')
     const taskKnowledgeText = formatTaskKnowledge(injection.taskKnowledge)
     const temporalRecallText = formatTemporalRecall(injection.temporalRecall)
@@ -981,7 +1035,7 @@ async function runTurn(input, label, msg = null) {
     emitEvent('injector_result', {
       directions,
       tools: injection.tools || [],
-      matchedMemories: (injection.memories || []).map(m => ({
+      matchedMemories: turnMemories.map(m => ({
         id: m.id,
         mem_id: m.mem_id || '',
         event_type: m.event_type || '',
@@ -995,7 +1049,7 @@ async function runTurn(input, label, msg = null) {
         content: m.content || '',
         detail: m.detail || '',
       })),
-      activePolicies: (injection.activePolicies || []).map(m => ({
+      activePolicies: turnActivePolicies.map(m => ({
         id: m.id,
         mem_id: m.mem_id || '',
         event_type: m.event_type || '',
@@ -1158,12 +1212,6 @@ async function runTurn(input, label, msg = null) {
     }
 
     let contextBlock = buildContextBlock(gateResult.args)
-    const strictEvaluation = isUserTurn
-      ? resolveStrictEvaluationMode(semanticInput || '', {
-          strictEvaluation: msg?.strictEvaluation,
-          forbiddenTools: msg?.forbiddenTools,
-        })
-      : null
     const strictEvaluationContext = buildStrictEvaluationContext(strictEvaluation)
     if (strictEvaluationContext) {
       contextBlock = [contextBlock, strictEvaluationContext].filter(Boolean).join('\n\n')
@@ -1246,13 +1294,19 @@ async function runTurn(input, label, msg = null) {
     // from being released as a completed action.
     // Use the raw message body: semanticInput can include queue metadata that
     // must never be interpreted as a second user request.
-    const requestedActionContract = isUserTurn && !silentSignal
+    const requestedActionContract = preliminaryActionContract || (isUserTurn && !silentSignal
         ? resolveActionContractForTurn(toolContext.currentUserMessage || semanticInput || '', {
           conversationWindow: injection.conversationWindow || [],
-          runtimeContext: runtimeInjection.macosMusicContextText || '',
+          runtimeContext: [
+            runtimeInjection.macosMusicContextText || '',
+            (injection.actionLog || [])
+              .map(entry => String(entry?.tool || ''))
+              .filter(name => /^browser_(?!clear_data)/i.test(name))
+              .join(' '),
+          ].filter(Boolean).join('\n'),
           strictEvaluation,
         })
-      : null
+      : null)
     const browserModeForEvent = (name, args = {}) => {
       if (name === 'browser_set_display_mode') {
         const requested = String(args?.mode || '').trim().toLowerCase()
@@ -1304,7 +1358,7 @@ async function runTurn(input, label, msg = null) {
       input,
       voiceTurn,
       actionContract: requestedActionContract,
-      activePolicies: injection.activePolicies || [],
+      activePolicies: turnActivePolicies,
     })
     const {
       turnTools,
@@ -1347,8 +1401,8 @@ async function runTurn(input, label, msg = null) {
     // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
     // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
     //
-    // 流式回复：onStream 把 text/think 两种模式的 token 逐块吐出。curStreamMode 跟踪当前模式
-    // 让 stream_chunk 也带上 mode（前端据此区分"思考流"与"正文流"）。sawTextStream 标记本轮
+    // 流式回复：onStream 把 text/think/commentary 三种模式的 token 逐块吐出。curStreamMode 跟踪当前模式
+    // 让 stream_chunk 也带上 mode（前端据此区分"思考摘要/过程说明"与"最终正文"）。sawTextStream 标记本轮
     // 是否流出过正文——若是，则语音 TTS 由前端边出边逐句合成（见 onToolCall 的 autoSpeak 守卫），
     // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
     let curStreamMode = null
@@ -1427,6 +1481,7 @@ async function runTurn(input, label, msg = null) {
           // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
           emitEvent('stream_start', {
             mode,
+            phase: mode === 'commentary' ? 'commentary' : (mode === 'text' ? 'final_answer' : 'reasoning'),
             // A completion-looking draft is not user-visible evidence.  Keep
             // it private until the action contract has a successful tool
             // result; callLLM will then deliver the verified final reply.
@@ -1447,6 +1502,7 @@ async function runTurn(input, label, msg = null) {
           emitEvent('stream_chunk', {
             text,
             mode: curStreamMode,
+            phase: curStreamMode === 'commentary' ? 'commentary' : (curStreamMode === 'text' ? 'final_answer' : 'reasoning'),
             turn_id: sessionRef,
             target_client_id: msg?.clientId || '',
           })
@@ -1457,6 +1513,7 @@ async function runTurn(input, label, msg = null) {
           }
           emitEvent('stream_end', {
             mode: curStreamMode,
+            phase: curStreamMode === 'commentary' ? 'commentary' : (curStreamMode === 'text' ? 'final_answer' : 'reasoning'),
             turn_id: sessionRef,
             target_client_id: msg?.clientId || '',
           })

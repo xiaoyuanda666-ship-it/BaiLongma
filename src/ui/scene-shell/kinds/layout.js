@@ -39,8 +39,10 @@ function makeKind(name) {
     // morph:对 children 按 id 做一层 diff —— 新增子 enter、消失子 exit、留存子递归 morph。
     // 这让"容器里的某张卡变了"也走原地过渡,而不是整容器重建。
     morph(el_, prev = {}, next = {}, ctx = {}) {
-      el_.className = classes(name, next)
-      const prevMap = el_._children || new Map()
+      const box = el_.querySelector(':scope > .k-layout')
+      if (!box) return
+      box.className = classes(name, next)
+      const prevMap = box._children || new Map()
       const nextChildren = Array.isArray(next.children) ? next.children : []
       const nextIds = new Set(nextChildren.map(c => c && c.id).filter(Boolean))
       const newMap = new Map()
@@ -66,12 +68,12 @@ function makeKind(name) {
         }
         if (!childEl) return
         // 维持 DOM 顺序与 next 一致。
-        if (anchor && anchor.nextSibling !== childEl) el_.insertBefore(childEl, anchor.nextSibling)
-        else if (!anchor && el_.firstChild !== childEl) el_.insertBefore(childEl, el_.firstChild)
+        if (anchor && anchor.nextSibling !== childEl) box.insertBefore(childEl, anchor.nextSibling)
+        else if (!anchor && box.firstChild !== childEl) box.insertBefore(childEl, box.firstChild)
         anchor = childEl
         newMap.set(child.id, { el: childEl, data: child.data, surface: child })
       })
-      el_._children = newMap
+      box._children = newMap
     },
   }
 }

@@ -46,6 +46,18 @@ for (const messageBody of [
   'search the web for the current Chrome DevTools MCP documentation',
   '总结网页正文 https://example.com/article',
   '读取这个 JavaScript 动态网页正文',
+  '小白龙，帮我上网看看今天有什么 AI 新闻，挑三条重要的告诉我，链接也发我一下。',
+  '今天 AI 圈有什么新鲜事？',
+  '看看网上最近都在聊什么 AI 新闻',
+  '最近苹果有什么消息？',
+  '这个新闻怎么回事？',
+  'AI 最近有啥大事？',
+  '这两天科技圈发生啥了？',
+  '给我说说最近芯片行业有啥动静。',
+  '现在比特币多少钱？',
+  '黄金今天什么价？',
+  '苹果最新系统版本是多少？',
+  "what's new in AI today?",
 ]) {
   assertBrowserOnly(
     capabilityToolsFor(capabilityContext(messageBody)),
@@ -56,6 +68,17 @@ for (const messageBody of [
     `turn routing makes explicit web intent executable: ${messageBody}`)
   assert.ok(LEGACY_WEB_TOOLS.every(name => !turnTools.includes(name)),
     `turn routing keeps removed web tools absent: ${messageBody}`)
+}
+
+for (const messageBody of [
+  '我最近心情不太好，想聊聊。',
+  '今天我们讨论一下项目计划。',
+  '这个项目最近有啥更新？',
+  '说说最近项目进展。',
+]) {
+  const turnTools = selectTools({ messageBody, isTick: false, senderId: 'ID:test' })
+  assert.ok(BROWSER_TOOLS.every(name => !turnTools.includes(name)),
+    `ordinary non-web conversation does not trigger the browser: ${messageBody}`)
 }
 
 const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')

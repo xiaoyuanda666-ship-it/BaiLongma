@@ -79,6 +79,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       agent_name: getAgentName(),
       llm: {
         activated: status.activated,
+        apiFormat: status.apiFormat,
         provider: status.provider,
         model: status.model,
         baseURL: status.baseURL,

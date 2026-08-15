@@ -10,6 +10,7 @@ assert.equal(getToolSchema('exec_quick_command'), null, 'legacy exec_quick_comma
 
 const schema = getToolSchema('run_command')
 assert.deepEqual(schema.function.parameters.properties.mode.enum, ['auto', 'quick', 'task', 'background', 'strict'])
+assert.match(schema.function.description, /bind to 127\.0\.0\.1\/localhost by default/)
 
 const quick = JSON.parse(await executeTool('run_command', {
   command: 'node -e "console.log(\'run-command-ok\')"',
@@ -92,6 +93,24 @@ await executeTool('run_command', { action: 'cancel', run_id: explicitlyStartedFo
 const invalid = JSON.parse(await executeTool('run_command', { command: 'echo no', mode: 'download' }, { source: 'test' }))
 assert.equal(invalid.ok, false)
 assert.match(invalid.error, /mode must be/)
+
+const unsafePreview = JSON.parse(await executeTool('run_command', {
+  action: 'start',
+  command: 'python3 -m http.server 8321',
+  mode: 'background',
+}, { source: 'test', currentUserMessage: '在本机浏览器预览' }))
+assert.equal(unsafePreview.ok, false)
+assert.equal(unsafePreview.code, 'NETWORK_SERVICE_NOT_REQUESTED')
+assert.match(unsafePreview.hint, /--bind 127\.0\.0\.1/)
+
+const safePreview = JSON.parse(await executeTool('run_command', {
+  action: 'start',
+  command: 'node -e "require(\'http\').createServer((_q,r) => r.end(\'ok\')).listen(0, \'127.0.0.1\')"',
+  mode: 'background',
+}, { source: 'test', currentUserMessage: '在本机运行开发服务' }))
+assert.equal(safePreview.ok, true)
+assert.equal(safePreview.service_safety?.blocked, false, 'normal loopback development service remains allowed')
+await executeTool('run_command', { action: 'cancel', run_id: safePreview.run_id }, { source: 'test' })
 
 assert.equal(evaluateToolPolicy('run_command', { command: 'Get-ChildItem' }, { autonomous: true }).allowed, false)
 assert.deepEqual(classifyActionContract('帮我执行 npm test')?.requiredTools, ['run_command'])

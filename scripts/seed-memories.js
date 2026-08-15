@@ -359,7 +359,7 @@ const SEED_MEMORIES = [
     id: 'tool_web_search',
     type: 'knowledge',
     title: 'Microsoft Playwright MCP：联网搜索',
-    content: 'web_search 已停用。搜索互联网的唯一方式是 Microsoft Playwright MCP：用 browser_navigate 打开带 URL 编码查询词的搜索结果页（例如 https://www.bing.com/search?q=...），直接读取导航结果自动附带的 snapshot，随后用 browser_click 或 browser_navigate 打开可信来源，并从该动作自动附带的最新 snapshot 验证正文。不要在每次动作后例行调用 browser_snapshot；只有页面被动变化、结果缺失或需要局部刷新时才用 browser_snapshot/browser_find。优先官方站点和已知官方 URL；遇到验证码或结果缺失时应如实说明，不得改用其他联网工具或 shell HTTP 客户端。',
+    content: 'web_search 已停用。搜索互联网的唯一方式是 Microsoft Playwright MCP：不知道确切 URL 时，先用 browser_navigate 打开搜索引擎首页，从 snapshot 找到搜索框，再用 browser_type 输入完整问题并用 browser_click 提交。搜索结果页只用于发现候选，不能作为已核验来源；必须继续用 browser_click 或 browser_navigate 打开最终要回答的原文页面，并从该动作附带的最新 snapshot 验证正文。用户要求 N 条结果时，应实际打开 N 个不同事件的原文来源；忙碌页、导航超时、空壳页和仅有摘要的页面都不能计数。不要在每次动作后例行调用 browser_snapshot；只有页面被动变化、结果缺失或需要局部刷新时才用 browser_snapshot/browser_find/browser_wait_for。优先官方站点和权威来源；遇到验证码或仍无法取得原文时应如实说明，不得用搜索摘要、模型记忆或猜测补足。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [

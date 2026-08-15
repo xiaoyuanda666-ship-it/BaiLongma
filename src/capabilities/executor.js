@@ -555,20 +555,33 @@ function execFindTool({ query } = {}, context = {}) {
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
   const ALWAYS_PRESENT = new Set(['find_tool', 'recall_memory', 'ui_set'])
   const found = [...matched].filter(name => !ALWAYS_PRESENT.has(name))
-  // find_tool only returns eight schemas. Browser capability discovery contains
-  // more than eight actions, while display-mode selection is a mandatory
-  // precondition for navigation/page interaction. Defend that invariant at the
-  // truncation boundary as well as in the capability registry.
+  // Exact public tool names are the strongest possible discovery signal. Put
+  // them first without dropping broader semantic matches. This prevents a
+  // query such as "browser_close 关闭浏览器" from burying browser_close behind a
+  // long group of generic browser tools.
+  const exactNames = found.filter(name => terms.includes(String(name).toLowerCase()))
+  // Keep display-mode selection first for browser discovery because it is a
+  // mandatory precondition for navigation/page interaction. Do not truncate
+  // the remaining matches: find_tool promises that every reachable match it
+  // reports can be loaded into the next provider request.
   const browserCapabilityMatched = capHits.some(cap => cap.id === 'interactive-browser')
-  const prioritizedFound = browserCapabilityMatched && found.includes('browser_set_display_mode')
-    ? ['browser_set_display_mode', ...found.filter(name => name !== 'browser_set_display_mode')]
-    : found
+  const remainingFound = found.filter(name => !exactNames.includes(name))
+  const displayFirst = browserCapabilityMatched
+    && exactNames.length === 0
+    && remainingFound.includes('browser_set_display_mode')
+  const prioritizedFound = [
+    ...exactNames,
+    ...(displayFirst ? ['browser_set_display_mode'] : []),
+    ...remainingFound.filter(name => !displayFirst || name !== 'browser_set_display_mode'),
+  ]
 
   if (prioritizedFound.length === 0) {
     return toolJson({
       ok: true, tool: 'find_tool', query, loaded: [], matches: [],
       capabilities,
-      note: '没找到匹配的工具。换个说法再试，或直接告诉用户这件事现在做不了。可调 list_tools 看全部工具。',
+      retryable: true,
+      retry_strategies: ['exact_tool_name', 'action_and_object', 'chinese_english_synonyms', 'broader_capability_category'],
+      note: '本次查询没有找到匹配工具，但不代表能力不存在。请换用未试过的查询策略继续调用 find_tool；同一轮最多尝试 4 个不同查询。',
     })
   }
 
@@ -583,7 +596,7 @@ function execFindTool({ query } = {}, context = {}) {
     const req = s?.function?.parameters?.required || []
     return { name, description: desc.slice(0, 200), required_params: req }
   }
-  const matches = loadable.slice(0, 8).map(describe)
+  const matches = loadable.map(describe)
 
   if (matches.length === 0) {
     return toolJson({
@@ -1306,7 +1319,7 @@ async function execDelegateToAgent({ agent_id, prompt: agentPrompt, context: age
       ? [{ path: '/api/chat', body: { model: ollamaModel, messages: [{ role: 'user', content: fullPrompt }], stream: false } },
          { path: '/api/generate', body: { model: ollamaModel, prompt: fullPrompt, stream: false } }]
       : [{ path: '/api/chat', body: { message: fullPrompt, messages: [{ role: 'user', content: fullPrompt }] } },
-         { path: '/v1/chat/completions', body: { messages: [{ role: 'user', content: fullPrompt }] } },
+         { path: '/v1/responses', body: { input: [{ role: 'user', content: fullPrompt }], stream: false, store: false } },
          { path: '/chat', body: { message: fullPrompt } },
          { path: '/query', body: { query: fullPrompt } }]
 
@@ -1320,8 +1333,16 @@ async function execDelegateToAgent({ agent_id, prompt: agentPrompt, context: age
         })
         if (res.ok) {
           const data = await res.json()
-          const reply = data?.message?.content || data?.response || data?.message
-            || data?.content || data?.choices?.[0]?.message?.content || JSON.stringify(data)
+          const responsesText = Array.isArray(data?.output)
+            ? data.output
+                .filter(item => item?.type === 'message')
+                .flatMap(item => Array.isArray(item.content) ? item.content : [])
+                .filter(part => part?.type === 'output_text')
+                .map(part => part.text || '')
+                .join('')
+            : ''
+          const reply = data?.output_text || responsesText || data?.message?.content || data?.response
+            || data?.message || data?.content || JSON.stringify(data)
           return toolJson({ ok: true, agent_id, agent_name: agent.name, reply: String(reply).slice(0, 4000) })
         }
       } catch { /* 尝试下一个端点 */ }

@@ -139,6 +139,19 @@ export function finalizeToolInjection({
   for (const name of requiredTools) {
     if (name && !turnTools.includes(name)) turnTools.push(name)
   }
+  // Screenshot capture cannot be delivered through local plain text. Keep the
+  // real media-bearing send tool visible even on TUI/voice turns so the model
+  // can complete the capture-and-delivery contract itself.
+  if (actionContract?.id === 'browser_screenshot' && !silentSignal && !turnTools.includes('send_message')) {
+    turnTools.push('send_message')
+  }
+  // High-confidence, standalone browser commands use a deliberately narrow
+  // inventory. This removes find_tool and unrelated fallback surfaces after
+  // the runtime has already resolved the exact current-page action.
+  if (actionContract?.restrictTools === true) {
+    const allowed = new Set([...requiredTools, 'send_message'])
+    turnTools = turnTools.filter(name => allowed.has(name))
+  }
   const resolvedActionContract = requiredTools.length > 0
     ? { ...actionContract, requiredTools: [...requiredTools] }
     : null

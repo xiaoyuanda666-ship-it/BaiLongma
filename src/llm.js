@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, shouldSendThinkingDisabledForProviderModel, shouldUseMaxCompletionTokensForProviderModel, switchModel } from './config.js'
+import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, switchModel } from './config.js'
 import { executeTool } from './capabilities/executor.js'
 import { getToolSchemas } from './capabilities/schemas.js'
 import { recordUsage, shouldThrottle } from './quota.js'
@@ -16,10 +16,18 @@ import {
   makeBrowserChallengeStoppedResult,
   markBrowserChallengeResult,
 } from './runtime/browser-challenge-guard.js'
-import { streamWriteFileArgumentPreview, streamXmlFileWriteArgumentPreview } from './write-file-preview.js'
+import { streamWriteFileArgumentPreview } from './write-file-preview.js'
+import {
+  buildResponsesRequest,
+  createResponsesEventAccumulator,
+  responseStreamError,
+} from './llm-responses.js'
 import {
   actionContractCompletionIssue,
+  actionContractToolCallIssue,
   actionContractToolSucceeded,
+  browserScreenshotDeliveryMatches,
+  browserScreenshotPathFromEvidence,
   containsUnsupportedCompletionClaim,
   verifiedActionContractReply,
 } from './runtime/action-contract.js'
@@ -71,12 +79,6 @@ function getClient() {
   return client
 }
 
-function shouldEnableDeepSeekThinking(thinking) {
-  if (!thinking) return false
-  if (config.model === 'deepseek-chat') return false
-  return true
-}
-
 function normalizeTemperatureForProvider(temperature, model = config.model) {
   if (typeof temperature !== 'number') return temperature
   if (shouldOmitSamplingForProviderModel(config.provider, model)) return undefined
@@ -84,58 +86,26 @@ function normalizeTemperatureForProvider(temperature, model = config.model) {
   return Math.max(0, Math.min(1, Number(temperature.toFixed(2))))
 }
 
-function buildChatCompletionRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = true, model = config.model }) {
+function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = true, model = config.model }) {
   const providerTemperature = normalizeTemperatureForProvider(temperature, model)
-  const requestParams = {
-    model,
+  return buildResponsesRequest({
+    provider: config.provider,
     messages,
+    toolSchemas,
+    temperature: providerTemperature,
+    topP,
+    maxTokens,
+    thinking,
+    model,
+    omitSampling: shouldOmitSamplingForProviderModel(config.provider, model),
     stream: true,
-  }
-  if (typeof providerTemperature === 'number') {
-    requestParams.temperature = providerTemperature
-  }
-  if (config.provider !== ZHIPU_PROVIDER) {
-    requestParams.stream_options = { include_usage: true }
-  }
-
-  if (
-    typeof topP === 'number'
-    && topP > 0
-    && config.provider !== ZHIPU_PROVIDER
-    && !shouldOmitSamplingForProviderModel(config.provider, model)
-  ) {
-    requestParams.top_p = topP
-  }
-  if (config.provider === 'deepseek') {
-    const thinkingEnabled = shouldEnableDeepSeekThinking(thinking)
-    if (thinkingEnabled) {
-      requestParams.reasoning_effort = 'high'
-      requestParams.thinking = { type: 'enabled' }
-    } else {
-      requestParams.thinking = { type: 'disabled' }
-    }
-  } else if (!thinking && shouldSendThinkingDisabledForProviderModel(config.provider, model)) {
-    requestParams.thinking = { type: 'disabled' }
-  }
-  if (maxTokens) {
-    if (shouldUseMaxCompletionTokensForProviderModel(config.provider, model)) {
-      requestParams.max_completion_tokens = maxTokens
-    } else {
-      requestParams.max_tokens = maxTokens
-    }
-  }
-  if (toolSchemas.length > 0) {
-    requestParams.tools = toolSchemas
-    requestParams.tool_choice = 'auto'
-    if (config.provider === ZHIPU_PROVIDER) requestParams.tool_stream = true
-  }
-  return requestParams
+  })
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
 async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model }) {
   const requestParams = sanitizeJsonForTransport(
-    buildChatCompletionRequestParams({
+    buildLLMRequestParams({
       model,
       messages,
       toolSchemas,
@@ -180,139 +150,93 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   armIdle()
 
-  let fullContent = ''
-  let fullReasoningContent = ''
-  let toolCallsMap = {}
   const writeFilePreviewStates = new Map()
   const writeFilePreviewSession = { cleared: false }
-  const xmlWriteFilePreviewState = { session: writeFilePreviewSession }
   let inThink = false
   let thinkDone = false
   let streamStarted = false
-  let usageTokens = 0
-  let cacheHitTokens = 0
-  let cacheMissTokens = 0
+  let emittedText = ''
+  let emittedCommentary = ''
+  let emittedReasoning = ''
   const textStreamSanitizer = createAssistantReplyStreamSanitizer()
+  let activeStreamMode = null
+  const switchStreamMode = (mode) => {
+    if (activeStreamMode === mode) return
+    if (streamStarted) onStream?.({ event: 'end' })
+    streamStarted = false
+    activeStreamMode = mode
+    onStream?.({ event: 'start', mode })
+    streamStarted = true
+  }
   const emitTextChunk = (rawText) => {
     const cleanText = textStreamSanitizer.push(rawText)
     if (!cleanText) return
-    if (!streamStarted) { onStream?.({ event: 'start', mode: 'text' }); streamStarted = true }
+    switchStreamMode('text')
     onStream?.({ event: 'chunk', text: cleanText })
   }
   const flushTextStream = () => {
     const cleanText = textStreamSanitizer.flush()
     if (!cleanText) return
-    if (!streamStarted) { onStream?.({ event: 'start', mode: 'text' }); streamStarted = true }
+    switchStreamMode('text')
     onStream?.({ event: 'chunk', text: cleanText })
   }
 
-  try {
-  // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
-  const stream = await getClient().chat.completions.create(requestParams, { signal: reqController.signal })
-  for await (const chunk of stream) {
-    armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
-    if (signal?.aborted) break
-    if (chunk.usage?.total_tokens) {
-      usageTokens = chunk.usage.total_tokens
-      cacheHitTokens = chunk.usage.prompt_cache_hit_tokens || 0
-      cacheMissTokens = chunk.usage.prompt_cache_miss_tokens || 0
-    }
-    const choice = chunk.choices?.[0]
-    if (!choice) continue
-
-    const delta = choice.delta
-
-    // 工具调用增量
-    if (delta?.tool_calls) {
-      flushTextStream()
-      if (streamStarted) {
-        onStream?.({ event: 'end' })
-        streamStarted = false
-      }
-      for (const tc of delta.tool_calls) {
-        const idx = tc.index ?? 0
-        if (!toolCallsMap[idx]) {
-          toolCallsMap[idx] = { id: tc.id || '', name: '', arguments: '' }
-        }
-        if (tc.id) toolCallsMap[idx].id = tc.id
-        if (tc.function?.name) {
-          const wasEmpty = toolCallsMap[idx].name === ''
-          toolCallsMap[idx].name += tc.function.name
-          // 第一次拿到完整 name 时通知上层 —— 此时流文本已 end，但工具尚未执行，
-          // 没有这个信号 UI 会出现"思考动画停止 → 工具行出现"之间的死寂。
-          if (wasEmpty && toolCallsMap[idx].name) {
-            onStream?.({ event: 'tool_preparing', name: toolCallsMap[idx].name })
-          }
-        }
-        if (tc.function?.arguments) toolCallsMap[idx].arguments += tc.function.arguments
-        const previewState = writeFilePreviewStates.get(idx) || {}
-        previewState.session ||= writeFilePreviewSession
-        writeFilePreviewStates.set(idx, streamWriteFileArgumentPreview(toolCallsMap[idx], previewState))
-      }
-      continue
-    }
-
-    // DeepSeek reasoner 思考内容（独立字段，不在 content 里）
-    const reasoningText = delta?.reasoning_content || delta?.reasoningContent || delta?.reasoning
-    if (reasoningText) {
-      fullReasoningContent += reasoningText
+  const accumulator = createResponsesEventAccumulator({
+    onReasoningDelta: text => {
+      emittedReasoning += text
       if (!thinkDone) {
         inThink = true
-        if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
-        onStream?.({ event: 'chunk', text: reasoningText })
+        switchStreamMode('think')
+        onStream?.({ event: 'chunk', text })
       }
-      continue
-    }
-
-    // 文本增量
-    const text = delta?.content
-    if (!text) continue
-
-    // DeepSeek：思考流结束、进入正式回答时，先关闭 think 流
-    if (inThink && !thinkDone) {
+    },
+    onCommentaryDelta: text => {
+      emittedCommentary += text
       inThink = false
       thinkDone = true
-      if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false }
-    }
-
-    fullContent += text
-    streamXmlFileWriteArgumentPreview(fullContent, xmlWriteFilePreviewState)
-
-    // 解析 <think> 标签流式推送
-    if (!thinkDone) {
-      if (!inThink && fullContent.includes('<think>')) {
-        inThink = true
-        const after = fullContent.split('<think>').slice(1).join('<think>')
-        if (after.length > 0) {
-          if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
-          onStream?.({ event: 'chunk', text: after })
-        }
-        continue
+      switchStreamMode('commentary')
+      onStream?.({ event: 'chunk', text })
+    },
+    onTextDelta: text => {
+      emittedText += text
+      if (inThink && !thinkDone) {
+        inThink = false
+        thinkDone = true
+        if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false; activeStreamMode = null }
       }
-      if (inThink) {
-        if (fullContent.includes('</think>')) {
-          inThink = false
-          thinkDone = true
-          const chunkBeforeEnd = text.split('</think>')[0]
-          if (chunkBeforeEnd) onStream?.({ event: 'chunk', text: chunkBeforeEnd })
-          onStream?.({ event: 'end' })
-          streamStarted = false
-          const afterThink = fullContent.split('</think>').slice(1).join('</think>').trimStart()
-          if (afterThink) {
-            emitTextChunk(afterThink)
-          }
-        } else {
-          if (!streamStarted) { onStream?.({ event: 'start', mode: 'think' }); streamStarted = true }
-          onStream?.({ event: 'chunk', text })
-        }
-        continue
-      }
-    }
+      emitTextChunk(text)
+    },
+    onFunctionCallStarted: call => {
+      flushTextStream()
+      if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false; activeStreamMode = null }
+      if (call.name) onStream?.({ event: 'tool_preparing', name: call.name })
+    },
+    onFunctionArgumentsDelta: call => {
+      const key = call.itemId || call.id
+      const previewState = writeFilePreviewStates.get(key) || {}
+      previewState.session ||= writeFilePreviewSession
+      writeFilePreviewStates.set(key, streamWriteFileArgumentPreview(call, previewState))
+    },
+  })
+  const hasPartialOutput = partial => Boolean(
+    partial?.content
+    || partial?.reasoningContent
+    || partial?.commentaryContent
+    || partial?.outputItems?.length
+    || partial?.toolCalls?.length,
+  )
 
-    emitTextChunk(text)
+  try {
+  // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
+  const stream = await getClient().responses.create(requestParams, { signal: reqController.signal })
+  for await (const event of stream) {
+    armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
+    if (signal?.aborted) break
+    accumulator.consume(event)
   }
 
   } catch (err) {
+    const partial = accumulator.result()
     // 空闲超时（我们自己的看门狗触发）且调用方并未中止 —— 当作瞬时错误上抛，由 streamOnceWithRetry 重试，
     // 而不是误判成"用户中止"(aborted:true) 把本轮静默放弃。
     if (idleFired && !signal?.aborted) {
@@ -320,20 +244,21 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       if (streamStarted) onStream?.({ event: 'end' })
       const e = new Error(`stream idle timeout after ${STREAM_IDLE_TIMEOUT_MS / 1000}s`)
       e.code = 'ETIMEDOUT'
-      e.hadContent = fullContent.length > 0
+      e.hadContent = hasPartialOutput(partial)
       throw e
     }
     if (err.name === 'AbortError' || signal?.aborted) {
       flushTextStream()
       if (streamStarted) onStream?.({ event: 'end' })
       return {
-        content: sanitizeAssistantReplyForDelivery(fullContent),
-        reasoningContent: fullReasoningContent,
-        toolCalls: Object.values(toolCallsMap),
+        content: sanitizeAssistantReplyForDelivery(partial.content),
+        reasoningContent: partial.reasoningContent,
+        toolCalls: partial.toolCalls,
+        outputItems: partial.outputItems,
         aborted: true
       }
     }
-    err.hadContent = fullContent.length > 0
+    err.hadContent = hasPartialOutput(partial)
     flushTextStream()
     if (streamStarted) onStream?.({ event: 'end' })
     throw err
@@ -341,27 +266,51 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     cleanupIdle()
   }
 
+  const parsed = accumulator.result()
+  if (!emittedReasoning && parsed.reasoningContent) {
+    if (streamStarted) onStream?.({ event: 'end' })
+    onStream?.({ event: 'start', mode: 'think' })
+    onStream?.({ event: 'chunk', text: parsed.reasoningContent })
+    onStream?.({ event: 'end' })
+    streamStarted = false
+    activeStreamMode = null
+  }
+  if (!emittedCommentary && parsed.commentaryContent) {
+    if (streamStarted) onStream?.({ event: 'end' })
+    onStream?.({ event: 'start', mode: 'commentary' })
+    onStream?.({ event: 'chunk', text: parsed.commentaryContent })
+    onStream?.({ event: 'end' })
+    streamStarted = false
+    activeStreamMode = null
+  }
+  if (!emittedText && parsed.content) emitTextChunk(parsed.content)
   flushTextStream()
   if (streamStarted) onStream?.({ event: 'end' })
-  if (usageTokens > 0) {
-    recordUsage(usageTokens)
-    const promptTotal = cacheHitTokens + cacheMissTokens
+  const streamError = responseStreamError(parsed)
+  if (streamError && (parsed.terminalType !== 'response.incomplete' || !parsed.content.trim())) throw streamError
+  if (parsed.usage.totalTokens > 0) {
+    recordUsage(parsed.usage.totalTokens)
+    const promptTotal = parsed.usage.inputTokens
     const cacheStr = promptTotal > 0
-      ? ` (prompt cache: ${cacheHitTokens}/${promptTotal} = ${(cacheHitTokens/promptTotal*100).toFixed(1)}%)`
+      ? ` (prompt cache: ${parsed.usage.cachedTokens}/${promptTotal} = ${(parsed.usage.cachedTokens/promptTotal*100).toFixed(1)}%)`
       : ''
-    console.log(`[配额] 本轮 tokens: ${usageTokens}${cacheStr}`)
+    console.log(`[配额] 本轮 tokens: ${parsed.usage.totalTokens}${cacheStr}`)
   }
 
   return {
-    content: sanitizeAssistantReplyForDelivery(fullContent),
-    reasoningContent: fullReasoningContent,
-    toolCalls: Object.values(toolCallsMap),
-    aborted: false
+    content: sanitizeAssistantReplyForDelivery(parsed.content),
+    reasoningContent: parsed.reasoningContent,
+    // Never execute arguments from a truncated response. A partial text answer
+    // can still be surfaced, but an incomplete side-effect request is unsafe.
+    toolCalls: parsed.terminalType === 'response.incomplete' ? [] : parsed.toolCalls,
+    outputItems: parsed.outputItems,
+    incomplete: parsed.terminalType === 'response.incomplete',
+    aborted: false,
   }
 }
 
 export const __internals = {
-  buildChatCompletionRequestParams,
+  buildLLMRequestParams,
 }
 
 // 判断是否为瞬时错误（5xx / 网络抖动 / 超时），429 交给外层 setRateLimited
@@ -432,7 +381,7 @@ async function streamOnceWithRetry(args) {
   throw lastErr
 }
 
-// XML 格式工具调用的参数名别名映射（某些模型使用不同参数名）
+// 不同模型偶尔使用参数别名；在执行边界统一映射到工具 schema 名称。
 async function streamOnceWithModelFallback(args) {
   if (config.provider !== MIMO_PROVIDER) return await streamOnceWithRetry(args)
 
@@ -504,26 +453,6 @@ function normalizeArgs(toolName, args) {
   }
   return normalized
 }
-
-// 从文本内容中解析 XML 格式的工具调用（MiniMax 有时输出 XML 而非 JSON tool_calls）
-function parseXmlToolCalls(content) {
-  const calls = []
-  const invokeRegex = /<invoke\s+name="([^"]+)">([\s\S]*?)<\/invoke>/g
-  let match
-  while ((match = invokeRegex.exec(content)) !== null) {
-    const name = match[1]
-    const body = match[2]
-    const xmlArgs = {}
-    const paramRegex = /<parameter\s+name="([^"]+)">([\s\S]*?)<\/parameter>/g
-    let param
-    while ((param = paramRegex.exec(body)) !== null) {
-      xmlArgs[param[1]] = param[2].trim()
-    }
-    calls.push({ id: `xml_${calls.length}`, name, arguments: JSON.stringify(xmlArgs), xmlArgs })
-  }
-  return calls
-}
-
 
 function formatToolArgPreview(args = {}) {
   return Object.entries(args)
@@ -707,6 +636,40 @@ const TOOL_LOOP_LIMITS = {
   uncertaintyCheckpointCalls: 18,
 }
 
+// find_tool is the recovery path when the model knows the next action but its
+// schema is not visible. A single natural-language query is a weak signal: the
+// catalog may index the exact tool name, a Chinese action phrase, an English
+// synonym, or a broader capability label. Keep discovery alive across several
+// distinct queries instead of letting one empty result turn into a prose-only
+// "I need to ..." dead end.
+const TOOL_DISCOVERY_MAX_ATTEMPTS = 4
+const TOOL_DISCOVERY_MAX_NO_CALL_NUDGES = 4
+
+function parseFindToolResult(result) {
+  try {
+    const parsed = JSON.parse(String(result || '{}'))
+    const loaded = Array.isArray(parsed?.loaded) ? parsed.loaded.filter(Boolean) : []
+    const unavailable = Array.isArray(parsed?.unavailable) ? parsed.unavailable.filter(Boolean) : []
+    const detail = `${parsed?.error || ''} ${parsed?.note || ''}`
+    return {
+      loaded,
+      explicitUnavailable: parsed?.ok === false
+        && (unavailable.length > 0 || /schema|provider|not connected|not configured|unavailable|\u672a\u8fde\u63a5|\u672a\u914d\u7f6e|\u4e0d\u53ef\u7528/i.test(detail)),
+    }
+  } catch {
+    return { loaded: [], explicitUnavailable: false }
+  }
+}
+
+function normalizeDiscoveryQuery(query) {
+  return String(query || '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+export function buildToolDiscoveryRetryNudge({ attempts = 0, queries = [], duplicate = false } = {}) {
+  const tried = queries.length ? queries.map(query => `"${query}"`).join(', ') : '(none recorded)'
+  return `Tool discovery is not finished. The last find_tool search loaded no callable tool${duplicate ? ' and repeated an earlier query' : ''}. You have used ${attempts}/${TOOL_DISCOVERY_MAX_ATTEMPTS} searches. Distinct queries tried: ${tried}. Call find_tool again now with a materially different query. Use the next untried strategy: exact tool name if known; action + object; Chinese/English synonyms; or a broader capability category. Do not output a plan, apology, status sentence, or final answer. Do not repeat a previous query. If a relevant tool becomes loaded, stop searching and call it on the immediately following step.${INTERNAL_NUDGE_SUFFIX}`
+}
+
 const HIGH_RISK_TOOLS = new Set([
   'delete_file',
   'run_command',
@@ -830,11 +793,27 @@ const SLOW_ACK_TOOLS = new Set([
   'generate_image', 'generate_music', 'generate_lyrics',
   'web_search', 'web_read', 'fetch_url', 'browser_read', 'browser_navigate', 'deep_research', 'run_command', 'exec_command',
 ])
-function isSlowAckTool(name, args) {
+function isSlowAckTool(name, args, { actionContract = null } = {}) {
   if (name === 'music') return String(args?.action || '').trim() === 'download'  // 仅下载慢；search/list 秒回
+  if (name === 'browser_navigate' && actionContract?.directBrowserAction === true) return false
   return SLOW_ACK_TOOLS.has(name)
 }
-function slowAckText(name, args) {
+const NATURAL_LOOKUP_ACKS = [
+  '我查查～',
+  '稍等一下～',
+  '好的，我找找～',
+  '我查查看～',
+  '我看一下～',
+]
+let naturalLookupAckCursor = 0
+
+function nextNaturalLookupAck() {
+  const text = NATURAL_LOOKUP_ACKS[naturalLookupAckCursor % NATURAL_LOOKUP_ACKS.length]
+  naturalLookupAckCursor += 1
+  return text
+}
+
+export function slowAckText(name, args) {
   if (name === 'music') {
     const s = String(args?.title || args?.query || '').trim()
     return s ? `在找《${s}》了，稍等一下～` : '在找了，稍等一下～'
@@ -842,8 +821,7 @@ function slowAckText(name, args) {
   if (name === 'generate_image') return '在画了，稍等一下～'
   if (name === 'generate_music' || name === 'generate_lyrics') return '在创作了，稍等一下～'
   if (name === 'web_search' || name === 'web_read' || name === 'fetch_url' || name === 'browser_read' || name === 'browser_navigate' || name === 'deep_research') {
-    const q = String(args?.query || args?.q || args?.url || '').trim()
-    return q ? `我查一下「${q.length > 30 ? q.slice(0, 30) + '…' : q}」～` : '我查一下～'
+    return nextNaturalLookupAck()
   }
   if (name === 'run_command' || name === 'exec_command') return '我跑一下～'
   return '收到，我处理一下～'
@@ -1066,6 +1044,13 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let finalNudgeUsed = false
   let plainTextReplyNudgeUsed = false
   let emptyReplyNudgeUsed = false
+  const toolDiscoveryState = {
+    attempts: 0,
+    queries: [],
+    querySet: new Set(),
+    pending: false,
+    noCallNudges: 0,
+  }
   // `delivered` only means the reply reached a person. These two flags carry
   // the separate question: did a real tool produce evidence for the requested
   // external effect?
@@ -1075,7 +1060,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let actionClaimNudgeUsed = false
   let actionCompletionNudgeUsed = false
   let actionContractEvidence = null
+  const actionContractEvidenceList = []
   const actionContractSuccessfulTools = new Set()
+  const actionContractAttemptedTools = []
+  let screenshotDeliveryAttempted = false
+  let screenshotDeliverySucceeded = false
   // 层 3：本 turn 是否已发过"不确定回退"软检查点（一 turn 一次，见 buildUncertaintyCheckpointNudge）。
   let uncertaintyNudgeUsed = false
   const toolLoopState = createToolLoopState()
@@ -1153,7 +1142,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
       throw err
     }
-    const { content, reasoningContent, toolCalls, aborted } = roundResult
+    const { content, reasoningContent, toolCalls = [], outputItems = [], incomplete = false, aborted } = roundResult
 
     trace.recordRound({ round, inputOffset: roundInputOffset, content, reasoningContent, toolCalls, aborted })
 
@@ -1175,20 +1164,50 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
 
     appendContent(content)
 
-    // 若无 JSON 工具调用，尝试从内容中解析 XML 格式工具调用（MiniMax 备用格式）
-    let effectiveToolCalls = toolCalls
-    if (toolCalls.length === 0 && content) {
-      const xmlCalls = parseXmlToolCalls(content)
-      if (xmlCalls.length > 0) {
-        console.log(`[工具调用] 检测到 XML 格式工具调用，共 ${xmlCalls.length} 个`)
-        effectiveToolCalls = xmlCalls
-        // 从 allContent 中去掉 XML 调用块，避免污染 response
-        allContent = allContent.replace(/<invoke[\s\S]*?<\/invoke>/g, '').trim()
+    // An incomplete Responses result may contain useful partial prose, but its
+    // output state is not a safe basis for another agent/tool round. Surface
+    // the text already received and stop; never execute or nudge from it.
+    if (incomplete) {
+      console.warn('[LLM] Responses API returned an incomplete response; preserving partial text and stopping this turn')
+      break
+    }
+
+    const effectiveToolCalls = toolCalls
+
+    // Preserve native Responses output Items whenever another provider round
+    // follows. This keeps reasoning/function-call state intact on our fully
+    // stateless request path. Test doubles may omit Items, so plain assistant
+    // text remains a narrow internal fallback rather than a wire protocol.
+    const appendRoundOutput = () => {
+      if (outputItems.length > 0) {
+        messages.push(...outputItems.map(item => ({ ...item })))
+      } else if (content) {
+        messages.push({ role: 'assistant', content })
       }
     }
 
     // 无工具调用：本轮结束；若工具后空回复，再补一轮明确的最终回复指令。
     if (effectiveToolCalls.length === 0) {
+      // find_tool returned no match and the model tried to stop with prose.
+      // Hold that draft private and insist on another distinct catalog query.
+      // This is driven by structured tool results, not by guessing intent from
+      // prose, so tool meta-questions remain unaffected.
+      if (toolDiscoveryState.pending
+          && toolDiscoveryState.attempts < TOOL_DISCOVERY_MAX_ATTEMPTS
+          && toolDiscoveryState.noCallNudges < TOOL_DISCOVERY_MAX_NO_CALL_NUDGES) {
+        appendRoundOutput()
+        allContent = ''
+        toolDiscoveryState.noCallNudges += 1
+        messages.push({
+          role: 'user',
+          content: buildToolDiscoveryRetryNudge({
+            attempts: toolDiscoveryState.attempts,
+            queries: toolDiscoveryState.queries,
+          }),
+        })
+        continue
+      }
+
       // Do not infer an action from prose.  A clear action request carries a
       // narrow contract from runTurn, and it is satisfied only by a successful
       // matching tool result.  This deliberately runs before the normal local
@@ -1197,7 +1216,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       if (mustReply && actionContract && !actionContractSatisfied && !actionContractAttempted) {
         if (actionContractNudgeCount < 2) {
           const draft = allContent.trim()
-          if (content) messages.push({ role: 'assistant', content })
+          appendRoundOutput()
           allContent = ''
           actionContractNudgeCount += 1
           messages.push({
@@ -1216,8 +1235,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // A matching tool was attempted but failed. A model is allowed to report
       // that failure, but it must not turn the error into a success claim.
       if (mustReply && actionContract && actionContractAttempted && !actionContractSatisfied
-          && containsUnsupportedCompletionClaim(allContent) && !actionClaimNudgeUsed) {
-        if (content) messages.push({ role: 'assistant', content })
+          && containsUnsupportedCompletionClaim(allContent, actionContract) && !actionClaimNudgeUsed) {
+        appendRoundOutput()
         allContent = ''
         actionClaimNudgeUsed = true
         messages.push({
@@ -1232,29 +1251,46 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // default browser; it cannot identify the application, and the two
       // Bailongma display modes still share one live page/profile.
       if (mustReply && actionContract && actionContractSatisfied && allContent.trim()) {
+        if (actionContract.id === 'browser_screenshot'
+            && screenshotDeliveryAttempted && !screenshotDeliverySucceeded) {
+          // The requested media transport was genuinely attempted and failed.
+          // Do not ask the provider (or the protocol fallback) to race the same
+          // image payload again; preserve one honest failure report.
+          allContent = '截图已经生成，但图片发送失败。'
+          break
+        }
         // Closing a visible browser is self-evident. Keep this acknowledgement
         // deterministic instead of letting the provider narrate the page,
         // profile persistence, cookies, or other implementation details.
-        const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
+        const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence, {
+          successfulToolEvidence: actionContractEvidenceList,
+        })
         if (actionContract.id === 'browser_close' && fixedReply) {
           allContent = fixedReply
           break
         }
         const completionIssue = actionContractCompletionIssue(actionContract, allContent, {
           successfulToolNames: actionContractSuccessfulTools,
+          successfulToolEvidence: actionContractEvidenceList,
         })
         if (completionIssue) {
           if (!actionCompletionNudgeUsed) {
-            if (content) messages.push({ role: 'assistant', content })
+            appendRoundOutput()
             allContent = ''
             actionCompletionNudgeUsed = true
             messages.push({
               role: 'user',
-              content: `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,
+              content: actionContract.id === 'web_research'
+                ? `The web research is not complete enough to answer yet: ${completionIssue} Continue with browser_navigate or browser_click and open the distinct original article/source pages. Search-result snippets do not count. After enough pages load, answer with only links that were actually verified in this turn and avoid duplicate underlying events.${INTERNAL_NUDGE_SUFFIX}`
+                : actionContract.id === 'browser_screenshot'
+                  ? `The screenshot capture is not delivered yet: ${completionIssue} Call send_message now with the exact screenshot.image_path returned by browser_take_screenshot. Do not substitute a text acknowledgement or the live browser card.${INTERNAL_NUDGE_SUFFIX}`
+                : `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,
             })
             continue
           }
-          allContent = verifiedActionContractReply(actionContract, actionContractEvidence)
+          allContent = verifiedActionContractReply(actionContract, actionContractEvidence, {
+            successfulToolEvidence: actionContractEvidenceList,
+          })
           break
         }
       }
@@ -1272,7 +1308,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       if (!localReply && mustReply && !sawToolCall && !sentMessage && allContent.trim() && !plainTextReplyNudgeUsed) {
         const draft = allContent.trim()
         salvageableReply = draft   // 清空 allContent 前留一份，供下一轮失败时兜底投递
-        if (content) messages.push({ role: 'assistant', content })
+        appendRoundOutput()
         allContent = ''
         messages.push({
           role: 'user',
@@ -1297,7 +1333,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // 关键修复：把上一轮的 assistant text 推入 messages，让模型在下一轮知道"自己刚才说过 X"。
         // 否则模型被 nudge 后会重新生成一段近似内容，叠加进 allContent 导致 fallback 投递出双段重复。
         // 同时清空 allContent，避免本轮的旁白和下一轮的回复被拼起来当一条消息发出。
-        if (content) messages.push({ role: 'assistant', content })
+        appendRoundOutput()
         allContent = ''
         messages.push({
           role: 'user',
@@ -1331,6 +1367,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       try { args = JSON.parse(tc.arguments || '{}') } catch { args = {} }
       const hadEmptyArguments = !tc.arguments || tc.arguments === '{}'
       const normalizedArgs = normalizeArgs(tc.name, args)
+      if (actionContract?.id === 'browser_search_submit' && tc.name === 'browser_type') {
+        normalizedArgs.replace = true
+      }
       const fingerprint = buildToolFingerprint(tc.name, normalizedArgs)
       const stopReason = getToolLoopStopReason(toolLoopState, tc.name, fingerprint)
       return { tc, normalizedArgs, fingerprint, stopReason, hadEmptyArguments }
@@ -1349,6 +1388,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       let strictSuppressed = false
       let browserChallengeSuppressed = false
       let actionContractSendSuppressed = false
+      let actionScopeSuppressed = false
+      const actionSequenceIssue = actionContractToolCallIssue(actionContract, tc.name, normalizedArgs, {
+        attemptedToolNames: actionContractAttemptedTools,
+        successfulToolNames: actionContractSuccessfulTools,
+        successfulToolEvidence: actionContractEvidenceList,
+      })
       if (stopReason) {
         result = makeToolLoopStoppedResult(tc.name, stopReason)
         console.log(`[工具熔断] ${tc.name}: ${stopReason}`)
@@ -1356,6 +1401,27 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // （比如换 read_file 查日志、search_memory 找历史经验）。同指纹反复失败仍由 sameFailureCounts
         // 拦截，跨工具死循环仍由 recentFingerprints 的 unique threshold 拦截——安全网未失效。
         toolLoopState.consecutiveFailures = 0
+      } else if (actionSequenceIssue) {
+        actionScopeSuppressed = true
+        result = JSON.stringify({
+          ok: false,
+          tool: tc.name,
+          skipped: 'action_contract_sequence',
+          reason: actionSequenceIssue,
+        })
+        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
+        console.log(`[action contract] blocked invalid sequence step ${tc.name} for ${actionContract?.id || 'unknown'}`)
+      } else if (actionContract?.restrictTools === true
+          && !new Set([...(actionContract.requiredTools || []), 'send_message']).has(tc.name)) {
+        actionScopeSuppressed = true
+        result = JSON.stringify({
+          ok: false,
+          tool: tc.name,
+          skipped: 'action_contract_scope',
+          reason: `This request is narrowly scoped to ${actionContract.label}. Use only ${actionContract.requiredTools.join(', ')} and the final delivery channel; do not switch tools or data sources.`,
+        })
+        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
+        console.log(`[action contract] blocked out-of-scope tool ${tc.name} for ${actionContract.id}`)
       } else if (isToolForbiddenInStrictEvaluation(strictEvaluation, tc.name)) {
         strictSuppressed = true
         result = makeStrictForbiddenToolResult(tc.name, strictEvaluation)
@@ -1421,9 +1487,18 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // Normalize even an over-explanatory provider draft before it reaches
         // local, voice, or external channels.
         if (!silentSignalSuppressed && tc.name === 'send_message'
-            && actionContract?.id === 'browser_close' && actionContractSatisfied) {
+            && actionContract?.runtimeOwnedReply === true && actionContractSatisfied) {
           const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
           if (fixedReply) normalizedArgs.content = fixedReply
+        }
+
+        if (!silentSignalSuppressed && tc.name === 'send_message'
+            && actionContract?.id === 'browser_screenshot' && actionContractSatisfied
+            && browserScreenshotDeliveryMatches(actionContractEvidenceList, normalizedArgs)) {
+          // The screenshot itself is the complete answer. A provider caption can
+          // accidentally repeat facts from the previous browser turn, so keep
+          // media delivery deterministic and context-free.
+          normalizedArgs.content = ''
         }
 
         // On external channels send_message is itself a side effect, and used
@@ -1433,10 +1508,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         const actionContractBlocksSend = tc.name === 'send_message'
           && actionContract
           && !actionContractSatisfied
-          && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content))
+          && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content, actionContract))
         const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
           ? actionContractCompletionIssue(actionContract, normalizedArgs.content, {
               successfulToolNames: actionContractSuccessfulTools,
+              successfulToolEvidence: actionContractEvidenceList,
+              messageArgs: normalizedArgs,
             })
           : ''
         if (actionContractCompletionProblem) {
@@ -1445,7 +1522,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             ok: false,
             tool: 'send_message',
             skipped: 'action_contract_reply_invalid',
-            reason: `${actionContractCompletionProblem} Reply only from verified tool evidence and correct the browser relationship before sending.`,
+            reason: `${actionContractCompletionProblem} Reply only from verified tool evidence and satisfy the requested delivery contract before sending.`,
           })
           console.log(`[action contract] suppressed unsupported completion reply for ${actionContract.id}`)
         } else if (actionContractBlocksSend) {
@@ -1493,7 +1570,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // 撞出两条一模一样的消息。所以本地渠道下"已流出可见正文"等价于 delivered，同样跳过 ack。
           const localAlreadySpoke = localReply && !!allContent.trim()
           if (!ackSent && !delivered && !localAlreadySpoke && mustReply && !silentSignal
-              && toolContext?.currentTargetId && isSlowAckTool(tc.name, normalizedArgs)) {
+              && toolContext?.currentTargetId && isSlowAckTool(tc.name, normalizedArgs, { actionContract })) {
             ackSent = true
             try {
               const ackArgs = { target_id: toolContext.currentTargetId, content: slowAckText(tc.name, normalizedArgs) }
@@ -1520,10 +1597,16 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
           if (actionContract?.requiredTools?.includes(tc.name)) {
             actionContractAttempted = true
-            if (actionContractToolSucceeded(actionContract, tc.name, result)) {
-              actionContractSatisfied = true
+            actionContractAttemptedTools.push(tc.name)
+            if (actionContractToolSucceeded(actionContract, tc.name, result, normalizedArgs, {
+              successfulToolEvidence: actionContractEvidenceList,
+            })) {
               actionContractSuccessfulTools.add(tc.name)
               actionContractEvidence = { name: tc.name, args: normalizedArgs, result }
+              actionContractEvidenceList.push(actionContractEvidence)
+              actionContractSatisfied = actionContract?.requireAllTools === true
+                ? actionContract.requiredTools.every(name => actionContractSuccessfulTools.has(name))
+                : true
             }
           }
           const toolDelivery = parseToolDeliveryState(result)
@@ -1542,6 +1625,16 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           const sendMessageActuallySent = sendMessageSucceeded
             && (toolDelivery.hasMessageSent ? toolDelivery.messageSent : true)
           if (sendMessageDelivered) delivered = true
+          if (tc.name === 'send_message' && actionContract?.id === 'browser_screenshot'
+              && browserScreenshotDeliveryMatches(actionContractEvidenceList, normalizedArgs)) {
+            screenshotDeliveryAttempted = true
+            if (sendMessageDelivered) {
+              screenshotDeliverySucceeded = true
+              // The image message itself is the complete user-visible answer.
+              // Stop before another provider round can plan a duplicate send.
+              toolDeliveredFinalReply = true
+            }
+          }
           outboundSent = tc.name === 'send_message'
             && !strictSuppressed
             && !silentSignalSuppressed
@@ -1566,7 +1659,28 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
           // find_tool 动态装载：把搜到的工具 schema 当场注入本轮 toolSchemas（数组原地 push，
           // 下一轮 streamOnceWithRetry 即带上），模型下一步就能直接调用搜出来的工具。
-          if (tc.name === 'find_tool') injectFoundToolSchemas(result, toolSchemas, strictEvaluation, toolPromptHints)
+          if (tc.name === 'find_tool') {
+            injectFoundToolSchemas(result, toolSchemas, strictEvaluation, toolPromptHints)
+            toolDiscoveryState.attempts += 1
+            const normalizedQuery = normalizeDiscoveryQuery(normalizedArgs.query)
+            const duplicateQuery = !!normalizedQuery && toolDiscoveryState.querySet.has(normalizedQuery)
+            if (normalizedQuery && !duplicateQuery) {
+              toolDiscoveryState.querySet.add(normalizedQuery)
+              toolDiscoveryState.queries.push(normalizedQuery)
+            }
+            const discovery = parseFindToolResult(result)
+            toolDiscoveryState.pending = discovery.loaded.length === 0
+              && !discovery.explicitUnavailable
+              && toolDiscoveryState.attempts < TOOL_DISCOVERY_MAX_ATTEMPTS
+            toolDiscoveryState.noCallNudges = 0
+            if (toolDiscoveryState.pending) {
+              console.log(`[find_tool] 未命中，要求换词继续查找 (${toolDiscoveryState.attempts}/${TOOL_DISCOVERY_MAX_ATTEMPTS})`)
+            }
+          } else if (!REPORT_CHANNEL_TOOLS.has(tc.name)) {
+            // The model found a viable route using an already-visible action
+            // tool. Discovery no longer needs to hold the turn open.
+            toolDiscoveryState.pending = false
+          }
         }
         }
       }
@@ -1605,7 +1719,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           mediaPlayedKind = m
         }
       }
-      if (!strictSuppressed && !browserChallengeSuppressed && shouldPersistActionLog(tc.name)) {
+      if (!strictSuppressed && !actionScopeSuppressed && !browserChallengeSuppressed && shouldPersistActionLog(tc.name)) {
         insertActionLog({
           timestamp: new Date().toISOString(),
           tool: tc.name,
@@ -1614,7 +1728,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         })
       }
       console.log(`[工具结果] ${tc.name}: ${result.slice(0, 100)}`)
-      if (onToolCall) onToolCall(tc.name, normalizedArgs, result)
+      if (onToolCall && !actionScopeSuppressed) onToolCall(tc.name, normalizedArgs, result)
       lastToolResult = { name: tc.name, args: normalizedArgs, result }
       return { id: tc.id, name: tc.name, args: normalizedArgs, result, stopReason, outboundSent }
     }
@@ -1683,6 +1797,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
     }
     throwIfAborted(signal)
+    if (effectiveToolCalls.some(tc => tc.name === 'find_tool')) {
+      // Discovery narration is private working text. Never concatenate a
+      // "looking for a tool" sentence into the eventual user reply, whether
+      // discovery succeeds, retries, or exhausts its budget.
+      allContent = ''
+    }
     if (toolDeliveredFinalReply) {
       return {
         content: '',
@@ -1692,49 +1812,18 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
     }
 
-    // 将本轮 assistant 消息（含工具调用）加入对话
-    // 若是 XML 解析的工具调用，assistant 消息用文本形式（避免 MiniMax 不支持 tool_calls 格式回放）
+    // Responses is stateless in Bailongma: replay the exact model output Items,
+    // then append one function_call_output Item for every executed local tool.
     const terminalInternalRound = isTerminalInternalToolRound(effectiveToolCalls, { mustReply })
-    const isXmlRound = toolCalls.length === 0 && effectiveToolCalls.length > 0
-    if (isXmlRound) {
-      // XML 工具调用：assistant 消息为纯文本，工具结果作为 user 消息注入
-      if (content) messages.push({ role: 'assistant', content })
-      const resultSummary = toolResults.map(tr =>
-        `[Tool result] ${tr.name}: ${tr.result.slice(0, 300)}`
-      ).join('\n')
-      // 同主路径：以 sentMessage（本轮最后一个动作是否是 send_message）为收尾依据，
-      // 而不是只看本轮有没有出现过 send_message。
-      if (!terminalInternalRound) {
-        messages.push({
-          role: 'user',
-          content: sentMessage
-            ? `Tool execution results:\n${resultSummary}\n\n${buildPostSendNudge(outboundMessages, tickState)}`
-            : toolLoopStopReason
-              ? buildToolLoopStopNudge(toolLoopStopReason, lastToolResult)
-              : `Tool execution results:\n${resultSummary}\n\nContinue completing the task. If this is a user message and the information is sufficient, ${deliverInstruction}. If a tool failed, explain the failure and available clues; do not end silently.`,
-        })
-      }
-    } else {
-      const assistantMsg = {
-        role: 'assistant',
-        tool_calls: effectiveToolCalls.map(tc => ({
-          id: tc.id,
-          type: 'function',
-          function: { name: tc.name, arguments: tc.arguments || '{}' }
-        }))
-      }
-      if (content) assistantMsg.content = content
-      if (reasoningContent) assistantMsg.reasoning_content = reasoningContent
-      messages.push(assistantMsg)
-
-      // 将工具结果加入对话
-      for (const tr of toolResults) {
-        messages.push({
-          role: 'tool',
-          tool_call_id: tr.id,
-          content: String(tr.result)
-        })
-      }
+    appendRoundOutput()
+    for (const tr of toolResults) {
+      messages.push({
+        type: 'function_call_output',
+        call_id: tr.id,
+        output: String(tr.result),
+      })
+    }
+    {
       if (terminalInternalRound) break
       // "send_message 是不是本轮最后一个动作"才是判断"能不能收尾"的正确信号。
       // 旧逻辑只看 hasSendMessage（本轮任意位置出现过 send_message），
@@ -1757,7 +1846,19 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       } else if (mustReply) {
         // 层 3：步数跨过阈值仍未投递 → 先插一次"不确定回退"软检查点，引导退一步重审计划，
         // 而不是继续往前撞。一 turn 只发一次；之后回到普通"继续"nudge。
-        if (toolLoopState.totalCalls >= TOOL_LOOP_LIMITS.uncertaintyCheckpointCalls && !uncertaintyNudgeUsed) {
+        if (toolDiscoveryState.pending) {
+          // Suppress discovery narration from final delivery. The assistant
+          // tool-call message remains in model context, but only the eventual
+          // useful result is allowed into allContent.
+          allContent = ''
+          messages.push({
+            role: 'user',
+            content: buildToolDiscoveryRetryNudge({
+              attempts: toolDiscoveryState.attempts,
+              queries: toolDiscoveryState.queries,
+            }),
+          })
+        } else if (toolLoopState.totalCalls >= TOOL_LOOP_LIMITS.uncertaintyCheckpointCalls && !uncertaintyNudgeUsed) {
           uncertaintyNudgeUsed = true
           console.log(`[不确定回退] 已执行 ${toolLoopState.totalCalls} 次工具仍未投递，注入重审检查点`)
           messages.push({
@@ -1776,9 +1877,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     // close succeeds, skip another provider round entirely: this avoids both
     // latency and any streamed narration before the final emoji is delivered.
     const fixedActionReply = actionContractSatisfied
-      ? verifiedActionContractReply(actionContract, actionContractEvidence)
+      ? verifiedActionContractReply(actionContract, actionContractEvidence, {
+          successfulToolEvidence: actionContractEvidenceList,
+        })
       : ''
-    if (mustReply && actionContract?.id === 'browser_close' && fixedActionReply && !delivered) {
+    if (mustReply && actionContract?.runtimeOwnedReply === true
+        && actionContractSatisfied && fixedActionReply && !delivered) {
       allContent = fixedActionReply
       break
     }
@@ -1815,6 +1919,50 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
       if (fixedReply) fallbackContent = fixedReply
     }
+    // A screenshot request is fulfilled only when the captured file reaches
+    // the user. If the provider forgot the media-bearing send_message call,
+    // perform the same real delivery path here instead of emitting a false
+    // text-only "sent" acknowledgement.
+    if (actionContract?.id === 'browser_screenshot' && actionContractSatisfied && fallbackTarget) {
+      const imagePath = browserScreenshotPathFromEvidence(actionContractEvidenceList)
+      if (screenshotDeliverySucceeded) {
+        fallbackContent = ''
+      } else if (screenshotDeliveryAttempted) {
+        // A real media delivery already failed. Do not race it with an implicit
+        // identical retry; report the observed failure honestly instead.
+        fallbackContent = '截图已经生成，但图片发送失败。'
+      } else if (imagePath) {
+        let screenshotSignal = signal
+        let screenshotCleanup = null
+        if (aborted) {
+          const fresh = createMergedAbortSignal(null, 30_000)
+          screenshotSignal = fresh?.signal
+          screenshotCleanup = fresh?.cleanup
+        }
+        const screenshotArgs = { target_id: fallbackTarget, content: '', image_path: imagePath }
+        try {
+          const screenshotResult = await runTool('send_message', screenshotArgs, {
+            ...toolContext,
+            signal: screenshotSignal,
+            source: 'fallback',
+          })
+          const screenshotDelivery = parseToolDeliveryState(screenshotResult)
+          delivered = !isToolFailure(screenshotResult)
+            && (screenshotDelivery.hasDelivered ? screenshotDelivery.delivered : true)
+          lastToolResult = { name: 'send_message', args: screenshotArgs, result: screenshotResult }
+          if (onToolCall) onToolCall('send_message', { ...screenshotArgs, __fallback: true }, screenshotResult)
+          fallbackContent = delivered ? '' : '截图已经生成，但图片发送失败。'
+        } catch (err) {
+          if (err?.name === 'AbortError' && !aborted) throw err
+          fallbackContent = '截图已经生成，但图片发送失败。'
+          console.warn('[protocol fallback] screenshot delivery failed:', err?.message || err)
+        } finally {
+          screenshotCleanup?.()
+        }
+      } else {
+        fallbackContent = '截图没有生成可发送的图片文件。'
+      }
+    }
     // 播放收尾一致性：视频流程里模型常不调 send_message 而是留 body 走兜底（音乐则习惯调
     // send_message 被 isMediaCloser 替换）。这里对兜底 body 做同样处理——本 turn 播放过媒体、
     // 且 body 正是一句播放确认时换成单个表情，确保"播放中"之类文字不会原样发出/被语音念。
@@ -1845,7 +1993,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         // 兜底也是"真正执行过的 send_message"：置 delivered，并触发与正常路径同样的
         //   onToolCall 回调（语音渠道自动 TTS、UI tool_call 事件、toolCallLog 登记都在那里）。
         //   __fallback 标记仅给 onToolCall 用于遥测分类；executeTool 收到的是干净的 fbArgs。
+        const fallbackDelivery = parseToolDeliveryState(fbResult)
         delivered = !isToolFailure(fbResult)
+          && (fallbackDelivery.hasDelivered ? fallbackDelivery.delivered : true)
         lastToolResult = { name: 'send_message', args: fbArgs, result: fbResult }
         if (onToolCall) onToolCall('send_message', { ...fbArgs, __fallback: true }, fbResult)
       } catch (err) {

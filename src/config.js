@@ -10,6 +10,7 @@ import {
   DEFAULT_TTS_PROVIDER,
   normalizeDoubaoSpeechRate,
 } from './voice/tts-defaults.js'
+import { buildResponsesRequest } from './llm-responses.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
 export const MINIMAX_PROVIDER = 'minimax'
@@ -18,6 +19,7 @@ export const QWEN_PROVIDER = 'qwen'
 export const MOONSHOT_PROVIDER = 'moonshot'
 export const ZHIPU_PROVIDER = 'zhipu'
 export const MIMO_PROVIDER = 'mimo'
+export const LLM_API_FORMAT = 'responses'
 
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-pro'
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
@@ -474,16 +476,6 @@ function isMoonshotKimiModel(model) {
   return String(model || '').trim().toLowerCase().startsWith('kimi-')
 }
 
-function isMoonshotThinkingAlwaysOnModel(model) {
-  const value = String(model || '').trim().toLowerCase()
-  return value === 'kimi-k2.7-code' || value === 'kimi-k2.7-code-highspeed'
-}
-
-function isMoonshotThinkingToggleSupportedModel(model) {
-  const value = String(model || '').trim().toLowerCase()
-  return value === 'kimi-k2.6' || value === 'kimi-k2.5'
-}
-
 export function shouldOmitSamplingForProviderModel(provider, model) {
   if (provider === OPENAI_PROVIDER && isOpenAIDefaultSamplingModel(model)) return true
   return provider === MOONSHOT_PROVIDER && isMoonshotKimiModel(model)
@@ -492,17 +484,6 @@ export function shouldOmitSamplingForProviderModel(provider, model) {
 function isOpenAIDefaultSamplingModel(model) {
   const value = String(model || '').trim().toLowerCase()
   return value.startsWith('gpt-5') || /^o\d/.test(value)
-}
-
-export function shouldUseMaxCompletionTokensForProviderModel(provider, model) {
-  if (provider !== OPENAI_PROVIDER) return false
-  return isOpenAIDefaultSamplingModel(model)
-}
-
-export function shouldSendThinkingDisabledForProviderModel(provider, model) {
-  if (provider === ZHIPU_PROVIDER) return true
-  if (provider !== MOONSHOT_PROVIDER) return false
-  return isMoonshotThinkingToggleSupportedModel(model) && !isMoonshotThinkingAlwaysOnModel(model)
 }
 
 export function getProviderModelFallbacks(provider, model) {
@@ -517,10 +498,6 @@ export function getProviderModelFallbacks(provider, model) {
     chain.push(item.id)
   }
   return chain
-}
-
-function isThinkingEnabledForModel(model) {
-  return normalizeModel(model) !== 'deepseek-chat'
 }
 
 function getProvidersForAutoDetect() {
@@ -548,26 +525,16 @@ function withTimeout(promise, ms, label) {
 }
 
 function buildPingParams(provider, model) {
-  const pingParams = {
+  return buildResponsesRequest({
+    provider,
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
+    temperature: 0,
+    maxTokens: 32,
+    thinking: false,
+    omitSampling: shouldOmitSamplingForProviderModel(provider, model),
     stream: false,
-  }
-  if (shouldUseMaxCompletionTokensForProviderModel(provider, model)) {
-    pingParams.max_completion_tokens = 32
-  } else {
-    pingParams.max_tokens = 8
-  }
-  if (!shouldOmitSamplingForProviderModel(provider, model)) {
-    pingParams.temperature = 0
-  }
-  if (provider === DEEPSEEK_PROVIDER) {
-    pingParams.reasoning_effort = 'high'
-    pingParams.thinking = { type: isThinkingEnabledForModel(model) ? 'enabled' : 'disabled' }
-  } else if (provider === ZHIPU_PROVIDER) {
-    pingParams.thinking = { type: 'disabled' }
-  }
-  return pingParams
+  })
 }
 
 async function probeProvider(OpenAI, provider, apiKey, requestedModel) {
@@ -582,7 +549,7 @@ async function probeProvider(OpenAI, provider, apiKey, requestedModel) {
   for (const model of models) {
     try {
       await withTimeout(
-        client.chat.completions.create(buildPingParams(provider, model)),
+        client.responses.create(buildPingParams(provider, model)),
         PROBE_TIMEOUT_MS,
         provider,
       )
@@ -1059,8 +1026,8 @@ export const config = {
   baseURL: null,
   needsActivation: true,
   temperature: 0.5,
-  // 思考模式开关：true=向 provider 传 thinking enabled（深度由模型自控），false=thinking disabled。
-  // 默认关闭——只有用户在设置里显式开启才思考。这是「用户显式选择」的开关，
+  // Responses reasoning 强度开关：true=high，false=provider 支持的最低强度
+  // （DeepSeek 为 low，OpenAI 为 none）。默认低强度——只有用户显式开启才使用 high。
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
   contextWindow: {
@@ -1176,13 +1143,15 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
     const client = new OpenAI({ apiKey: normalizedKey, baseURL: normalizedBaseURL, timeout: PROBE_TIMEOUT_MS })
     try {
       await withTimeout(
-        client.chat.completions.create({
+        client.responses.create(buildResponsesRequest({
+          provider: 'custom',
           model: normalizedModel,
           messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
-          max_tokens: 16,
+          maxTokens: 32,
           temperature: 0,
+          thinking: false,
           stream: false,
-        }),
+        })),
         PROBE_TIMEOUT_MS,
         'custom',
       )
@@ -1306,6 +1275,7 @@ export function getActivationStatus() {
   const customModels = config.model ? [{ id: config.model, label: config.model, deprecated: false }] : DEEPSEEK_MODELS
   return {
     activated: !config.needsActivation,
+    apiFormat: LLM_API_FORMAT,
     provider: config.provider,
     model: config.model,
     baseURL: config.provider === 'custom' ? config.baseURL : undefined,
@@ -1321,6 +1291,7 @@ export function getProviderSummaries() {
       const stored = resolveStoredLlmForProvider(name)
       return {
       label: pConfig.label || name,
+      apiFormat: LLM_API_FORMAT,
       models: withCurrentModel(pConfig.models, stored?.model),
       defaultModel: pConfig.defaultModel,
       configured: !!stored,
@@ -1332,6 +1303,7 @@ export function getProviderSummaries() {
   const custom = resolveStoredLlmForProvider('custom')
   result.custom = {
     label: 'Custom Endpoint',
+    apiFormat: LLM_API_FORMAT,
     models: [],
     defaultModel: '',
     configured: !!custom,
@@ -2025,9 +1997,6 @@ export const __internals = {
   MIMO_MODELS,
   getProviderModelFallbacks,
   normalizeModel,
-  isThinkingEnabledForModel,
   shouldOmitSamplingForProviderModel,
-  shouldSendThinkingDisabledForProviderModel,
-  shouldUseMaxCompletionTokensForProviderModel,
   buildPingParams,
 }

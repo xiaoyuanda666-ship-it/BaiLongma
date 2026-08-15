@@ -64,7 +64,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'browser_set_display_mode',
-      description: 'Explicitly choose the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. card embeds the live page in Brain UI; window moves the exact same page into a draggable native window with standard controls. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. Before the first browser_navigate, snapshot, or page interaction in EVERY user turn, you MUST call this tool and choose card or window; there is no default mode. If a browser tool returns BROWSER_DISPLAY_MODE_REQUIRED, call this tool, then retry the exact blocked action. Use window for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, and careful interaction. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
+      description: 'Choose the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. Ordinary browser work already defaults to card, so call this only when the user requests a particular size or when window is required for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, or careful interaction. window means an independent large window, not operating-system fullscreen. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
       parameters: {
         type: 'object',
         properties: {

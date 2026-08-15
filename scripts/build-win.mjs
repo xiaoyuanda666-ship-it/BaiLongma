@@ -26,7 +26,15 @@ export function peMachineFromBuffer(buffer) {
 
 export function assertPeX64(filePath, label = path.basename(filePath)) {
   if (!fs.existsSync(filePath)) throw new Error(`${label} is missing: ${filePath}`)
-  const machine = peMachineFromBuffer(fs.readFileSync(filePath))
+  const fd = fs.openSync(filePath, 'r')
+  const header = Buffer.alloc(4096)
+  let bytesRead
+  try {
+    bytesRead = fs.readSync(fd, header, 0, header.length, 0)
+  } finally {
+    fs.closeSync(fd)
+  }
+  const machine = peMachineFromBuffer(header.subarray(0, bytesRead))
   if (machine !== 0x8664) {
     const actual = machine === null ? 'not a PE executable' : `PE machine 0x${machine.toString(16)}`
     throw new Error(`${label} must be Windows x64 (${actual}): ${filePath}`)
@@ -120,6 +128,7 @@ function main() {
   const { pkg, electronVersion } = packageMetadata()
   const requireSigning = signingIsRequired()
 
+  run(process.execPath, ['scripts/check-native-dependency-versions.mjs'])
   run(process.execPath, ['scripts/prebuild-clean.mjs'])
   validateWindowsNativeDependencies()
   run(process.execPath, ['scripts/prepare-playwright-browsers.mjs', '--platform=win32', '--arch=x64'])

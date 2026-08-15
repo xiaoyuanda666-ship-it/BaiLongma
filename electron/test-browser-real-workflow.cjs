@@ -66,6 +66,10 @@ const fixtureServer = http.createServer((request, response) => {
     response.end('<!doctype html><title>Stable Search</title><form action="/results"><label>Query <input name="q"></label><button>Search</button></form>')
     return
   }
+  if (request.url === '/prefilled-form') {
+    response.end('<!doctype html><title>Prefilled Search</title><form action="/results"><label>Query <input name="q" type="search" value="electron"></label></form>')
+    return
+  }
   if (request.url?.startsWith('/results')) {
     const query = new URL(request.url, 'http://fixture').searchParams.get('q') || ''
     response.end(`<!doctype html><title>Results for ${query}</title><h1>Results for ${query}</h1><div style="height:3200px">Scrollable deterministic content</div><p>Bottom marker</p>`)
@@ -210,10 +214,32 @@ app.whenReady().then(async () => {
     assert.equal(submitted.ok, true, JSON.stringify(submitted))
     assert.equal(submitted.browser_preview.url, `${baseUrl}/results?q=bailongma`)
     assert.match(resultText(submitted), /Results for bailongma/)
+    const foundOnCurrentPage = await call('browser_find', { text: 'Results for bailongma' })
+    assert.equal(foundOnCurrentPage.ok, true, JSON.stringify(foundOnCurrentPage))
+    assert.equal(foundOnCurrentPage.structured_content?.page_find?.query, 'Results for bailongma')
+    assert.equal(foundOnCurrentPage.structured_content?.page_find?.found, true)
+    assert.equal(foundOnCurrentPage.structured_content?.page_find?.total_matches, 1)
+    assert.equal(foundOnCurrentPage.browser_preview.url, `${baseUrl}/results?q=bailongma`,
+      'current-page find must not navigate away')
     const beforeScroll = Number(resultText(submitted).match(/"scrollY":(\d+)/)?.[1])
     const scrolled = await call('browser_press_key', { key: 'PageDown' })
     const afterScroll = Number(resultText(scrolled).match(/"scrollY":(\d+)/)?.[1])
     assert.ok(afterScroll > beforeScroll, JSON.stringify({ beforeScroll, afterScroll, result: scrolled }))
+
+    const prefilledForm = await call('browser_navigate', { url: `${baseUrl}/prefilled-form` })
+    const prefilledInputMatch = resultText(prefilledForm).match(/uid=([^\s]+)\s+searchbox "Query\s*"/)
+    assert.ok(prefilledInputMatch?.[1], resultText(prefilledForm))
+    const replaced = await call('browser_type', {
+      uid: prefilledInputMatch[1], text: 'bailongma replacement', replace: true,
+    })
+    assert.equal(replaced.ok, true, JSON.stringify(replaced))
+    assert.match(resultText(replaced), /value="bailongma replacement"/)
+    const fallbackSubmitted = await call('browser_click', {
+      search_submit: true, element: 'search submit',
+    })
+    assert.equal(fallbackSubmitted.ok, true, JSON.stringify(fallbackSubmitted))
+    assert.equal(fallbackSubmitted.browser_preview.url, `${baseUrl}/results?q=bailongma+replacement`)
+    assert.match(resultText(fallbackSubmitted), /Results for bailongma replacement/)
 
     for (let index = 0; index < 30; index += 1) {
       const stable = await call('browser_snapshot')
@@ -236,6 +262,8 @@ app.whenReady().then(async () => {
       forwardFinalUrl: forwarded.browser_preview.url,
       targetBlankFinalUrl: blankClick.browser_preview.url,
       submittedUrl: submitted.browser_preview.url,
+      fallbackSubmittedUrl: fallbackSubmitted.browser_preview.url,
+      currentPageFindMatches: foundOnCurrentPage.structured_content?.page_find?.total_matches,
       scrollBefore: beforeScroll,
       scrollAfter: afterScroll,
       stabilityOperations: 30,

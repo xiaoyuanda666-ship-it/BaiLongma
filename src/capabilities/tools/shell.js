@@ -9,6 +9,7 @@ import { emitEvent } from '../../events.js'
 import { config } from '../../config.js'
 import { createMergedAbortSignal, throwIfAborted } from '../abort-utils.js'
 import { SANDBOX_ROOT, assertInSandbox } from '../sandbox.js'
+import { analyzeLocalServiceCommand } from '../../runtime/local-service-safety.js'
 import { classifyCommandProfile, resolveProfileTimeout } from './command-profiles.js'
 import { runOnPersistentShell } from './persistent-shell.js'
 
@@ -28,6 +29,22 @@ const COMMAND_RUN_MAX_ENTRIES = 100
 const COMMAND_RUN_RETAIN_EXITED_MS = 10 * 60 * 1000
 const COMMAND_RUN_OUTPUT_MAX_BYTES = 512 * 1024
 const COMMAND_RUN_OUTPUT_CHUNK_MAX_CHARS = 1000
+
+// A run created through run_command is owned by this BaiLongma runtime. This
+// keeps temporary dev/preview servers observable during the session without
+// turning them into accidental machine daemons after the app exits.
+function shutdownManagedCommandRuns() {
+  for (const run of commandRuns.values()) {
+    if (isCommandRunTerminal(run)) continue
+    try { terminateProcessTree(run.child, run.pid, { processGroup: run.processGroup }) } catch {}
+  }
+  for (const [pid, entry] of bgProcesses.entries()) {
+    if (entry?.status !== 'running') continue
+    try { terminateProcessTree(entry.process, pid) } catch {}
+  }
+}
+
+process.once('exit', shutdownManagedCommandRuns)
 
 const IS_WIN = process.platform === 'win32'
 const DOWNLOAD_PROGRESS_INTERVAL_MS = 1500
@@ -459,6 +476,7 @@ function commandRunSnapshot(run, { cursor = 0, includeOutput = false } = {}) {
     exit_code: run.exitCode,
     error: run.error,
   }
+  if (run.serviceSafety) base.service_safety = run.serviceSafety
   return includeOutput ? { ...base, ...commandRunOutputSince(run, cursor) } : { ...base, output_cursor: run.nextSequence - 1 }
 }
 
@@ -601,7 +619,22 @@ export async function execRunCommand(args = {}, context = {}) {
   if (commandRuns.size >= COMMAND_RUN_MAX_ENTRIES) {
     return toolJson({ ok: false, tool: 'run_command', error: 'too many active or retained command runs; wait for or cancel an existing run first' })
   }
+  const serviceSafety = analyzeLocalServiceCommand(command, {
+    cwd: execCwd,
+    currentUserMessage: context.currentUserMessage || '',
+  })
+  if (serviceSafety.blocked) {
+    return toolJson({
+      ok: false,
+      tool: 'run_command',
+      code: serviceSafety.code,
+      error: serviceSafety.reason,
+      hint: serviceSafety.hint,
+      service_safety: serviceSafety,
+    })
+  }
   const run = startCommandRun(command, execCwd, profile)
+  run.serviceSafety = serviceSafety.is_service ? serviceSafety : null
   // Explicit start makes lifecycle visible immediately. Existing calls without
   // action preserve the former “wait for a normal command” behavior.
   const waitForExit = args.wait_for_exit === true || args.wait_for_exit === 'true' || legacyStart
@@ -778,6 +811,21 @@ async function execCommandImpl(args, context = {}) {
     execCwd = resolveExecCwd(args.cwd || '')
   } catch (err) {
     return toolJson({ ok: false, tool: 'exec_command', error: err.message })
+  }
+
+  const serviceSafety = analyzeLocalServiceCommand(command, {
+    cwd: execCwd,
+    currentUserMessage: context.currentUserMessage || '',
+  })
+  if (serviceSafety.blocked) {
+    return toolJson({
+      ok: false,
+      tool: 'exec_command',
+      code: serviceSafety.code,
+      error: serviceSafety.reason,
+      hint: serviceSafety.hint,
+      service_safety: serviceSafety,
+    })
   }
 
   console.log(`[exec_command] ${background ? '[后台]' : '[前台]'} ${command} (cwd: ${execCwd})`)

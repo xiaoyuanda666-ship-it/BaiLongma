@@ -174,13 +174,13 @@ export const systemSchemas = {
     type: 'function',
     function: {
       name: 'find_tool',
-      description: 'Search the full tool catalog for a capability you need but do NOT currently have in your tool list, and load the matching tools so you can call them immediately. Each turn only a subset of tools is loaded based on the message; if you realize you need something not available right now (run a command, generate an image, set a reminder, read a file, check trending news, manage a rule, etc.), call find_tool with a short description of what you want to do — the matched tools become callable on your next step. Do NOT use it to look up tools you already have.',
+      description: 'Search the full tool catalog for a capability you need but do NOT currently have, then load matching tools for the next step. Calling this tool is mandatory when your next concrete action needs a tool that is not visible; never narrate the missing action as prose. If a search returns no loadable match, retry with a materially different query, up to four total attempts: exact tool name if known, action + object, Chinese/English synonyms, then a broader capability category. Never repeat the same query. Once a relevant tool is loaded, stop searching and call it immediately. Only declare the capability unavailable after the distinct searches fail or the result explicitly reports an unavailable schema/provider. Do NOT search for tools already visible.',
       parameters: {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'A short natural-language description of the capability you need, e.g. "生成一张图片", "运行命令", "设置提醒", "读取文件", "看热搜". Chinese or English both work.'
+            description: 'A concise discovery query. On retries, use a genuinely different strategy rather than rephrasing the same sentence: e.g. "read_file", then "读取本地文件", then "file filesystem inspect", then "文件系统能力".'
           }
         },
         required: ['query']

@@ -346,13 +346,14 @@ export function selectTools(ctx = {}) {
     isTick,
     mmCaps,
     hasTask,
+    recentBrowserContext: Array.isArray(recentActionLog)
+      && recentActionLog.some(entry => /^browser_(?!clear_data)/i.test(String(entry?.tool || ''))),
   }
   for (const name of capabilityToolsFor(capabilityCtx)) {
     if (name && !suppressed.has(name)) out.add(name)
   }
 
   void senderId
-  void recentActionLog
   void fastUserPath
 
   // 最后一道兜底:被 suppressed 的工具不论谁加回来都剃掉。

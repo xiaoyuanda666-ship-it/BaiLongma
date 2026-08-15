@@ -78,6 +78,12 @@ function extFromMime(mime = '', fallback = '.png') {
   return MIME_TO_EXT.get(String(mime || '').split(';')[0].trim().toLowerCase()) || fallback
 }
 
+function safeOriginalExt(originalFilename = '', mime = '') {
+  const fromName = normalizeExt(path.extname(String(originalFilename || '')), '')
+  if (/^\.[a-z0-9]{1,12}$/i.test(fromName)) return fromName
+  return extFromMime(mime, '.bin')
+}
+
 export function mimeFromChatMediaExt(ext = '') {
   return EXT_TO_MIME.get(normalizeExt(ext)) || 'application/octet-stream'
 }
@@ -119,6 +125,37 @@ export function persistChatMediaDataUrl(dataUrl = '') {
   return persistChatMediaBuffer(Buffer.from(match[2].replace(/\s+/g, ''), 'base64'), {
     ext: extFromMime(mime),
   })
+}
+
+// 聊天拖入资源和“发图”是两种不同语义：前者可以是任意文件，并且必须落在
+// sandbox 内，等用户下一条文字/语音指令到达后 Agent 才读取。保留独立函数，
+// 避免放宽 persistChatMediaDataUrl 的 image-only 安全边界。
+export function persistChatResourceDataUrl(dataUrl = '', {
+  originalFilename = '',
+  maxBytes = 20 * 1024 * 1024,
+} = {}) {
+  const raw = String(dataUrl || '').trim()
+  const match = raw.match(/^data:([^;,]+)(?:;[^,]*)?;base64,([a-z0-9+/=\s]*)$/i)
+  if (!match) throw new Error('expected a base64 data URL')
+  const mime = String(match[1] || 'application/octet-stream').trim().toLowerCase()
+  const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64')
+  if (maxBytes > 0 && buffer.length > maxBytes) {
+    throw new Error(`resource is larger than ${Math.round(maxBytes / 1024 / 1024)}MB`)
+  }
+  const ext = safeOriginalExt(originalFilename, mime)
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex')
+  const storedName = `${hash}${ext}`
+  const storedPath = path.join(paths.sandboxChatUploadsDir, storedName)
+  if (!fs.existsSync(storedPath)) fs.writeFileSync(storedPath, buffer)
+  return {
+    url: `/media/chat/${storedName}`,
+    path: storedPath,
+    sandboxPath: path.relative(paths.sandboxDir, storedPath).replace(/\\/g, '/'),
+    filename: storedName,
+    originalFilename: String(originalFilename || '').trim(),
+    mime,
+    size: buffer.length,
+  }
 }
 
 export function markdownImage(url = '', alt = 'image') {

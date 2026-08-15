@@ -1,5 +1,9 @@
 import { normalizeChannel, isSystemSignalRow } from './channel.js'
 import { formatLocalClock, formatLocalDateMinute } from '../time.js'
+import {
+  CHAT_RESOURCE_CHANNEL,
+  formatConversationResourceForAgent,
+} from '../chat-resources.js'
 
 function xmlAttr(value) {
   return String(value ?? '')
@@ -37,10 +41,11 @@ function formatConversationMetadata({ conversationWindow = [], msg = null, expir
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const isSystemRow = isSystemSignalRow(row)
+    const isResourceRow = String(row.channel || '').toUpperCase() === CHAT_RESOURCE_CHANNEL
     const normalizedChannel = normalizeChannel(row.channel || '')
     const role = row.role === 'jarvis'
       ? 'assistant'
-      : (isSystemRow ? 'system_signal' : 'user')
+      : (isSystemRow ? 'system_signal' : (isResourceRow ? 'user_resource' : 'user'))
     const attrs = [
       `n="${i + 1}"`,
       `role="${role}"`,
@@ -52,14 +57,14 @@ function formatConversationMetadata({ conversationWindow = [], msg = null, expir
     if (row.to_id) attrs.push(`to="${xmlAttr(row.to_id)}"`)
     if (row.timestamp) attrs.push(`at="${xmlAttr(row.timestamp)}"`)
     if (normalizedChannel) attrs.push(`channel="${xmlAttr(normalizedChannel)}"`)
-    if (!isSystemRow && prevChannel && normalizedChannel && prevChannel !== normalizedChannel) {
+    if (!isSystemRow && !isResourceRow && prevChannel && normalizedChannel && prevChannel !== normalizedChannel) {
       attrs.push(`channel_switched_from="${xmlAttr(prevChannel)}"`)
     }
     if (row.focus_topic) attrs.push(`topic="${xmlAttr(row.focus_topic)}"`)
     if (row.open_question && expiredSet.has(row.id ?? -999)) attrs.push('expired_open_question="true"')
 
     turns.push(`  <turn ${attrs.join(' ')} />`)
-    if (!isSystemRow && normalizedChannel) prevChannel = normalizedChannel
+    if (!isSystemRow && !isResourceRow && normalizedChannel) prevChannel = normalizedChannel
   }
 
   return `<conversation_metadata>
@@ -80,6 +85,18 @@ export function formatConversationMessage(row, currentMsg = null, prevChannel = 
 
   const ts = formatLocalDateMinute(row.timestamp)
   const rawChannel = row.channel || currentMsg?.channel || ''
+
+  if (String(row.channel || '').toUpperCase() === CHAT_RESOURCE_CHANNEL) {
+    const activatedIds = new Set((currentMsg?.pendingResources || [])
+      .map(item => String(item?.id || ''))
+      .filter(Boolean))
+    return {
+      role: 'user',
+      content: formatConversationResourceForAgent(row, {
+        activatesCurrentTurn: activatedIds.has(String(row.id || '')),
+      }),
+    }
+  }
 
   // 保留 currentMsg 回退语义：row.channel 为空时回退到 currentMsg?.channel（同 rawChannel）。
   const isSystemSignal = isSystemSignalRow(row, currentMsg?.channel)

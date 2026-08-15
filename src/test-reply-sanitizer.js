@@ -29,6 +29,24 @@ assert.equal(
   'normal content that begins with 用户 is preserved',
 )
 
+assert.equal(
+  sanitizeAssistantReplyForDelivery('已打开第二个结果。已打开第二个结果。'),
+  '已打开第二个结果。',
+  'adjacent duplicate sentences are collapsed in final replies',
+)
+
+assert.equal(
+  sanitizeAssistantReplyForDelivery('第一项成功。\n第一项成功。\n第二项成功。'),
+  '第一项成功。\n第二项成功。',
+  'adjacent duplicate reply lines are collapsed',
+)
+
+assert.equal(
+  sanitizeAssistantReplyForDelivery('第一项成功。第二项成功。第一项成功。'),
+  '第一项成功。第二项成功。第一项成功。',
+  'non-adjacent repeated sentences remain intact',
+)
+
 const stream = createAssistantReplyStreamSanitizer()
 assert.equal(stream.push('用户刚从"智谱官网"话题'), '', 'stream holds possible internal prefix')
 assert.equal(stream.push('切到"三元里"话题。\n'), '', 'stream drops confirmed internal line')

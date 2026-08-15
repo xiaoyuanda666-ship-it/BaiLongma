@@ -9,6 +9,7 @@ import { callLLM } from './llm.js'
 import { buildLLMMessages } from './runtime/messages.js'
 
 const productionDeliverySuccess = JSON.stringify({ ok: true, delivered: true, message_sent: true })
+const itemText = item => String(item?.content ?? item?.output ?? '')
 
 const executed = []
 let rounds = 0
@@ -59,7 +60,9 @@ assert.equal(executed.length, 1, 'only the first same-recipient send from a pre-
 assert.equal(executed[0].args.content, 'First observation.')
 assert.equal(result.delivered, true, 'the first actual delivery remains recorded')
 
-const toolResults = thirdRoundMessages.filter(message => message.role === 'tool').map(message => String(message.content))
+const toolResults = thirdRoundMessages
+  .filter(message => message.type === 'function_call_output')
+  .map(message => String(message.output))
 assert(toolResults.some(result => result.includes('"message_sent":true')), 'the next model step sees the production-shaped structured delivery result')
 assert(toolResults.some(result => result.includes('outbound_reconsideration_required')), 'the deferred second send is visible as a fresh-decision requirement')
 assert(toolResults.some(result => result.includes('same_tick_no_new_evidence')), 'a later tool-loop round cannot impersonate a new heartbeat without new evidence')
@@ -124,11 +127,11 @@ await callLLM({
     }
     if (dynamicRounds === 2) {
       assert(toolSchemas.some(schema => schema.function.name === 'read_file'), 'find_tool loads read_file for the next model round')
-      assert(messages.some(entry => String(entry.content || '').includes('"message_sent":true')), 'the next round retains the structured progress-delivery fact')
+      assert(messages.some(entry => itemText(entry).includes('"message_sent":true')), 'the next round retains the structured progress-delivery fact')
       return { content: '', reasoningContent: '', aborted: false, toolCalls: [call('dynamic-read', 'read_file', { path: 'report.txt' })] }
     }
     if (dynamicRounds === 3) {
-      assert(messages.some(entry => String(entry.content || '').includes('verified contents')), 'the final-result round receives the dynamically loaded tool evidence')
+      assert(messages.some(entry => itemText(entry).includes('verified contents')), 'the final-result round receives the dynamically loaded tool evidence')
       return { content: '', reasoningContent: '', aborted: false, toolCalls: [call('dynamic-final', 'send_message', { target_id: 'ID:000001', content: 'report.txt 内容是 verified contents。' })] }
     }
     return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
@@ -165,7 +168,7 @@ await callLLM({
       }
     }
     if (actionRounds === 2) {
-      assert(messages.some(entry => String(entry.content || '').includes('"bytes":4')), 'the action result reaches final-result processing after an earlier progress message')
+      assert(messages.some(entry => itemText(entry).includes('"bytes":4')), 'the action result reaches final-result processing after an earlier progress message')
       return { content: '', reasoningContent: '', aborted: false, toolCalls: [call('action-final', 'send_message', { target_id: 'ID:000001', content: 'result.txt 已创建（4 bytes）。' })] }
     }
     return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
