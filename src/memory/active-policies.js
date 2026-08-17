@@ -45,7 +45,7 @@ const INTENT_LEXICON = [
       /\u6587\u4ef6|\u4ee3\u7801|\u4fee\u6539|\u7f16\u8f91|\u4fdd\u5b58|\u8bfb\u53d6|\u5199\u5165|\u9879\u76ee/i,
     ],
     terms: [
-      'file_work', 'file', 'code', 'edit', 'patch', 'read_file', 'write_file',
+      'file_work', 'file', 'code', 'edit', 'patch', 'read_file', 'write_file', 'edit_file',
       'apply_patch', 'repo', 'project', '\u6587\u4ef6', '\u4ee3\u7801',
       '\u4fee\u6539', '\u7f16\u8f91', '\u4fdd\u5b58',
     ],

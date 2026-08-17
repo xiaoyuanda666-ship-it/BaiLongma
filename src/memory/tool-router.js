@@ -1,11 +1,12 @@
 // 按需注入工具选择器（动态上下文记忆池第 4 步）。
 //
-// 工具选择有两层：能力注册表中已经声明为当前意图可直接执行的能力，会在首轮
-// 注入其工具；其余通用能力仍通过 find_tool 按需发现。这样不会把全部工具塞进
-// 每轮上下文，也不会让“搜索网页 / 安装软件”这类明确请求先白白消耗一轮发现工具。
+// 工具选择有两层：能力注册表中已经声明为当前意图可直接执行的能力，以及明确的
+// 本地文件任务，会在首轮注入其工具；其余通用能力仍通过 find_tool 按需发现。这样
+// 不会把全部工具塞进每轮上下文，也不会让“做个网页并保存”这类常见请求先白白
+// 消耗一轮发现工具。
 //
 // 规则要点：
-//   1) 能力注册表是自动注入的唯一来源；其 toolWhen 声明了首轮可用性。
+//   1) 能力注册表和高置信本地文件意图声明首轮可用性。
 //   2) TICK 和启动自检保留其运行时必需的控制工具。
 //   3) 已安装的用户工具及本地视觉工具可见，但是否调用始终由主模型决定。
 //
@@ -46,7 +47,7 @@ const TASK_CTRL_OPENER  = ['set_task']  // 没任务时只暴露 set_task
 const REVIEW_TOOLS      = ['review_work']
 
 // 网页搜索、读取和交互、软件安装等已迁能力由 capability registry 提供。
-const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir']
+const FILESYSTEM_TOOLS  = ['read_file', 'write_file', 'edit_file', 'delete_file', 'list_dir', 'make_dir']
 const EXEC_TOOLS        = ['run_command', 'download_file', 'kill_process', 'list_processes']
 const MEDIA_TOOLS       = process.platform === 'darwin'
   ? ['media_mode']
@@ -101,12 +102,19 @@ const API_CONFIG_CONFIRM_RE = /^(?:yes|yep|ok|okay|sure|do it|go ahead|\u662f|\u
 
 const FILESYSTEM_TRIGGERS = [
   '文件', '路径', '目录', '文件夹', '读取', '读一下', '读下', '看下文件',
-  '写入', '保存', '另存', '存到', '新建', '建一个', '建个文件',
+  '写入', '保存', '另存', '存到', '新建', '建一个', '建个文件', '修改', '编辑', '替换',
   '删除', '删掉', '清理', '文档', 'readme', '日志', '配置文件',
-  'file', 'folder', 'directory', 'path', 'read ', 'write ', 'save ',
+  'file', 'folder', 'directory', 'path', 'read ', 'write ', 'save ', 'edit ', 'replace ',
   'create file', 'delete file', 'mkdir', 'ls ', 'dir ', '.txt', '.md',
   '.json', '.js', '.py', '.html', '.csv',
 ]
+
+// 普通用户往往说“做个主页，保存成网页”，不会说“创建 HTML 文件”。这类表达
+// 已经足够明确，可以直接提供文件工具。后续“把按钮改绿，其他别动”则只有在最近
+// 确实操作过文件时才续接，避免把日常聊天里的“改一下”误判成文件任务。
+const LOCAL_FILE_ARTIFACT_RE = /(?:(?:做|写|建|创建|新建|生成|保存|存成|另存|导出).{0,48}(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b)|(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b).{0,40}(?:保存|写入|创建|生成|修改|编辑|改成|换成))/i
+const FILE_EDIT_FOLLOWUP_RE = /(?:(?:把|将|再|顺便).{0,50}(?:改成|换成|加上|加一句|删掉|去掉|追加|修改|编辑)|(?:其他|其它|其余).{0,6}(?:别动|不动|不要改))/i
+const FILE_CONTEXT_RE = /(?:read_file|write_file|edit_file|absolute_path|artifact_path|(?:^|[\\/\s"'])(?:[^\\/\s"']+\.)?(?:md|markdown|txt|json|js|mjs|cjs|ts|tsx|jsx|py|html?|css|vue|svelte)(?:\b|["']))/i
 
 const EXEC_TRIGGERS = [
   '运行', '执行', '跑一下', '跑个', '命令', '终端', '控制台', '进程', '杀掉',
@@ -262,6 +270,15 @@ function recentApiCapabilitySetupNeed(recentActionLog = []) {
   })
 }
 
+function hasRecentFilesystemContext(recentActionLog = []) {
+  if (!Array.isArray(recentActionLog)) return false
+  return recentActionLog.slice(-8).some(entry => {
+    if (/^(?:read_file|write_file|edit_file)$/i.test(String(entry?.tool || ''))) return true
+    const text = `${entry?.args_json || ''} ${entry?.result_preview || ''} ${entry?.error || ''}`
+    return FILE_CONTEXT_RE.test(text)
+  })
+}
+
 export function selectTools(ctx = {}) {
   const {
     messageBody = '',
@@ -327,6 +344,18 @@ export function selectTools(ctx = {}) {
   // 用户轮都提供同一 schema；只有模型实际调用后，UI 才会收到开关事件。
   if (!isTick && localVisualTurn !== false) {
     for (const t of INTENT_ROUTED_VISUAL_TOOLS) out.add(t)
+  }
+
+  const normalizedMessage = String(messageBody || '').toLowerCase()
+  const knowledgeLibraryIntent = hits(normalizedMessage, KNOWLEDGE_TRIGGERS)
+  const explicitFilesystemIntent = !knowledgeLibraryIntent && (
+    hits(normalizedMessage, FILESYSTEM_TRIGGERS)
+    || LOCAL_FILE_ARTIFACT_RE.test(messageBody)
+  )
+  const filesystemContinuation = FILE_EDIT_FOLLOWUP_RE.test(messageBody)
+    && hasRecentFilesystemContext(recentActionLog)
+  if (!isTick && (explicitFilesystemIntent || filesystemContinuation)) {
+    for (const t of FILESYSTEM_TOOLS) out.add(t)
   }
   // —— 用户安装的扩展工具 ——
   // 用户轮保持原有便利；自主 Tick 由 find_tool 按需发现。最近实际用过的扩展仍会由

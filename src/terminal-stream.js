@@ -107,7 +107,7 @@ function isTerminalStreamWindowSnapshot(win) {
   if (win.kind === 'terminal_stream' || win.role === 'terminal_stream') return true
   if (win.terminal_stream_id) return true
   const title = compactTerminalTitle(win.title)
-  return title === DEFAULT_TITLE || title.startsWith('Writing ')
+  return title === DEFAULT_TITLE || title.startsWith('Writing ') || title.startsWith('Editing ')
 }
 
 function findTerminalStreamWindow(layout = null) {

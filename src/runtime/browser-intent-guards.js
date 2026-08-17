@@ -40,7 +40,7 @@ export function isLocalFileToolCallBlocked(name, args = {}, message = '') {
   if (!explicitlyForbidden && !webOnly) return false
 
   if (['read_file', 'list_dir'].includes(tool)) return true
-  if (explicitlyForbidden && ['write_file', 'delete_file', 'make_dir'].includes(tool)) return true
+  if (explicitlyForbidden && ['write_file', 'edit_file', 'delete_file', 'make_dir'].includes(tool)) return true
   if (tool !== 'find_tool') return false
   const query = String(args?.query || args?.description || args?.capability || '')
   return LOCAL_DISCOVERY_QUERY_RE.test(query)

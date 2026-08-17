@@ -51,12 +51,14 @@ const NON_FILE_WRITE_TOOLS = new Set([
   'exec_task_command',
   'exec_background_command',
   'download_file',
+  'edit_file',
 ])
 const FILE_WRITE_NAME_RE = /(^|_)(write|save|create|append|edit|update|generate|export)(_|$)|(^|_)(file|document|doc|article|markdown|md|html|code|script|page|note|text)(_|$)/i
 const FILE_OBJECT_NAME_RE = /(^|_)(file|document|doc|article|markdown|md|html|code|script|page|note|text)(_|$)/i
 const MARKDOWN_PATH_RE = /\.(md|markdown|mdown|mkd|mdx)$/i
 const ARTICLE_TOOL_RE = /(^|_)(article|essay|report|document|doc|markdown|md|note|text)(_|$)/i
 const ARTICLE_BASENAME_RE = /(^|[_. -])(article|essay|report|document|doc|markdown|md|note|notes|plan|story|post|draft)([_. -]|$)/i
+const WEBPAGE_PATH_RE = /\.(?:html?|xhtml)$/i
 const CODE_PATH_RE = /\.(js|mjs|cjs|ts|tsx|jsx|py|java|c|cc|cpp|h|hpp|cs|go|rs|rb|php|swift|kt|kts|html|css|scss|sass|json|yaml|yml|toml|xml|sql|sh|bash|ps1|bat|cmd|vue|svelte)$/i
 
 const recentPreviews = new Map()
@@ -69,6 +71,11 @@ function escapeRegExp(value) {
 function cleanTitle(pathValue = '') {
   const path = String(pathValue || '').trim()
   return path ? `Writing ${path.slice(0, 96)}` : DEFAULT_TITLE
+}
+
+function cleanEditTitle(pathValue = '') {
+  const path = String(pathValue || '').trim()
+  return path ? `Editing ${path.slice(0, 96)}` : 'Editing file'
 }
 
 function cleanToolName(name = '') {
@@ -90,11 +97,12 @@ function emitTerminalEvent({
   artifact_kind = '',
   artifact_path = '',
   hold_open,
+  ensure_open = true,
 } = {}) {
   const bridge = globalThis?.terminalStreamBridge
   const normalizedAction = String(action || 'write').trim().toLowerCase()
   if (normalizedAction === 'clear' || normalizedAction === 'open') cancelAutoClose(stream_id)
-  if (bridge && ['open', 'write', 'clear'].includes(normalizedAction)) {
+  if (bridge && ensure_open && ['open', 'write', 'clear'].includes(normalizedAction)) {
     bridge.emit('open', { title, stream_id, placement: 'auto', focus: false, source: 'write_file_preview' })
   } else if (bridge && normalizedAction === 'close') {
     bridge.emit('close', { stream_id })
@@ -111,6 +119,66 @@ function emitTerminalEvent({
     artifact_path,
     hold_open,
   })
+}
+
+function desktopWindowState() {
+  try {
+    const reader = globalThis?.getBailongmaWindowLayoutSnapshot
+    if (typeof reader !== 'function') return { known: false, visible: false, streamId: '' }
+    const layout = reader()
+    const windows = Array.isArray(layout?.windows) ? layout.windows : []
+    const terminalWindow = layout?.terminal_stream_window
+      || windows.find(win => win?.kind === 'terminal_stream' || win?.terminal_stream_id)
+      || null
+    return {
+      known: !!layout && (Array.isArray(layout.windows) || layout.terminal_stream_window !== undefined),
+      visible: !!terminalWindow && terminalWindow.visible !== false && terminalWindow.minimized !== true,
+      streamId: String(terminalWindow?.terminal_stream_id || ''),
+    }
+  } catch {
+    return { known: false, visible: false, streamId: '' }
+  }
+}
+
+function isFileOpenInWritePreview(pathValue = '') {
+  const snapshot = getTerminalStreamSnapshot(STREAM_ID)
+  if (snapshot.closed || previewKey(snapshot.artifact_path) !== previewKey(pathValue)) return false
+
+  const windowState = desktopWindowState()
+  if (!windowState.known) return true
+  return windowState.visible && (!windowState.streamId || windowState.streamId === STREAM_ID)
+}
+
+function renderFileExecutionPreview({
+  toolName,
+  path: pathValue,
+  content,
+  title,
+  artifact,
+  ensureOpen,
+} = {}) {
+  const body = String(content ?? '')
+  emitTerminalEvent({ action: 'clear', title, ensure_open: ensureOpen, ...artifact })
+  emitTerminalEvent({
+    action: 'write',
+    title,
+    text: `$ ${toolName} ${pathValue || '(unknown path)'}\n\n`,
+    newline: false,
+    level: 'muted',
+    ensure_open: false,
+    ...artifact,
+  })
+  for (let i = 0; i < body.length; i += REPLAY_CHUNK_SIZE) {
+    emitTerminalEvent({
+      action: 'write',
+      title,
+      text: body.slice(i, i + REPLAY_CHUNK_SIZE),
+      newline: false,
+      ensure_open: false,
+      ...artifact,
+    })
+  }
+  if (pathValue) markRecentPreview(pathValue, body.length)
 }
 
 function autoCloseDelayMs() {
@@ -158,6 +226,14 @@ function inferWriteFileArtifact({ path = '', toolName = '' } = {}) {
   const code = CODE_PATH_RE.test(cleanPath) && !MARKDOWN_PATH_RE.test(cleanPath)
   const markdown = MARKDOWN_PATH_RE.test(cleanPath)
     || (!code && (ARTICLE_TOOL_RE.test(cleanName) || ARTICLE_BASENAME_RE.test(cleanBaseName)))
+  if (WEBPAGE_PATH_RE.test(cleanPath)) {
+    return {
+      format: 'code',
+      artifact_kind: 'webpage',
+      artifact_path: cleanPath,
+      hold_open: true,
+    }
+  }
   if (markdown) {
     return {
       format: 'markdown',
@@ -549,6 +625,61 @@ export function streamWriteFileExecutionPreview({ toolName = 'write_file', path 
   }
 }
 
+// Editing has two visual phases. The first one makes the current file visible
+// only when it is not already open; the second replaces the displayed contents
+// in place after the atomic disk edit finishes.
+export function beginEditFileExecutionPreview({ path = '', content = '' } = {}) {
+  const title = cleanEditTitle(path)
+  const artifact = inferWriteFileArtifact({ path, toolName: 'edit_file' })
+  const alreadyOpen = isFileOpenInWritePreview(path)
+  cancelAutoClose(STREAM_ID)
+
+  if (!alreadyOpen) {
+    renderFileExecutionPreview({
+      toolName: 'edit_file',
+      path,
+      content,
+      title,
+      artifact,
+      ensureOpen: true,
+    })
+  }
+  return { already_open: alreadyOpen }
+}
+
+export function finishEditFileExecutionPreview({ path = '', content = '', bytes = null, verified = null } = {}) {
+  const title = cleanEditTitle(path)
+  const artifact = inferWriteFileArtifact({ path, toolName: 'edit_file' })
+  const alreadyOpen = isFileOpenInWritePreview(path)
+  renderFileExecutionPreview({
+    toolName: 'edit_file',
+    path,
+    content,
+    title,
+    artifact,
+    ensureOpen: !alreadyOpen,
+  })
+
+  if (verified !== null && verified !== undefined) {
+    const status = verified === false ? 'failed' : 'done'
+    const byteText = bytes === null || bytes === undefined ? '' : `, ${bytes} bytes`
+    emitTerminalEvent({
+      action: 'write',
+      title,
+      text: `\n\n[edit_file ${status}${byteText}]\n`,
+      newline: false,
+      level: verified === false ? 'error' : 'success',
+      ensure_open: false,
+      ...artifact,
+    })
+    if (verified === true) {
+      scheduleAutoCloseWriteFilePreview({ title, artifact })
+    } else {
+      cancelAutoClose(STREAM_ID)
+    }
+  }
+}
+
 export function streamToolFileWriteExecutionPreview(toolName, args = {}, outcome = {}) {
   const extracted = extractFileWriteArgs(toolName, args)
   if (!extracted) return false
@@ -568,5 +699,6 @@ export const __internals = {
   extractPartialXmlInvoke,
   findStringValueStart,
   getRecentPreview,
+  isFileOpenInWritePreview,
   isGenericFileWriteToolName,
 }

@@ -633,6 +633,7 @@ export default Object.freeze({
   "tool.express": "Express",
   "tool.read_file": "Read file",
   "tool.write_file": "Write file",
+  "tool.edit_file": "Edit file",
   "tool.delete_file": "Delete file",
   "tool.make_dir": "Create directory",
   "tool.list_dir": "List directory",

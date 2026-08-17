@@ -34,6 +34,7 @@ assert(!shouldInjectCoding({ userMessage: 'TICK', taskText: '整理用户的航�
 console.log('— 信号源 3：最近动作模式 —')
 assert(shouldInjectCoding({ recentActionsText: 'write_file(free-return/main.js), exec_command(node server.js)' }), 'write_file+exec → coding')
 assert(shouldInjectCoding({ recentActionsText: 'write_file(a.html) | exec_command(npm install three)' }), 'write_file+npm → coding')
+assert(shouldInjectCoding({ recentActionsText: 'edit_file(a.html, replace) | run_command(npm test)' }), 'edit_file+run → coding')
 assert(!shouldInjectCoding({ recentActionsText: 'web_search(flights), send_message -> user' }), '查航班动作 ≠ coding')
 assert(!shouldInjectCoding({ recentActionsText: 'write_file(notes.md)' }), '只写文件没执行 ≠ coding（写笔记场景）')
 

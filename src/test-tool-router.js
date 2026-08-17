@@ -8,7 +8,7 @@ import { selectTools } from './memory/tool-router.js'
 const CORE = ['send_message', 'recall_memory', 'find_tool', 'ui_set']
 const LOCAL_VISUAL = ['person_card_mode', 'knowledge_cortex_mode']
 const GENERIC_TOOLS = [
-  'read_file', 'write_file', 'delete_file', 'list_dir', 'make_dir',
+  'read_file', 'write_file', 'edit_file', 'delete_file', 'list_dir', 'make_dir',
   'run_command', 'manage_reminder',
   'manage_knowledge_region', 'import_knowledge', 'search_knowledge', 'inspect_knowledge_source',
   'terminal_stream', 'manage_api_capability',
@@ -37,6 +37,28 @@ assert.ok(!systemBrowser.includes('browser_navigate'), 'system-browser request d
 
 const install = selectTools({ messageBody: '帮我安装一个软件', isTick: false, senderId: 'ID:000001' })
 assert.ok(install.includes('install_software'), 'software installation is available in the first round')
+
+for (const messageBody of [
+  '帮我做一个简单的个人主页，保存成网页，我想双击就能打开。',
+  '不用发代码，你直接帮我保存成网页就行。',
+  '把网页上的名字改成小远，再加一句“喜欢做有意思的小工具”。',
+]) {
+  const tools = selectTools({ messageBody, isTick: false, senderId: 'ID:000001' })
+  for (const tool of ['read_file', 'write_file', 'edit_file']) {
+    assert.ok(tools.includes(tool), `natural local-file request injects ${tool}: ${messageBody}`)
+  }
+}
+
+const fileFollowup = selectTools({
+  messageBody: '把按钮改成绿色，其他别动。',
+  isTick: false,
+  recentActionLog: [{ tool: 'write_file', result_preview: '{"absolute_path":"/tmp/个人主页.html"}' }],
+})
+for (const tool of ['read_file', 'write_file', 'edit_file']) {
+  assert.ok(fileFollowup.includes(tool), `recent file context keeps ${tool} available for a terse edit`)
+}
+const isolatedEdit = selectTools({ messageBody: '把按钮改成绿色，其他别动。', isTick: false })
+assert.ok(!isolatedEdit.includes('edit_file'), 'a terse edit without file context does not inject file tools')
 
 if (process.platform === 'darwin') {
   const pauseMusic = selectTools({ messageBody: '暂停', isTick: false, senderId: 'ID:000001' })

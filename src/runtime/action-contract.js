@@ -44,6 +44,10 @@ const MACOS_MUSIC_CONTEXT_RE = /(?:apple\s*music|music\.app|mac(?:os)?\s*(?:syst
 const MACOS_MUSIC_RUNTIME_RE = /\[macOS System Music\][\s\S]*(?:Music\.app is open|Authoritative playback state:)/i
 const WEB_RESEARCH_REQUEST_RE = /(?:今天|今日|最近|近期|最新|刚刚|这两天|这几天|本周).{0,20}(?:新闻|消息|动态|资讯|热点|新鲜事|发生(?:了)?(?:什么|啥)|有(?:什么|啥)(?:大事|动静)|有何动静|都在聊什么)|(?:新闻|消息|动态|资讯|热点).{0,16}(?:挑|找|搜|查|看看|看下|有什么|有哪些|怎么回事)|(?:说说|聊聊|讲讲|看看).{0,10}(?:今天|今日|最近|近期|这两天|这几天|本周).{0,20}(?:大事|动静|发生)|(?:AI|人工智能|科技|芯片|行业|市场|政策|OpenAI|苹果|谷歌|微软).{0,12}(?:最近|最新).{0,12}(?:进展|更新|变化)|(?:today|recent|latest|current).{0,16}(?:news|headlines|updates)|(?:news|headlines).{0,16}(?:today|recent|latest|current)/i
 const WEB_FRESH_FACT_REQUEST_RE = /(?:现在|目前|今天|今日|实时|最新).{0,18}(?:价格|报价|金价|油价|汇率|股价|大盘|指数|比分|排名|票房|天气|航班)|(?:比特币|btc|黄金|金价|油价|汇率|股价|股票|大盘|指数|票房|比分|排名|天气|航班|软件版本|系统版本).{0,18}(?:多少|什么价|怎么样|涨了|跌了|现在|目前|今天|实时|最新)/i
+const LOCAL_FILE_CREATE_RE = /(?:(?:做|写|建|创建|新建|生成|保存|存成|另存|导出).{0,48}(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b)|(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b).{0,40}(?:保存|写入|创建|生成))/i
+const LOCAL_FILE_EDIT_RE = /(?:(?:修改|编辑|更新|替换|追加|插入|改动).{0,40}(?:文件|文档|代码|脚本|配置|readme|网页|页面|主页|网站|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b)|(?:帮我|请).{0,24}(?:改|修|更新|编辑).{0,30}(?:代码|项目|脚本|网页|页面|主页|网站|文件)|(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b).{0,48}(?:改成|换成|加上|加一句|删掉|去掉|修改|编辑|追加))/i
+const LOCAL_FILE_EDIT_FOLLOWUP_RE = /(?:(?:把|将|再|顺便).{0,50}(?:改成|换成|加上|加一句|删掉|去掉|追加|修改|编辑)|(?:其他|其它|其余).{0,6}(?:别动|不动|不要改))/i
+const LOCAL_FILE_CONTEXT_RE = /(?:read_file|write_file|edit_file|absolute_path|artifact_path|(?:^|[\\/\s"'])(?:[^\\/\s"']+\.)?(?:md|markdown|txt|json|js|mjs|cjs|ts|tsx|jsx|py|html?|css|vue|svelte)(?:\b|["']))/i
 const NEGATED_ACTION_START_RE = /^(?:(?:但(?:是)?|不过|然而|而是|而要|然后|接着|同时|并且|也|再|先|请|务必|千万|我(?:要求|希望|让)你)\s*)*(?:不要|别|无需|不用|请勿|禁止|不得)(?:再)?/iu
 const NEGATED_ACTION_START_EN_RE = /^(?:(?:but|however|and|then|please|also)\s+)*(?:do\s+not|don't|never|must\s+not)\b/i
 
@@ -449,6 +453,12 @@ function hasRecentBrowserContext(conversationWindow = [], runtimeContext = '') {
     || /browser_(?:navigate|snapshot|find|click|type|reload|press_key|tabs|take_screenshot|set_display_mode|close)/i.test(String(runtimeContext || ''))
 }
 
+function hasRecentFileContext(conversationWindow = [], runtimeContext = '') {
+  return (Array.isArray(conversationWindow)
+    && conversationWindow.slice(-6).some(item => LOCAL_FILE_CONTEXT_RE.test(String(item?.content || ''))))
+    || LOCAL_FILE_CONTEXT_RE.test(String(runtimeContext || ''))
+}
+
 function hasRecentMusicContext(conversationWindow = []) {
   return Array.isArray(conversationWindow)
     && conversationWindow.slice(-6).some(item => MACOS_MUSIC_CONTEXT_RE.test(String(item?.content || '')))
@@ -729,10 +739,17 @@ const CONTRACTS = [
     pattern: /(?:删除|删掉|清理).{0,40}(?:文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html\b)/i,
   },
   {
+    id: 'file_edit',
+    label: '局部修改文件',
+    tools: ['read_file', 'edit_file'],
+    match: text => LOCAL_FILE_EDIT_RE.test(text),
+    resolve: () => ({ restrictTools: true, requireAllTools: true }),
+  },
+  {
     id: 'file_write',
-    label: '写入或修改文件',
+    label: '创建或完整写入文件',
     tools: ['write_file'],
-    pattern: /(?:创建|新建|写入|保存|修改|编辑|更新).{0,40}(?:文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html\b)|(?:帮我|请).{0,24}(?:改|修|写).{0,30}(?:代码|项目|脚本|页面|文件)/i,
+    match: text => LOCAL_FILE_CREATE_RE.test(text),
   },
   {
     id: 'command',
@@ -812,6 +829,17 @@ export function classifyActionContract(message = '', { conversationWindow = [], 
     return browserInteractionContract('继续当前浏览器交互')
   }
 
+  if (LOCAL_FILE_EDIT_FOLLOWUP_RE.test(actionText)
+      && hasRecentFileContext(conversationWindow, runtimeContext)) {
+    return {
+      id: 'file_edit',
+      label: '继续局部修改文件',
+      requiredTools: ['read_file', 'edit_file'],
+      restrictTools: true,
+      requireAllTools: true,
+    }
+  }
+
   const directBrowserAction = classifyDirectBrowserAction(actionText, { browserContinuity })
   if (directBrowserAction) return directBrowserAction
 
@@ -847,6 +875,14 @@ export function resolveActionContractForTurn(message = '', {
 }
 
 export function actionContractToolCallIssue(contract, toolName, args = {}, options = {}) {
+  if (contract?.id === 'file_edit' && toolName === 'edit_file') {
+    const successful = options?.successfulToolNames instanceof Set
+      ? options.successfulToolNames
+      : new Set(options?.successfulToolNames || [])
+    if (!successful.has('read_file')) {
+      return 'Read the target file with read_file before editing it. Then use edit_file for only the requested line or block; do not replace the whole file.'
+    }
+  }
   if (contract?.id === 'browser_search_submit'
       && ['browser_snapshot', 'browser_type', 'browser_click'].includes(toolName)) {
     const attempted = options?.attemptedToolNames || []

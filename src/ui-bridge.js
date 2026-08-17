@@ -20,6 +20,7 @@ export function summarizeToolCall(t = {}) {
   if (t.name === 'send_message') return `send_message -> ${args.target_id || args.to || 'unknown'}${status}`
   if (t.name === 'web_read' || t.name === 'fetch_url') return `${t.name}(${String(args.url || '').slice(0, 60)})${status}`
   if (t.name === 'write_file') return `write_file(${args.path || args.filename || args.file_path || '?'})${status}`
+  if (t.name === 'edit_file') return `edit_file(${args.path || args.filename || args.file_path || '?'}, ${args.operation || 'replace'})${status}`
   if (t.name === 'read_file') {
     const pathArg = args.path || args.filename || args.file_path || '?'
     const rangeParts = []

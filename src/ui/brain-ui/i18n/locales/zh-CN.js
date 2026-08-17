@@ -633,6 +633,7 @@ export default Object.freeze({
   "tool.express": "表达",
   "tool.read_file": "读取文件",
   "tool.write_file": "写入文件",
+  "tool.edit_file": "编辑文件",
   "tool.delete_file": "删除文件",
   "tool.make_dir": "创建目录",
   "tool.list_dir": "查看目录",

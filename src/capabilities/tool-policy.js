@@ -17,6 +17,7 @@ const TOOL_RISK = {
   send_message: 'medium',
   express: 'medium',
   write_file: 'medium',
+  edit_file: 'medium',
   make_dir: 'medium',
   upsert_memory: 'medium',
   merge_memories: 'high',

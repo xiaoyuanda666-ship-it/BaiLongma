@@ -1,4 +1,4 @@
-// 文件系统工具 schema：read_file / list_dir / write_file / delete_file / make_dir
+// 文件系统工具 schema：read_file / list_dir / write_file / edit_file / delete_file / make_dir
 export const filesystemSchemas = {
   read_file: {
     type: 'function',
@@ -23,6 +23,10 @@ export const filesystemSchemas = {
           max_lines: {
             type: 'number',
             description: 'Optional maximum number of lines to return, starting from start_line or line 1.'
+          },
+          include_metadata: {
+            type: 'boolean',
+            description: 'Return a structured result with content, byte/line counts, and SHA-256 even when reading the whole file. Use this before a line-based edit when concurrent changes are possible.'
           }
         },
         required: ['path']
@@ -52,7 +56,7 @@ export const filesystemSchemas = {
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Write content to the specified file. This is the ONLY correct way to create or overwrite a text file (HTML, code, JSON, markdown, scripts, any multi-line content). For articles, reports, essays, notes, plans, or other prose artifacts, prefer a .md/.markdown path and write real Markdown; keep the write preview open when the user should review the rendered document there. For code, config, JSON/data, temporary files, logs, build artifacts, or small edits whose content does not need user review in the preview after verification, close the preview after the write succeeds. If you open the same generated file in a local editor/viewer/browser, close the preview because that app becomes the review surface. Pass the full file body verbatim in `content` - no escaping, no quoting, no here-strings. Creates the file and any missing parent directories automatically, then reads the file back to verify the bytes landed. Accepts a relative path (inside the sandbox) or an absolute path such as D:\\desktop\\page.html when the file sandbox is disabled. NEVER build a file by shelling out through exec_command (e.g. PowerShell [System.IO.File]::WriteAllText / Out-File / Set-Content / echo >, or python -c with embedded content): those break on quotes, $, backticks and triple-quotes and waste turns. If you need the file somewhere specific on disk, give that absolute path here directly.',
+      description: 'Create a text file or deliberately replace its entire contents. For a change to one line or block of an existing file, use edit_file instead so unchanged content is not retransmitted or overwritten. Pass the full file body verbatim in content. Missing parent directories are created automatically; the write is atomic and is read back for verification. Existing files are rejected by default. Set if_exists="overwrite" only when the user intends to replace the whole file. If you previously read an existing file with include_metadata=true, pass expected_sha256 to reject a stale overwrite. For articles/reports/notes prefer Markdown. Never build file content through run_command or shell redirection because quoting and encoding are unsafe.',
       parameters: {
         type: 'object',
         properties: {
@@ -63,9 +67,71 @@ export const filesystemSchemas = {
           content: {
             type: 'string',
             description: 'Content to write.'
+          },
+          if_exists: {
+            type: 'string',
+            enum: ['overwrite', 'error'],
+            description: 'What to do if the file already exists. Defaults to error. Pass overwrite explicitly only for a deliberate whole-file replacement.'
+          },
+          expected_sha256: {
+            type: 'string',
+            description: 'Optional SHA-256 returned by read_file(include_metadata=true). The write fails if the current file no longer has this digest.'
           }
         },
         required: ['path', 'content']
+      }
+    }
+  },
+
+  edit_file: {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: 'Modify part of an existing UTF-8 text file atomically, without sending or overwriting the whole file. Read the relevant section first. Prefer operation="replace" with an exact, unique old_text plus enough unchanged surrounding context; it safely fails when the text is missing or ambiguous. Use replace_lines only when exact text replacement is impractical, and pass expected_sha256 from read_file(include_metadata=true) when stale line numbers are a risk. append and prepend add content verbatim. The tool preserves all untouched bytes, preserves the existing line-ending style for line-range edits, rejects protected files, and reads the result back to verify it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Existing file path.'
+          },
+          operation: {
+            type: 'string',
+            enum: ['replace', 'replace_lines', 'append', 'prepend'],
+            description: 'Edit strategy. replace is the safest default.'
+          },
+          old_text: {
+            type: 'string',
+            description: 'For replace: exact existing text to find. Include surrounding lines so it matches only once.'
+          },
+          new_text: {
+            type: 'string',
+            description: 'For replace: exact replacement text. May be empty to delete old_text.'
+          },
+          replace_all: {
+            type: 'boolean',
+            description: 'For replace only: replace every exact occurrence. Defaults to false; multiple matches otherwise fail safely.'
+          },
+          start_line: {
+            type: 'integer',
+            minimum: 1,
+            description: 'For replace_lines: 1-based first line to replace.'
+          },
+          end_line: {
+            type: 'integer',
+            minimum: 1,
+            description: 'For replace_lines: 1-based last line to replace, inclusive. Defaults to start_line.'
+          },
+          content: {
+            type: 'string',
+            description: 'For replace_lines, append, or prepend: content to add. For replace_lines it may be empty to delete the selected lines.'
+          },
+          expected_sha256: {
+            type: 'string',
+            description: 'Optional SHA-256 returned by read_file(include_metadata=true). The edit fails if the file changed after it was read.'
+          }
+        },
+        required: ['path', 'operation']
       }
     }
   },

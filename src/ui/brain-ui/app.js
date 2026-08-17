@@ -2223,7 +2223,7 @@ const AI_ACTIVITY_WINDOW_MS = 60_000;
 const AI_ACTIVITY_IDLE_AFTER_MS = 15_000;
 const AI_TOOL_GROUPS = {
   "runtime.activityScanFiles": new Set(["read_file", "list_dir"]),
-  "runtime.activityChangeFiles": new Set(["write_file", "make_dir", "delete_file"]),
+  "runtime.activityChangeFiles": new Set(["write_file", "edit_file", "make_dir", "delete_file"]),
   "runtime.activityRunCommands": new Set(["run_command", "download_file", "kill_process", "list_processes"]),
   "runtime.activityBrowse": new Set([
     "browser_navigate", "browser_navigate_back", "browser_navigate_forward", "browser_reload", "browser_snapshot", "browser_find",

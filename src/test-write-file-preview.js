@@ -1,8 +1,10 @@
 import assert from 'assert'
 import { formatTerminalStreamContext, getTerminalStreamSnapshot, recordTerminalStreamEvent } from './terminal-stream.js'
 import {
+  beginEditFileExecutionPreview,
   extractFileWriteArgs,
   extractPartialJsonStringValue,
+  finishEditFileExecutionPreview,
   streamXmlFileWriteArgumentPreview,
   streamToolFileWriteExecutionPreview,
   streamWriteFileArgumentPreview,
@@ -14,6 +16,56 @@ function contentOf(source) {
 }
 
 globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
+
+{
+  const previousBridge = globalThis.terminalStreamBridge
+  const previousReader = globalThis.getBailongmaWindowLayoutSnapshot
+  const bridgeEvents = []
+  globalThis.terminalStreamBridge = {
+    emit(name, payload) {
+      bridgeEvents.push({ name, payload })
+    },
+  }
+  globalThis.getBailongmaWindowLayoutSnapshot = () => ({
+    displays: [],
+    windows: [],
+    terminal_stream_window: null,
+  })
+  recordTerminalStreamEvent({ action: 'close', stream_id: 'write_file', force: true })
+
+  const opening = beginEditFileExecutionPreview({ path: 'visual-edit.txt', content: 'before' })
+  assert.strictEqual(opening.already_open, false)
+  assert.strictEqual(bridgeEvents.filter(event => event.name === 'open').length, 1)
+
+  globalThis.getBailongmaWindowLayoutSnapshot = () => ({
+    displays: [],
+    windows: [{
+      kind: 'terminal_stream',
+      terminal_stream_id: 'write_file',
+      visible: true,
+      minimized: false,
+    }],
+  })
+  finishEditFileExecutionPreview({ path: 'visual-edit.txt', content: 'after', bytes: 5, verified: true })
+  assert.strictEqual(bridgeEvents.filter(event => event.name === 'open').length, 1)
+  let snapshot = getTerminalStreamSnapshot('write_file')
+  assert.strictEqual(snapshot.title, 'Editing visual-edit.txt')
+  assert.strictEqual(snapshot.artifact_path, 'visual-edit.txt')
+  assert.strictEqual(snapshot.chunks.map(chunk => chunk.text).join(''), '$ edit_file visual-edit.txt\n\nafter\n\n[edit_file done, 5 bytes]\n')
+
+  bridgeEvents.length = 0
+  const reused = beginEditFileExecutionPreview({ path: 'visual-edit.txt', content: 'after' })
+  assert.strictEqual(reused.already_open, true)
+  finishEditFileExecutionPreview({ path: 'visual-edit.txt', content: 'after again', bytes: 11, verified: true })
+  assert.strictEqual(bridgeEvents.filter(event => event.name === 'open').length, 0)
+  snapshot = getTerminalStreamSnapshot('write_file')
+  assert.match(snapshot.chunks.map(chunk => chunk.text).join(''), /after again/)
+
+  if (previousBridge) globalThis.terminalStreamBridge = previousBridge
+  else delete globalThis.terminalStreamBridge
+  if (previousReader) globalThis.getBailongmaWindowLayoutSnapshot = previousReader
+  else delete globalThis.getBailongmaWindowLayoutSnapshot
+}
 
 {
   const partial = contentOf('{"path":"demo.md","content":"Hello\\nWor')
@@ -189,6 +241,26 @@ globalThis.__BAILONGMA_WRITE_PREVIEW_AUTO_CLOSE_MS = 0
   } else {
     delete globalThis.getBailongmaWindowLayoutSnapshot
   }
+}
+
+{
+  recordTerminalStreamEvent({ action: 'clear', stream_id: 'write_file', title: 'webpage' })
+  streamWriteFileExecutionPreview({ path: '个人主页.html', content: '<!doctype html><title>主页</title>' })
+  streamWriteFileExecutionPreview({
+    path: '个人主页.html',
+    content: '<!doctype html><title>主页</title>',
+    bytes: 36,
+    verified: true,
+  })
+  const snapshot = getTerminalStreamSnapshot('write_file')
+  assert.strictEqual(snapshot.format, 'code')
+  assert.strictEqual(snapshot.artifact_kind, 'webpage')
+  assert.strictEqual(snapshot.artifact_path, '个人主页.html')
+  assert.strictEqual(snapshot.hold_open, true)
+
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.strictEqual(getTerminalStreamSnapshot('write_file').closed, false,
+    'an HTML review surface stays open so later edits can reuse the same window')
 }
 
 {

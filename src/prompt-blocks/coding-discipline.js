@@ -25,7 +25,7 @@ You are writing or modifying code. Work in vertical slices, not horizontal ones:
 3. **Make state visible.** Demos and prototypes should render their internal state on screen (current phase, key values, sim time) so problems show themselves instead of hiding in silence.
 4. **One command to run.** A single entry (node server.js or one HTML file). No build steps unless the user asked for them.
 5. **BaiLongma dedicated Chrome is your web feedback loop.** Before reporting done: use browser_navigate and inspect the automatic accessibility snapshot attached to its result; use browser_find or browser_snapshot only when targeted lookup or an explicit refresh is needed. Confirm the entry resources load, and read the server's stderr. An unverified deliverable is a guess, not a result.
-6. **Edit files with read_file + write_file — never with shell text replacement.** PowerShell Get-Content/-replace/Set-Content reads UTF-8 as GBK and silently destroys every multibyte character (Chinese, symbols) in the file; sed/python -c one-liners hit quote-escaping traps. For any edit, however small: read_file → modify in your head → write_file the whole file. If you need scripted processing, write the script to a file with write_file and run it with node.`
+6. **Edit existing files with read_file + edit_file — never with shell text replacement.** Read only the relevant range, then prefer edit_file operation=replace with exact old_text/new_text and enough context for one unique match. Use write_file for new files or intentional whole-file rewrites. PowerShell Get-Content/-replace/Set-Content can decode UTF-8 as GBK, while sed/python one-liners are prone to quoting failures. For line-number edits that could race with another writer, read with include_metadata=true and pass expected_sha256.`
 
 export const DIAGNOSE_BLOCK = `## Debugging Discipline
 Something is broken. Before touching any code:
@@ -62,7 +62,7 @@ const DIAGNOSE_TEXT_RE = /报错|出错|错误|坏了|崩了|崩溃|打不开|�
 function recentActionsLookLikeCoding(recentActionsText) {
   const t = String(recentActionsText || '')
   if (!t) return false
-  return /write_file\(/.test(t) && /(run_command\(|exec_command\(|node |npm )/.test(t)
+  return /(?:write_file|edit_file)\(/.test(t) && /(run_command\(|exec_command\(|node |npm )/.test(t)
 }
 
 /**

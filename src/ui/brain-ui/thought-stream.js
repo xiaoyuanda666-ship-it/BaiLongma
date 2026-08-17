@@ -5,6 +5,7 @@ const TOOL_ZH = {
   express: "表达",
   read_file: "读取文件",
   write_file: "写入文件",
+  edit_file: "编辑文件",
   delete_file: "删除文件",
   make_dir: "创建目录",
   list_dir: "查看目录",
@@ -88,6 +89,7 @@ const TOOL_ICON = {
   express: "🗣️",
   read_file: "📄",
   write_file: "✏️",
+  edit_file: "📝",
   delete_file: "🗑️",
   make_dir: "📁",
   list_dir: "📂",
@@ -506,6 +508,7 @@ export class ThoughtStream {
     switch (normalizeToolName(name)) {
       case "read_file":
       case "write_file":
+      case "edit_file":
       case "delete_file":
       case "make_dir":
       case "list_dir":
@@ -733,7 +736,7 @@ export class ThoughtStream {
       return this.formatFileReadDetail(result);
     }
 
-    if (name === "write_file" || name === "delete_file" || name === "make_dir") {
+    if (name === "write_file" || name === "edit_file" || name === "delete_file" || name === "make_dir") {
       if (parsed?.ok === false) return this.compactText(parsed.error || t("thought.operationFailed"), 160);
       const raw = String(result || "").trim();
       if (raw.startsWith("错误")) return this.compactText(raw, 160);

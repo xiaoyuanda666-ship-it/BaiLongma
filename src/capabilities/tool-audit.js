@@ -14,6 +14,8 @@ export function summarizeToolExecution(name, args = {}) {
       return `list_dir(${args.path || args.dir || args.directory || '.'})`
     case 'write_file':
       return `write_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'edit_file':
+      return `edit_file(${args.path || args.filename || args.file_path || '?'}, ${args.operation || 'replace'})`
     case 'delete_file':
       return `delete_file(${args.path || args.filename || args.file_path || '?'})`
     case 'make_dir':

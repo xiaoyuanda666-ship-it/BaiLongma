@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.113",
+  "version": "2.2.116",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -53,6 +53,7 @@
     "test:startup-hardening": "node ./src/test-startup-hardening.js && node ./src/test-clawbot-startup.js && node ./src/test-weather-fallback.js",
     "test:agent-skills": "node ./src/test-agent-skills.js",
     "test:tool-factory": "node ./src/test-tool-factory.js",
+    "test:filesystem-edit": "node ./src/test-filesystem-edit.js",
     "test:mcp-client": "node ./src/test-mcp-client.js",
     "test:api-message-utf8": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-api-message-utf8.js\"",
     "test:strict-evaluation": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-strict-evaluation.js\"",

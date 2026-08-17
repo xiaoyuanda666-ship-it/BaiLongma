@@ -137,12 +137,12 @@ const SEED_MEMORIES = [
     tags: ['system', 'tool', 'kind:tool_usage'],
   },
 
-  // ── write_file / read_file ────────────────────────────────────
+  // ── read_file / write_file / edit_file ───────────────────────
   {
     id: 'tool_write_read_file',
     type: 'knowledge',
-    title: 'write_file / read_file：文件操作',
-    content: '只用于明确的任务产物（代码、文档、数据文件），不用于记录想法或感受。文件操作只在 sandbox 目录内有效（相对路径即可）。想法、感受、日常观察、fetch 到的内容不需要写文件——这些会由识别器自动转化为记忆。write_file 只在：被要求创建文件、构建代码项目、保存外部任务产物时使用。readme.txt、world.txt 是系统文件，只读。',
+    title: 'read_file / write_file / edit_file：文件操作',
+    content: '只用于明确的任务产物（代码、文档、数据文件），不用于记录想法或感受。文件操作默认在 sandbox 目录内使用相对路径。想法、感受、日常观察、fetch 到的内容不需要写文件——这些会由识别器自动转化为记忆。新建文件或明确要整份重写时用 write_file；修改已有文件的一行或一块时，先用 read_file 读取相关范围，再用 edit_file 做精确替换，避免重传和覆盖未改内容。readme.txt、world.txt 是系统文件，只读。',
     parent_id: 'tools_system',
     children_ids: [],
     links: [

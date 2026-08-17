@@ -28,7 +28,7 @@ import { sceneStore } from '../scene/scene-store.js'
 import { sceneClientCount } from '../scene/scene-server.js'
 import { evaluateToolPolicy } from './tool-policy.js'
 import { inferToolStatus, writeToolAuditLog } from './tool-audit.js'
-import { execDeleteFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
+import { execDeleteFile, execEditFile, execListDir, execMakeDir, execReadFile, execWriteFile } from './tools/filesystem.js'
 import { execBackgroundCommand, execCommand, execDownloadFile, execKillProcess, execListProcesses, execQuickCommand, execRunCommand, execTaskCommand } from './tools/shell.js'
 import { execInstallSoftware, listSoftwareInstallJobs } from './tools/software-install.js'
 import { execDowngradeMemory, execMergeMemories, execProbeMemory, execRecallMemory, execSearchMemory, execSkipConsolidation, execSkipRecognition, execUpsertMemory } from './tools/memory.js'
@@ -240,6 +240,8 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execListDir(args, context)
       case 'write_file':
         return await execWriteFile(args, context)
+      case 'edit_file':
+        return await execEditFile(args, context)
       case 'delete_file':
         return await execDeleteFile(args, context)
       case 'make_dir':
@@ -931,7 +933,7 @@ function execSetTask({ description, steps = [] }, context) {
 // snapshot and is therefore verification evidence; an extra browser_snapshot
 // call is no longer required.
 const VERIFY_TOOL_NAMES = new Set(['browser_navigate', 'browser_snapshot', 'browser_find', 'review_work'])
-const ARTIFACT_TOOL_NAMES = new Set(['write_file', 'make_dir'])
+const ARTIFACT_TOOL_NAMES = new Set(['write_file', 'edit_file', 'make_dir'])
 
 function unverifiedDeliveryNotice() {
   try {

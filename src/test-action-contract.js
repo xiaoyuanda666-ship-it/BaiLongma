@@ -33,6 +33,47 @@ try {
   const writeContract = classifyActionContract('帮我在 sandbox 里创建一个 hello.txt 文件')
   assert.equal(writeContract?.id, 'file_write')
   assert.deepEqual(writeContract.requiredTools, ['write_file'])
+  const editContract = classifyActionContract('帮我修改 src/app.js 文件里的一个函数')
+  assert.equal(editContract?.id, 'file_edit')
+  assert.deepEqual(editContract.requiredTools, ['read_file', 'edit_file'])
+  assert.equal(editContract.restrictTools, true)
+  assert.equal(editContract.requireAllTools, true)
+  const naturalWebpageWrite = classifyActionContract('帮我做一个简单的个人主页，保存成网页，我想双击就能打开。')
+  assert.equal(naturalWebpageWrite?.id, 'file_write')
+  assert.deepEqual(naturalWebpageWrite.requiredTools, ['write_file'])
+  assert.equal(classifyActionContract('不用发代码，你直接帮我保存成网页就行。')?.id, 'file_write')
+  const naturalWebpageEdit = classifyActionContract('把网页上的名字改成小远，再加一句“喜欢做有意思的小工具”。')
+  assert.equal(naturalWebpageEdit?.id, 'file_edit')
+  assert.equal(naturalWebpageEdit.restrictTools, true)
+  assert.equal(naturalWebpageEdit.requireAllTools, true)
+  const webpageConversation = [
+    { role: 'user', content: '帮我做一个简单的个人主页，保存成网页。' },
+    { role: 'jarvis', content: '已经保存为个人主页.html。' },
+  ]
+  for (const phrase of [
+    '把按钮改成绿色，其他别动。',
+    '把背景换成浅灰色，其他别动。',
+  ]) {
+    const continuation = classifyActionContract(phrase, { conversationWindow: webpageConversation })
+    assert.equal(continuation?.id, 'file_edit', phrase)
+    assert.deepEqual(continuation.requiredTools, ['read_file', 'edit_file'], phrase)
+    assert.equal(continuation.restrictTools, true, phrase)
+    assert.equal(continuation.requireAllTools, true, phrase)
+  }
+  assert.equal(classifyActionContract('把按钮改成绿色，其他别动。'), null,
+    'a terse edit without recent file context must not invent a file target')
+  assert.match(actionContractToolCallIssue(
+    naturalWebpageEdit,
+    'edit_file',
+    { path: '个人主页.html', operation: 'replace' },
+    { successfulToolNames: new Set() },
+  ), /read_file/i, 'edit_file cannot run before the target file has been read')
+  assert.equal(actionContractToolCallIssue(
+    naturalWebpageEdit,
+    'edit_file',
+    { path: '个人主页.html', operation: 'replace' },
+    { successfulToolNames: new Set(['read_file']) },
+  ), '', 'edit_file can run after a successful read_file')
   assert.equal(classifyActionContract('帮我新建一个 logs 文件夹')?.id, 'directory_create')
   assert.equal(classifyActionContract('怎么创建一个 txt 文件？'), null, 'how-to is ordinary Q&A, not an execution contract')
   assert.equal(classifyActionContract('你有多少执行命令工具？'), null, 'tool meta questions must not trigger execution')

@@ -27,7 +27,7 @@ You are given three things, and only these (you deliberately cannot see the doer
 - The ORIGINAL REQUEST, when present, is the authoritative goal — it outranks the doer's own GOAL framing and CLAIM. If the doer's GOAL is narrower or subtly different from the original request, judge against the original request, and treat the gap itself as a finding.
 - Diff every CONCRETE requirement in the original request against what was actually delivered: specific quantities, qualifiers, variants, units, formats, constraints (e.g. "sample" vs "population" standard deviation, "top 15" vs "top 10", "descending" vs "ascending", a named file path, an exact column). A deliverable that quietly substitutes a different variant than the user specified is at least a MAJOR issue — even if its own internal math is self-consistent and the doer's narration calls it correct. Internal consistency is not the bar; matching what the user actually asked for is.
 - Check the claim against the goal, not against the doer's narration. "Said it is done" is not "is done".
-- Trust the evidence over the claim. If the claim says a file was written but no write_file appears in the tool log, that is a gap. If a step is marked done but its tool result shows an error, that is a gap.
+- Trust the evidence over the claim. If the claim says a file was written or changed but no write_file/edit_file appears in the tool log, that is a gap. If a step is marked done but its tool result shows an error, that is a gap.
 - VERIFY with your read-only tools when it matters. Do not just reason about the artifact — open it. read_file the file that was supposedly written and confirm its content matches the goal. list_dir to confirm something exists. Re-run a read-only check command with run_command (only non-mutating commands: run a test, print output, lint — never write/delete/install). For web evidence, use BaiLongma dedicated Google Chrome through browser_navigate and inspect the automatic snapshot in its result; use browser_find/browser_snapshot only for targeted lookup or an explicit refresh, and never use shell HTTP clients.
 - Judge against the goal's real intent, including the obvious-but-unstated: does it actually work, is it complete, are there silent failures, did a "done" step actually produce its value, are there off-by-one / wrong-target / half-finished edges.
 - Be proportionate. A one-line answer does not need an audit. Reserve scrutiny for work where being wrong has a cost. Do not invent problems to look thorough — a clean pass is a valid, common outcome.
@@ -75,6 +75,14 @@ function summarizeToolEntry(entry, i) {
     return `#${i + 1} write_file [${ok}] path=${entry.args.path}${body}\n   result: ${result}`
   }
 
+  if (name === 'edit_file' && entry.args?.path) {
+    const operation = entry.args.operation || 'replace'
+    const editEvidence = operation === 'replace'
+      ? `old_text=${JSON.stringify(String(entry.args.old_text ?? '').slice(0, 700))}\n   new_text=${JSON.stringify(String(entry.args.new_text ?? '').slice(0, 700))}`
+      : `content=${JSON.stringify(String(entry.args.content ?? '').slice(0, 1000))}`
+    return `#${i + 1} edit_file [${ok}] path=${entry.args.path} operation=${operation}\n   ${editEvidence}\n   result: ${result}`
+  }
+
   let argsStr
   try { argsStr = JSON.stringify(entry.args || {}).slice(0, 400) } catch { argsStr = '{}' }
   return `#${i + 1} ${name} [${ok}]\n   args: ${argsStr}\n   result: ${result}`
@@ -103,6 +111,7 @@ function deriveArtifactsFromLog(turnToolLog) {
   for (const e of (Array.isArray(turnToolLog) ? turnToolLog : [])) {
     const a = e?.args || {}
     if (e.name === 'write_file' && a.path) out.push(`file written: ${a.path}`)
+    else if (e.name === 'edit_file' && a.path) out.push(`file edited: ${a.path}`)
     else if (e.name === 'make_dir' && a.path) out.push(`dir created: ${a.path}`)
     else if (e.name === 'delete_file' && a.path) out.push(`file deleted: ${a.path}`)
     else if ((e.name === 'run_command' || e.name === 'exec_command') && a.command) out.push(`command run: ${String(a.command).slice(0, 120)}`)

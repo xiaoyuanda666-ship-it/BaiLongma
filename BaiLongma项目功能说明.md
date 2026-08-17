@@ -539,7 +539,8 @@ BaiLongma 的工具系统由 schema、执行器、沙箱、安全策略、行动
 
 - `read_file`：读取文件。
 - `list_dir`：列目录。
-- `write_file`：写入文件。
+- `write_file`：原子创建或整文件写入，可防止误覆盖并做读回校验。
+- `edit_file`：精确替换文本、替换行范围、追加或前置内容，不必重写整个文件。
 - `delete_file`：删除文件或目录。
 - `make_dir`：创建目录。
 

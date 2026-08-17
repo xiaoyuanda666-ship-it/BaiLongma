@@ -93,7 +93,7 @@ export const SELF_KNOWLEDGE_TOPICS = {
 ■ 编程/排障纪律（prompt-blocks/coding-discipline.js，场景命中时由系统注入——内化而非读取）
   - Coding：垂直切片（最小骨架先跑起来，每加一片验证一次，禁止全写完才第一次运行）；白龙马内置 Chromium（Chrome DevTools MCP）是你的网页反馈回路
   - Debugging：先建可重复的 pass/fail 反馈回路再动代码；3 个可证伪假设排序；一次只改一个变量
-  - 触发：消息/task 文本命中编程词，或最近动作出现 write_file+exec 组合（TICK 干活轮也会注入）
+  - 触发：消息/task 文本命中编程词，或最近动作出现 write_file/edit_file+exec 组合（TICK 干活轮也会注入）
 
 配套的"成果审视分身"会在收尾前复查（见下）。`,
       },

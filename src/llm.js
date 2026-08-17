@@ -428,6 +428,7 @@ const PARAM_ALIASES = {
   send_message: { to: 'target_id', message: 'content', text: 'content', recipient: 'target_id' },
   read_file: { file: 'path', filename: 'path', filepath: 'path' },
   write_file: { file: 'path', filename: 'path', filepath: 'path', text: 'content', data: 'content' },
+  edit_file: { file: 'path', filename: 'path', filepath: 'path' },
   list_dir: { directory: 'path', dir: 'path', folder: 'path' },
   make_dir: { directory: 'path', dir: 'path', folder: 'path' },
   delete_file: { file: 'path', filename: 'path' },
@@ -508,6 +509,8 @@ function summarizeToolCall(name, args = {}) {
     }
     case 'write_file':
       return `write_file(${args.path || args.filename || args.file_path || '?'})`
+    case 'edit_file':
+      return `edit_file(${args.path || args.filename || args.file_path || '?'}, ${args.operation || 'replace'})`
     case 'delete_file':
       return `delete_file(${args.path || args.filename || args.file_path || '?'})`
     case 'make_dir':
