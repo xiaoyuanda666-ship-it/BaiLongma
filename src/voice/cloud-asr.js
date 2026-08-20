@@ -20,6 +20,36 @@ import { createMacSpeechSession } from './macos-speech.js'
 // 连接建立前的待发音频上限（~4s，防止连接失败时无限堆积）
 const MAX_PENDING_CHUNKS = 16
 
+const UYGHUR_LANGUAGE_CODES = new Set([
+  'ug',
+  'ug-cn',
+  'uig',
+  'uyghur',
+  'uighur',
+  'cn-uyghur',
+])
+
+export function normalizeASRLanguage(lang = 'zh') {
+  const raw = String(lang || 'zh').trim().replaceAll('_', '-').toLowerCase()
+  if (UYGHUR_LANGUAGE_CODES.has(raw)) return 'ug'
+  if (raw === 'auto') return 'auto'
+  if (raw.startsWith('zh')) return 'zh'
+  if (raw.startsWith('en')) return 'en'
+  return raw.split('-')[0] || 'zh'
+}
+
+export function getXunfeiLanguageParam(lang = 'zh') {
+  const normalized = normalizeASRLanguage(lang)
+  if (normalized === 'ug') return 'cn_uyghur'
+  if (normalized === 'en') return 'en'
+  return 'cn'
+}
+
+export function getASRLanguageError(provider, lang) {
+  if (normalizeASRLanguage(lang) !== 'ug' || provider === 'xunfei') return null
+  return '维吾尔语识别目前需选择科大讯飞 RTASR，并在讯飞控制台单独开通维语权限'
+}
+
 function createAliyunSession(apiKey, lang, onTranscript, onError, onClose, onEvent) {
   const WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/'
   const taskId = crypto.randomUUID()
@@ -191,7 +221,7 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
   const md5Base = crypto.createHash('md5').update(appId + ts).digest('hex')
   const signa = crypto.createHmac('sha1', apiKey).update(md5Base).digest('base64')
 
-  const langParam = lang === 'en' ? 'en_us' : 'cn'
+  const langParam = getXunfeiLanguageParam(lang)
   const url = `wss://rtasr.xfyun.cn/v1/ws?appid=${appId}&ts=${ts}&signa=${encodeURIComponent(signa)}&lang=${langParam}`
   const ws = new WebSocket(url)
 
@@ -209,7 +239,13 @@ function createXunfeiSession(appId, apiKey, lang, onTranscript, onError, onClose
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString())
-      if (msg.action === 'error') { onError(`讯飞 RTASR 错误: ${msg.desc}`); return }
+      if (msg.action === 'error') {
+        const permissionHint = langParam === 'cn_uyghur' && String(msg.code) === '10110'
+          ? '；请确认已在讯飞控制台开通维语权限且当前套餐仍有可用额度'
+          : ''
+        onError(`讯飞 RTASR 错误: ${msg.desc}${permissionHint}`)
+        return
+      }
       if (msg.action === 'result') {
         const parsed = JSON.parse(msg.data)
         const isFinal = parsed.type === '1'
@@ -476,7 +512,13 @@ function createVolcengineSession(config, onTranscript, onError, onClose, onEvent
 //           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
 export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
   const provider = normalizeVoiceProvider(config?.provider || config?.voiceProvider || 'aliyun', '')
-  const { lang = 'zh' } = config || {}
+  const lang = normalizeASRLanguage(config?.lang || 'zh')
+
+  const languageError = getASRLanguageError(provider, lang)
+  if (languageError) {
+    onError(languageError)
+    return null
+  }
 
   if (provider === 'local') {
     if (process.platform === 'darwin') {

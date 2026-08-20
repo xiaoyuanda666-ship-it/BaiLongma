@@ -404,6 +404,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const voiceThreshSlider = document.getElementById("settings-voice-threshold");
   const voiceThreshVal    = document.getElementById("settings-voice-threshold-val");
   const voiceMicSelect    = document.getElementById("voice-mic-select");
+  const voiceLangSelect   = document.getElementById("voice-lang-select");
   const voiceRefreshMicsBtn = document.getElementById("voice-refresh-mics");
   const voiceMicStatus    = document.getElementById("voice-mic-status");
   const voiceOutputSelect    = document.getElementById("voice-output-select");
@@ -1335,8 +1336,24 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   });
 
   const voiceProviderSelect = document.getElementById("voice-provider-select");
+
+  function selectUyghurProviderIfNeeded({ announce = false, persist = false } = {}) {
+    if (!/^ug(?:-|$)/i.test(voiceLangSelect?.value || "")) return false;
+    if (!voiceProviderSelect || voiceProviderSelect.value === "xunfei") return false;
+    voiceProviderSelect.value = "xunfei";
+    localStorage.setItem(VOICE_PROVIDER_KEY, "xunfei");
+    applyVoiceProviderUI("xunfei");
+    if (announce) showFeedback(voiceFeedback, t("voice.uyghurProviderSelected"));
+    if (persist) voiceAutosave.schedule({ immediate: true });
+    return true;
+  }
+
   if (voiceProviderSelect) {
     voiceProviderSelect.addEventListener("change", () => {
+      if (/^ug(?:-|$)/i.test(voiceLangSelect?.value || "") && voiceProviderSelect.value !== "xunfei") {
+        voiceProviderSelect.value = "xunfei";
+        showFeedback(voiceFeedback, t("voice.uyghurProviderSelected"));
+      }
       applyVoiceProviderUI(voiceProviderSelect.value);
       voiceAutosave.schedule({ immediate: true });
     });
@@ -1411,7 +1428,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       aliyun: { label: t("voice.aliyunAsr"), keys: ["aliyunApiKey"] },
       volcengine: { label: t("voice.volcAsr"), keys: ["volcAsrApiKey"] },
       tencent: { label: t("voice.tencentAsr"), keys: ["tencentSecretId", "tencentSecretKey", "tencentAppId"] },
-      xunfei: { label: t("voice.xunfeiAsr"), keys: ["xunfeiAppId", "xunfeiApiKey", "xunfeiApiSecret"] },
+      xunfei: { label: t("voice.xunfeiAsr"), keys: ["xunfeiAppId", "xunfeiApiKey"] },
     };
     const definition = definitions[provider] || definitions.aliyun;
     const configured = definition.keys.length === 0
@@ -1535,9 +1552,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   });
 
   async function loadVoiceSettings() {
-    const langSelect = document.getElementById("voice-lang-select");
     const autoSend   = document.getElementById("voice-auto-send");
-    if (langSelect) langSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
+    if (voiceLangSelect) voiceLangSelect.value = localStorage.getItem(VOICE_LANG_KEY) || "zh-CN";
     if (autoSend) autoSend.checked = localStorage.getItem(VOICE_AUTO_SEND_KEY) !== "false";
     const autoMic = document.getElementById("voice-auto-mic");
     if (autoMic) autoMic.checked = localStorage.getItem(VOICE_AUTO_MIC_KEY) === "true";
@@ -1568,6 +1584,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       applyVoiceConfigStatus(null, "无法读取主机上的语音识别配置");
     }
     if (voiceProviderSelect) voiceProviderSelect.value = savedProvider;
+    selectUyghurProviderIfNeeded({ persist: true });
+    savedProvider = voiceProviderSelect?.value || savedProvider;
     applyVoiceProviderUI(savedProvider);
   }
 
@@ -1638,12 +1656,13 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }, { feedback: voiceFeedback });
 
   const immediateVoiceControls = [
-    document.getElementById("voice-lang-select"),
+    voiceLangSelect,
     voiceMicSelect,
     document.getElementById("voice-auto-send"),
     document.getElementById("voice-auto-mic"),
     document.getElementById("voice-space-ptt"),
   ].filter(Boolean);
+  voiceLangSelect?.addEventListener("change", () => selectUyghurProviderIfNeeded({ announce: true }));
   for (const el of immediateVoiceControls) {
     el.addEventListener("change", () => voiceAutosave.schedule({ immediate: true }));
   }

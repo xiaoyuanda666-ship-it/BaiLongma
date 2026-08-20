@@ -706,8 +706,10 @@ const createSettingsModal = () => `
               <select class="settings-select" id="voice-lang-select">
                 <option value="zh-CN">中文（普通话）</option>
                 <option value="en-US">English (US)</option>
+                <option value="ug-CN">ئۇيغۇرچە（维吾尔语）</option>
               </select>
             </div>
+            <p class="settings-hint">维吾尔语由科大讯飞 RTASR 提供，需在讯飞控制台单独开通维语权限。</p>
             <div class="settings-row">
               <label class="settings-label" for="voice-mic-select">麦克风</label>
               <select class="settings-select" id="voice-mic-select">

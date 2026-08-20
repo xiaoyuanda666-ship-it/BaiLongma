@@ -70,6 +70,7 @@
     "test:voice-continuous": "node ./src/test-voice-continuous.js",
     "test:voice-ptt": "node ./src/test-voice-ptt.js",
     "test:voice-reply-routing": "node ./src/test-voice-reply-routing.js",
+    "test:voice-languages": "node ./src/test-voice-languages.js",
     "test:macos-speech-permissions": "node ./src/test-macos-speech-permissions.js",
     "test:websocket-security": "node ./src/test-websocket-security.js",
     "test:lan-api-client": "node ./src/test-lan-api-client.js",
