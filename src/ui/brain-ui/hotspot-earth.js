@@ -449,7 +449,7 @@ export class HotspotEarth {
   }
 
   dispose() {
-    if (this.disposed) return;
+    if (this.disposed) return null;
     this.disposed = true;
     if (this.animFrame) cancelAnimationFrame(this.animFrame);
     this.animFrame = null;
@@ -478,6 +478,17 @@ export class HotspotEarth {
     this.renderer?.dispose();
     // WebGLRenderer.dispose() 会清空 three 的缓存；强制丢失 context 可立即归还 GPU 资源。
     this.renderer?.forceContextLoss?.();
+
+    // WEBGL_lose_context 会让当前 canvas 继续绑定一个已丢失的 context。若下次打开热点
+    // 仍复用它，新的 WebGLRenderer 可能只能拿到这个失效 context，最终显示为空白。
+    // 原位换成无事件监听、无 WebGL context 的新 canvas，既保留立即回收 GPU 的策略，
+    // 又让下一次懒加载可以创建全新的 context。
+    let replacementCanvas = null;
+    if (c?.parentNode && typeof c.cloneNode === 'function' && typeof c.replaceWith === 'function') {
+      replacementCanvas = c.cloneNode(false);
+      c.replaceWith(replacementCanvas);
+    }
+    this.canvas = null;
     this.renderer = null;
     this.scene = null;
     this.camera = null;
@@ -487,5 +498,6 @@ export class HotspotEarth {
     this.atmo2 = null;
     this.stars = null;
     this.hotspots = null;
+    return replacementCanvas;
   }
 }
