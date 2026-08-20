@@ -3963,7 +3963,6 @@ body.hotspot-mode .hotspot-panel {
 body.hotspot-mode .hotspot-panel.hs-booting .hs-header,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-stat,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-list-card,
-body.hotspot-mode .hotspot-panel.hs-booting .hs-earth-container,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-center-aux,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-bar,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-ticker-bar {
@@ -3981,7 +3980,6 @@ body.hotspot-mode .hotspot-panel.hs-booting .hs-stat:nth-child(3) { --hs-boot-de
 body.hotspot-mode .hotspot-panel.hs-booting .hs-stat:nth-child(4) { --hs-boot-delay: 280ms; }
 body.hotspot-mode .hotspot-panel.hs-booting #hs-douyin-card { --hs-boot-delay: 330ms; }
 body.hotspot-mode .hotspot-panel.hs-booting #hs-xhs-card { --hs-boot-delay: 430ms; }
-body.hotspot-mode .hotspot-panel.hs-booting .hs-earth-container { --hs-boot-delay: 500ms; }
 body.hotspot-mode .hotspot-panel.hs-booting .hs-center-aux { --hs-boot-delay: 660ms; }
 body.hotspot-mode .hotspot-panel.hs-booting #hs-wechat-card { --hs-boot-delay: 760ms; }
 body.hotspot-mode .hotspot-panel.hs-booting #hs-weibo-card { --hs-boot-delay: 860ms; }
@@ -3989,14 +3987,12 @@ body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-bar { --hs-boot-delay: 1000
 body.hotspot-mode .hotspot-panel.hs-booting .hs-ticker-bar { --hs-boot-delay: 1140ms; }
 
 body.hotspot-mode .hotspot-panel.hs-booting .hs-list-card,
-body.hotspot-mode .hotspot-panel.hs-booting .hs-earth-container,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-aux-box,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-card {
   position: relative;
 }
 
 body.hotspot-mode .hotspot-panel.hs-booting .hs-list-card::after,
-body.hotspot-mode .hotspot-panel.hs-booting .hs-earth-container::after,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-aux-box::after,
 body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-card::after {
   content: "";
@@ -4060,7 +4056,6 @@ body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-card::after {
   body.hotspot-mode .hotspot-panel.hs-booting .hs-header,
   body.hotspot-mode .hotspot-panel.hs-booting .hs-stat,
   body.hotspot-mode .hotspot-panel.hs-booting .hs-list-card,
-  body.hotspot-mode .hotspot-panel.hs-booting .hs-earth-container,
   body.hotspot-mode .hotspot-panel.hs-booting .hs-center-aux,
   body.hotspot-mode .hotspot-panel.hs-booting .hs-feed-bar,
   body.hotspot-mode .hotspot-panel.hs-booting .hs-ticker-bar {
@@ -4490,8 +4485,79 @@ body.typhoon-mode .console > #voice-panel .voice-canvas-card {
   height: 100%;
   display: block;
   cursor: grab;
+  transition: opacity 160ms ease;
 }
 .hs-earth-container canvas:active { cursor: grabbing; }
+
+.hs-earth-container[data-earth-state="loading"] canvas,
+.hs-earth-container[data-earth-state="failed"] canvas {
+  opacity: 0;
+}
+
+.hs-earth-status {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--cool);
+  background:
+    radial-gradient(circle at center, rgba(20, 61, 96, 0.34), transparent 48%),
+    linear-gradient(rgba(4, 12, 23, 0.42), rgba(4, 12, 23, 0.72));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.hs-earth-container[data-earth-state="loading"] .hs-earth-status,
+.hs-earth-container[data-earth-state="failed"] .hs-earth-status {
+  opacity: 1;
+  visibility: visible;
+  transition: none;
+}
+
+.hs-earth-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid color-mix(in srgb, var(--cool) 22%, transparent);
+  border-top-color: var(--cool);
+  border-radius: 50%;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--cool) 22%, transparent);
+  animation: hs-earth-spin 760ms linear infinite;
+}
+
+.hs-earth-status-message {
+  font: 10px/1.4 "JetBrains Mono", monospace;
+  letter-spacing: 0.09em;
+}
+
+.hs-earth-retry {
+  display: none;
+  padding: 5px 14px;
+  color: var(--cool);
+  font: 10px/1.2 "JetBrains Mono", monospace;
+  letter-spacing: 0.08em;
+  background: color-mix(in srgb, var(--cool) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cool) 42%, transparent);
+  border-radius: 3px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.hs-earth-container[data-earth-state="failed"] .hs-earth-spinner { display: none; }
+.hs-earth-container[data-earth-state="failed"] .hs-earth-retry { display: block; }
+.hs-earth-retry:hover { background: color-mix(in srgb, var(--cool) 18%, transparent); }
+
+@keyframes hs-earth-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hs-earth-spinner { animation: none; }
+}
 
 .hs-earth-label {
   position: absolute;

@@ -279,18 +279,13 @@ export class HotspotEarth {
     // ── 热点标记 ──────────────────────────────────────────
     this._buildHotspots(T);
 
-    // ── 初始隐藏（等 triggerAppear 再显示，防止贴图加载完后闪现）──
-    this.earth.scale.setScalar(0);
-    if (this.clouds) this.clouds.scale.setScalar(0);
-    this.atmo.scale.setScalar(0);
-    this.atmo2.scale.setScalar(0);
-    this.stars.material.opacity = 0;
-
     // ── 事件监听 ──────────────────────────────────────────
     this._bindEvents();
 
-    // ── 开始渲染循环 ──────────────────────────────────────
-    this._animate();
+    // 只有真实首帧成功提交后才报告初始化完成。持续动画由面板生命周期在可见时
+    // 调用 resume() 启动，避免面板已关闭但贴图刚加载完时短暂创建后台循环。
+    this._checkResize();
+    this.renderer.render(this.scene, this.camera);
     return this;
   }
 
@@ -446,6 +441,23 @@ export class HotspotEarth {
 
   resume() {
     if (!this.animFrame && this.renderer) this._animate();
+  }
+
+  // 新建场景首次展示时，从缩小状态开始动画，并同步提交第一个非空帧。
+  // 生命周期控制器会在本方法成功返回后才撤掉加载反馈。
+  present() {
+    this.triggerAppear();
+    this.resume();
+    return this;
+  }
+
+  isUsable() {
+    if (this.disposed || !this.canvas || !this.renderer || !this.scene || !this.camera) return false;
+    try {
+      return !this.renderer.getContext?.().isContextLost?.();
+    } catch {
+      return false;
+    }
   }
 
   dispose() {

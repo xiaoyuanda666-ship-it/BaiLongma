@@ -2,6 +2,7 @@
 
 import { apiUrl } from './api-client.js';
 import { HotspotEarth } from './hotspot-earth.js';
+import { HotspotEarthLifecycle } from './hotspot-earth-lifecycle.js';
 import { t, translateUiText } from './i18n/index.js';
 
 // ── 实时热点数据由后端 /hotspots 提供；前端不再用 mock 冒充真实热榜 ─────────────
@@ -44,9 +45,6 @@ const TICKER_ITEMS = [
   { time:'19:13', text:'研究显示：今夏北半球平均气温创历史新高' },
 ];
 
-// 收起到后台后保留一小段时间，方便快速切回；只有持续未展开才回收重型 WebGL 资源。
-const BACKGROUND_RELEASE_MS = 5 * 60 * 1000;
-
 // ── 热点上下文构建（中性系统上下文，不强制 Agent 回复）──────────────────────────
 
 let hotspotMeta = {
@@ -88,12 +86,10 @@ ${platformText || '当前暂无可用实时热榜。'}
 // ── 状态 ──────────────────────────────────────────────────────────────────────
 
 let hotspotActive = false;
-let earth         = null;
 let clockTimer    = null;
 let feedAutoTimer = null;
 let hotspotRefreshTimer = null;
 let hotspotRefreshController = null;
-let backgroundReleaseTimer = null;
 let feedIndex     = 0;
 
 // ── 语音球搬家：从 #panel-l1(有 transform)移走，让 fixed 定位/嵌入布局生效 ────
@@ -133,6 +129,34 @@ export { moveVoicePanel, moveVoicePanelToBody, restoreVoicePanel };
 // ── DOM 工具 ──────────────────────────────────────────────────────────────────
 
 const $ = (id) => document.getElementById(id);
+
+function renderEarthState(state) {
+  const container = $('hs-earth-container');
+  const message = $('hs-earth-status-message');
+  const retryButton = $('hs-earth-retry');
+  if (!container) return;
+
+  container.dataset.earthState = state;
+  container.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+  if (message) {
+    message.textContent = state === 'failed'
+      ? t('hotspot.earthFailed')
+      : t('hotspot.earthLoading');
+  }
+  if (retryButton) retryButton.textContent = t('hotspot.earthRetry');
+}
+
+const earthLifecycle = new HotspotEarthLifecycle({
+  createEarth: () => {
+    const canvas = $('hs-earth-canvas');
+    if (!canvas) throw new Error('3D earth canvas is unavailable');
+    return new HotspotEarth(canvas);
+  },
+  onStateChange: renderEarthState,
+  onError: (error) => {
+    console.warn('[HotspotEarth] 生命周期操作失败:', error);
+  },
+});
 
 // ── 热榜列表渲染 ──────────────────────────────────────────────────────────────
 
@@ -352,29 +376,6 @@ function stopClock() {
   clockTimer = null;
 }
 
-function cancelBackgroundRelease() {
-  if (backgroundReleaseTimer) clearTimeout(backgroundReleaseTimer);
-  backgroundReleaseTimer = null;
-}
-
-function scheduleBackgroundRelease() {
-  if (hotspotActive) return;
-  cancelBackgroundRelease();
-  backgroundReleaseTimer = setTimeout(() => {
-    backgroundReleaseTimer = null;
-    if (!hotspotActive) disposeEarth();
-  }, BACKGROUND_RELEASE_MS);
-}
-
-// 热点面板是唯一会创建 WebGL 上下文的大屏。暂停 rAF 只能止住 GPU 空转，
-// 并不会归还纹理、缓冲区和 canvas context；关闭时必须真正 dispose，下一次打开再懒加载。
-function disposeEarth() {
-  const instance = earth;
-  earth = null;
-  earthInitPromise = null;
-  try { instance?.dispose(); } catch (err) { console.warn('[HotspotEarth] 释放资源失败:', err); }
-}
-
 function replayHotspotBoot() {
   const panel = $('hotspot-panel');
   if (!panel) return;
@@ -419,11 +420,9 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
     stopClock();
     stopFeedAuto();
     stopHotspotRefresh();
-    earth?.pause();
-    scheduleBackgroundRelease();
+    earthLifecycle.close();
     restoreVoicePanel();
   } else {
-    cancelBackgroundRelease();
     // 关闭其他媒体模式（互斥）
     if (document.body.classList.contains('video-mode'))
       document.body.classList.remove('video-mode');
@@ -433,21 +432,14 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
       document.body.classList.remove('music-mode');
 
     setPanelVisible(true, source);
+    // 同步进入 loading/ready，保证热点面板第一次可见绘制时中央区域已有反馈。
+    earthLifecycle.open();
     replayHotspotBoot();
     startClock();
     startFeedAuto();
     startHotspotRefresh();
     refreshHotspots().catch(() => {});
     moveVoicePanelToBody();
-
-    // 懒加载地球（首次打开才创建 WebGL 场景）并恢复渲染 + 入场动画
-    ensureEarth().then((e) => {
-      if (!e) return;
-      // init 异步期间面板可能已被关掉：init 末尾会自行启动渲染循环，这里得补停
-      if (!hotspotActive) { e.pause(); return; }
-      e.resume();
-      requestAnimationFrame(() => e.triggerAppear());
-    });
   }
 }
 
@@ -471,39 +463,17 @@ export async function initHotspot() {
   // 绑定实时流控制按钮
   const prevBtn = $('hs-feed-prev');
   const nextBtn = $('hs-feed-next');
+  const earthRetryBtn = $('hs-earth-retry');
   if (prevBtn) prevBtn.addEventListener('click', () => { stopFeedAuto(); scrollFeedTo(feedIndex - 1); });
   if (nextBtn) nextBtn.addEventListener('click', () => { stopFeedAuto(); scrollFeedTo(feedIndex + 1); });
+  if (earthRetryBtn) earthRetryBtn.addEventListener('click', () => { earthLifecycle.retry(); });
 
-  // 地球不在这里初始化：WebGL 场景只在热点模式首次打开时创建（见 ensureEarth），
+  // 地球不在这里初始化：WebGL 场景只在热点模式首次打开时由生命周期控制器创建，
   // 避免应用一启动就有一个 60fps 的 3D 渲染循环在隐藏面板里空转烧 GPU。
 
   // 页面不可见（最小化/切走/收进托盘）时显式停掉地球渲染，回来且面板开着才恢复
   document.addEventListener('visibilitychange', () => {
-    if (!earth) return;
-    if (document.hidden) earth.pause();
-    else if (hotspotActive) earth.resume();
+    if (document.hidden) earthLifecycle.pause();
+    else earthLifecycle.resume();
   });
-}
-
-// ── 地球懒加载 ───────────────────────────────────────────────────────────────
-
-let earthInitPromise = null;
-
-function ensureEarth() {
-  if (earthInitPromise) return earthInitPromise;
-  const canvas = $('hs-earth-canvas');
-  if (!canvas) return Promise.resolve(null);
-  const instance = new HotspotEarth(canvas);
-  earth = instance;
-  earthInitPromise = instance.init().then((ready) => {
-    // 关闭期间的异步初始化会被 dispose；不得把旧实例重新挂回面板。
-    if (!ready || earth !== instance) return null;
-    return instance;
-  }).catch((err) => {
-    console.warn('[HotspotEarth] 初始化失败，可能是网络问题:', err);
-    // 初始化失败（多半是 three.js CDN 拉不下来）→ 复位，下次打开面板重试
-    if (earth === instance) disposeEarth();
-    return null;
-  });
-  return earthInitPromise;
 }
