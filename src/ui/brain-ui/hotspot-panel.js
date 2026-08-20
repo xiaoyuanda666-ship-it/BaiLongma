@@ -100,9 +100,14 @@ export const createHotspotPanel = () => `
     <div class="hs-col hs-col-center">
 
       <!-- 地球容器 -->
-      <div class="hs-earth-container" id="hs-earth-container">
+      <div class="hs-earth-container" id="hs-earth-container" data-earth-state="idle" aria-busy="false">
         <div class="hs-earth-label">全球热力图</div>
         <canvas id="hs-earth-canvas"></canvas>
+        <div class="hs-earth-status" id="hs-earth-status" role="status" aria-live="polite">
+          <span class="hs-earth-spinner" aria-hidden="true"></span>
+          <span class="hs-earth-status-message" id="hs-earth-status-message">正在加载 3D 地球…</span>
+          <button class="hs-earth-retry" id="hs-earth-retry" type="button">重试</button>
+        </div>
         <div class="hs-earth-hint">拖拽旋转 · 滚轮缩放</div>
       </div>
 
