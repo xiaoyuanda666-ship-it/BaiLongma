@@ -54,6 +54,8 @@ try {
   assert.equal(getVoiceConfig().voiceProvider, 'tencent', 'Tencent ASR provider can be activated')
   assert.equal(JSON.parse(fs.readFileSync(path.join(voiceDir, 'aliyun.json'), 'utf-8')).aliyunApiKey, 'sk-aliyunkeyplaceholder1234567890', 'Aliyun ASR key survives provider switch')
   assert.equal(JSON.parse(fs.readFileSync(path.join(voiceDir, 'tencent.json'), 'utf-8')).tencentSecretId, 'sid-123', 'Tencent ASR key is stored in its own file')
+  assert.equal(getVoiceRuntimeConfig('aliyun').provider, 'aliyun', 'explicit runtime provider wins while settings autosave may still be in flight')
+  assert.equal(getVoiceRuntimeConfig('aliyun').aliyunApiKey, 'sk-aliyunkeyplaceholder1234567890', 'explicit runtime provider reads its own credentials')
 
   setVoiceConfig({
     voiceProvider: 'volcengine',

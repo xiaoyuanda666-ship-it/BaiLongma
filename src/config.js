@@ -1773,7 +1773,13 @@ export function getVoiceConfig() {
 }
 
 export function getVoiceRuntimeConfig(providerHint = null) {
-  const provider = readActiveVoiceProvider(providerHint || 'aliyun')
+  const activeProvider = readActiveVoiceProvider('aliyun')
+  // The browser sends its current selection when opening an ASR WebSocket.
+  // Honor that explicit selection so a just-changed provider works even while
+  // the settings autosave request is still in flight.
+  const provider = providerHint
+    ? normalizeVoiceProvider(providerHint, activeProvider)
+    : activeProvider
   const stored = readVoiceProviderConfig(provider)
   return {
     ...stored,
