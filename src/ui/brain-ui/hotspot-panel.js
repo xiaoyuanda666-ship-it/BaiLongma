@@ -185,9 +185,9 @@ export const createHotspotPanel = () => `
   <div class="hs-feed-bar">
     <div class="hs-feed-label">
       <span class="hs-feed-live-dot">●</span>
-      <span>实时</span>
+      <span id="hs-feed-state">实时</span>
       <span class="hs-feed-subtitle">实时事件流</span>
-      <span class="hs-feed-desc">24/7 全球热点持续追踪</span>
+      <span class="hs-feed-desc" id="hs-feed-description">24/7 全球热点持续追踪</span>
     </div>
     <div class="hs-feed-viewport" id="hs-feed-viewport">
       <div class="hs-feed-track" id="hs-feed-track">

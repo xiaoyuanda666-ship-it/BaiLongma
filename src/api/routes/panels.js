@@ -1,5 +1,6 @@
 import { buildHeartbeatSystemPromptPreview } from '../../system-prompt-preview.js'
 import { getHotspots, getHotspotPanelState, setHotspotPanelState } from '../../hotspots.js'
+import { getHotspotEvents } from '../../hotspot-events.js'
 import { getWorldcup, getWorldcupPanelState, setWorldcupPanelState } from '../../worldcup.js'
 import { getTyphoons, getTyphoonPanelState, setTyphoonPanelState } from '../../typhoon.js'
 import { DOC_TOPICS, getDocPanelState, setDocPanelState } from '../../docs.js'
@@ -21,6 +22,20 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         error: err.message,
         refreshMinutes: 30,
         platforms: {},
+      }))
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/hotspot-events') {
+    getHotspotEvents({
+      force: /^(1|true|yes)$/i.test(url.searchParams.get('refresh') || ''),
+    })
+      .then((events) => jsonResponse(res, 200, events))
+      .catch((err) => jsonResponse(res, 502, {
+        ok: false,
+        error: err.message,
+        refreshMinutes: 15,
+        events: [],
       }))
     return true
   }

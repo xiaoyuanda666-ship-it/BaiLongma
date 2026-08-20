@@ -254,6 +254,32 @@ function createServer() {
       return
     }
 
+    if (url.pathname === '/hotspot-events') {
+      const fetchedAt = new Date().toISOString()
+      sendJson(res, {
+        ok: true,
+        refreshMinutes: 15,
+        fetchedAt,
+        checkedAt: fetchedAt,
+        stale: false,
+        source: 'smoke-events',
+        events: [
+          {
+            id: 'smoke-event-1',
+            title: 'Smoke 真实事件',
+            summary: '用于验证事件流接口和安全渲染。',
+            category: '科技',
+            categoryDerived: true,
+            fetchedAt,
+            source: 'Smoke Source',
+            sourceUrl: 'https://example.com/smoke-event',
+            hotness: '100万',
+          },
+        ],
+      })
+      return
+    }
+
     if (url.pathname === '/person-card') {
       const name = url.searchParams.get('name') || ''
       if (name.includes('马云')) {

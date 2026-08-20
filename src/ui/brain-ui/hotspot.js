@@ -5,7 +5,7 @@ import { HotspotEarth } from './hotspot-earth.js';
 import { HotspotEarthLifecycle } from './hotspot-earth-lifecycle.js';
 import { t, translateUiText } from './i18n/index.js';
 
-// ── 实时热点数据由后端 /hotspots 提供；前端不再用 mock 冒充真实热榜 ─────────────
+// ── 实时热点数据由后端提供；前端不使用 mock 冒充真实数据 ─────────────────────
 
 const PLATFORM_CONFIG = {
   douyin: { listId: 'hs-douyin-list', updateId: 'hs-douyin-update', style: 'heat', label: '抖音' },
@@ -21,29 +21,16 @@ const hotspotLists = {
   weibo: [],
 };
 
-// 实时事件流卡片
-const MOCK_FEED = [
-  { time:'19:25', cat:'自然灾害', catColor:'#e05c5c', title:'四川宜宾县发生6.0级地震', desc:'震源深度10公里，暂无人员伤亡报告，救援力量已巡查到达震源周边', loc:'中国·四川', img:'' },
-  { time:'19:24', cat:'科技',     catColor:'#5c9ee0', title:'神舟十八号发射任务圆满成功', desc:'载人飞船与空间站组合体成功对接，状态良好。', loc:'酒泉卫星发射中心', img:'' },
-  { time:'19:23', cat:'财经',     catColor:'#c97d30', title:'特斯拉全球召回超110万辆汽车', desc:'涉及安全带及软件问题，特斯拉免费修复。', loc:'全球', img:'' },
-  { time:'19:22', cat:'体育',     catColor:'#4eaa6e', title:'巴黎奥运圣火抵达马赛港', desc:'开幕式倒计时启动，法国全境传递沿线盛况空前，7月26日开幕。', loc:'法国·马赛', img:'' },
-  { time:'19:21', cat:'社会',     catColor:'#9b6bc4', title:'台风"玛莉亚"逼近东南沿海', desc:'预计26日凌晨在浙江登陆，多地发布台风橙色预警，船只回港避险。', loc:'中国·东南沿海', img:'' },
-  { time:'19:19', cat:'科技',     catColor:'#5c9ee0', title:'华为发布全新 AI 芯片', desc:'性能较上代提升60%，将首批搭载于旗舰产品线，引发行业广泛关注。', loc:'中国·深圳', img:'' },
-  { time:'19:18', cat:'政策',     catColor:'#6bbfbf', title:'欧盟正式通过 AI 监管法案', desc:'《人工智能法案》生效，将对高风险AI系统实施强制合规审查。', loc:'比利时·布鲁塞尔', img:'' },
-  { time:'19:17', cat:'旅游',     catColor:'#c4a030', title:'多地景区迎来客流高峰', desc:'暑期旅游热度持续攀升，热门景区单日接待游客超历史纪录。', loc:'中国多地', img:'' },
-];
-
-// 底部跑马灯文字
-const TICKER_ITEMS = [
-  { time:'19:20', text:'上海发布高温红色预警，气温预计突破40℃' },
-  { time:'19:19', text:'全球芯片市场半年年报告发布，亚太份额持续上升' },
-  { time:'19:18', text:'欧盟通过 AI 法案，将对高风险系统强制审查' },
-  { time:'19:17', text:'多地景区迎来客流高峰，暑运旅游市场表现亮眼' },
-  { time:'19:16', text:'国际油价小幅上涨，布伦特原油突破85美元/桶' },
-  { time:'19:15', text:'A股午后强势拉升，沪指收涨1.24%，科技板块领涨' },
-  { time:'19:14', text:'北京时间明日凌晨2点：欧洲杯决赛，全球直播' },
-  { time:'19:13', text:'研究显示：今夏北半球平均气温创历史新高' },
-];
+let hotspotEvents = [];
+let hotspotEventsMeta = {
+  source: 'loading',
+  sourceLabel: '',
+  fetchedAt: null,
+  checkedAt: null,
+  stale: false,
+  refreshMinutes: 15,
+  error: '',
+};
 
 // ── 热点上下文构建（中性系统上下文，不强制 Agent 回复）──────────────────────────
 
@@ -57,7 +44,7 @@ let hotspotMeta = {
 
 export function buildHotspotContext() {
   const top = (arr, n) => arr.slice(0, n).map((i, idx) => `${idx + 1}. ${i.text}`).join('；');
-  const feedTop = MOCK_FEED.slice(0, 3).map(i => `[${i.cat}] ${i.title}`).join('；');
+  const feedTop = hotspotEvents.slice(0, 3).map(i => `[${i.category}] ${i.title}`).join('；');
   const platformText = Object.entries(PLATFORM_CONFIG)
     .map(([platform, config]) => {
       const items = hotspotLists[platform] || [];
@@ -80,7 +67,7 @@ export function buildHotspotContext() {
 ${sourceText}
 
 ${platformText || '当前暂无可用实时热榜。'}
-实时事件 Top3：${feedTop}`;
+实时事件 Top3：${feedTop || '当前暂无可用真实事件。'}`;
 }
 
 // ── 状态 ──────────────────────────────────────────────────────────────────────
@@ -90,6 +77,8 @@ let clockTimer    = null;
 let feedAutoTimer = null;
 let hotspotRefreshTimer = null;
 let hotspotRefreshController = null;
+let hotspotEventsRefreshTimer = null;
+let hotspotEventsRefreshController = null;
 let feedIndex     = 0;
 
 // ── 语音球搬家：从 #panel-l1(有 transform)移走，让 fixed 定位/嵌入布局生效 ────
@@ -299,23 +288,105 @@ function stopHotspotRefresh() {
 const CAT_COLORS = {
   '自然灾害':'#e05c5c', '科技':'#5c9ee0', '财经':'#c97d30',
   '体育':'#4eaa6e', '社会':'#9b6bc4', '政策':'#6bbfbf', '旅游':'#c4a030',
+  '健康':'#55b8a8', '文娱':'#d071a8',
 };
+
+function safeHttpUrl(value) {
+  if (!value) return '';
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeHotspotEvent(item) {
+  const title = String(item?.title || '').trim();
+  if (!title) return null;
+  return {
+    id: String(item?.id || title),
+    title,
+    summary: String(item?.summary || '').trim(),
+    category: String(item?.category || t('hotspot.eventCategoryFallback')).trim(),
+    categoryDerived: !!item?.categoryDerived,
+    publishedAt: item?.publishedAt || null,
+    fetchedAt: item?.fetchedAt || null,
+    location: item?.location ? String(item.location).trim() : '',
+    source: String(item?.source || t('hotspot.unknown')).trim(),
+    sourceUrl: safeHttpUrl(item?.sourceUrl),
+    hotness: String(item?.hotness || '').trim(),
+  };
+}
+
+function eventTimeLabel(item, { withKind = true } = {}) {
+  const published = item?.publishedAt;
+  const raw = published || item?.fetchedAt;
+  const date = raw ? new Date(raw) : null;
+  if (!date || Number.isNaN(date.getTime())) return t('hotspot.unknown');
+  const pad = (n) => String(n).padStart(2, '0');
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  if (!withKind) return time;
+  return published
+    ? t('hotspot.eventPublishedAt', { time })
+    : t('hotspot.eventFetchedAt', { time });
+}
+
+function appendTextElement(parent, tagName, className, text) {
+  const el = document.createElement(tagName);
+  el.className = className;
+  el.textContent = text;
+  parent.appendChild(el);
+  return el;
+}
+
+function createFeedCard(item) {
+  const card = document.createElement(item.sourceUrl ? 'a' : 'div');
+  card.className = 'hs-feed-card';
+  if (item.sourceUrl) {
+    card.href = item.sourceUrl;
+    card.target = '_blank';
+    card.rel = 'noopener noreferrer';
+    card.setAttribute('aria-label', `${item.title} · ${item.source}`);
+  }
+
+  const top = document.createElement('div');
+  top.className = 'hs-feed-card-top';
+  appendTextElement(top, 'span', 'hs-feed-time', eventTimeLabel(item));
+  const color = CAT_COLORS[item.category] || '#8fb6d8';
+  const category = appendTextElement(top, 'span', 'hs-feed-cat', translateUiText(item.category));
+  category.style.background = `${color}22`;
+  category.style.color = color;
+  category.style.borderColor = `${color}44`;
+  if (item.categoryDerived) category.title = t('hotspot.eventCategoryDerived');
+  card.appendChild(top);
+
+  appendTextElement(card, 'div', 'hs-feed-title', item.title);
+  if (item.summary) appendTextElement(card, 'div', 'hs-feed-desc', item.summary);
+  const detail = [item.location, item.source, item.hotness ? t('hotspot.eventHotness', { value: item.hotness }) : '']
+    .filter(Boolean)
+    .join(' · ');
+  appendTextElement(card, 'div', 'hs-feed-source', detail || t('hotspot.unknown'));
+  return card;
+}
 
 function renderFeed() {
   const track = $('hs-feed-track');
   if (!track) return;
-  track.innerHTML = MOCK_FEED.map((item) => {
-    const color = item.catColor || CAT_COLORS[item.cat] || '#8fb6d8';
-    return `<div class="hs-feed-card">
-      <div class="hs-feed-card-top">
-        <span class="hs-feed-time">${item.time}</span>
-        <span class="hs-feed-cat" style="background:${color}22;color:${color};border-color:${color}44">${item.cat}</span>
-      </div>
-      <div class="hs-feed-title">${item.title}</div>
-      <div class="hs-feed-desc">${item.desc}</div>
-      <div class="hs-feed-loc">📍 ${item.loc}</div>
-    </div>`;
-  }).join('');
+  track.replaceChildren();
+  if (!hotspotEvents.length) {
+    const empty = appendTextElement(
+      track,
+      'div',
+      'hs-feed-card hs-feed-card-empty',
+      hotspotEventsMeta.error ? t('hotspot.sourceUnavailable') : t('hotspot.eventLoading'),
+    );
+    empty.setAttribute('role', 'status');
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  hotspotEvents.slice(0, 12).forEach(item => fragment.appendChild(createFeedCard(item)));
+  track.appendChild(fragment);
 }
 
 function scrollFeedTo(idx) {
@@ -336,23 +407,132 @@ function startFeedAuto() {
   feedAutoTimer = setInterval(() => {
     scrollFeedTo(feedIndex + 1);
   }, 4000);
+  updateHotspotEventsMeta();
 }
 
-function stopFeedAuto() {
+function stopFeedAuto({ updateLabel = false } = {}) {
   if (feedAutoTimer) clearInterval(feedAutoTimer);
   feedAutoTimer = null;
+  if (updateLabel) updateHotspotEventsMeta();
 }
 
-// ── 底部跑马灯 ───────────────────────────────────────────────────────────────
+// ── 底部跑马灯（与事件卡片同源，不单独制造内容）─────────────────────────────
 
 function renderTicker() {
   const el = $('hs-ticker-inner');
   if (!el) return;
-  const html = TICKER_ITEMS.map(
-    ({ time, text }) => `<span class="hs-ticker-item"><span class="hs-ticker-time">${time}</span>${text}</span>`
-  ).join('<span class="hs-ticker-sep">●</span>');
-  // 翻倍内容实现无缝
-  el.innerHTML = html + '<span class="hs-ticker-sep">●</span>' + html;
+  el.replaceChildren();
+  const tickerItems = hotspotEvents.length > 12 ? hotspotEvents.slice(12, 32) : hotspotEvents;
+  if (!tickerItems.length) {
+    el.classList.add('hs-ticker-inner-empty');
+    el.textContent = hotspotEventsMeta.error ? t('hotspot.sourceUnavailable') : t('hotspot.eventLoading');
+    return;
+  }
+  el.classList.remove('hs-ticker-inner-empty');
+  const appendItems = () => {
+    tickerItems.forEach((item, index) => {
+      const entry = document.createElement('span');
+      entry.className = 'hs-ticker-item';
+      appendTextElement(entry, 'span', 'hs-ticker-time', eventTimeLabel(item, { withKind: false }));
+      entry.appendChild(document.createTextNode(item.title));
+      el.appendChild(entry);
+      if (index < tickerItems.length - 1) appendTextElement(el, 'span', 'hs-ticker-sep', '●');
+    });
+  };
+  appendItems();
+  appendTextElement(el, 'span', 'hs-ticker-sep', '●');
+  appendItems();
+}
+
+function updateHotspotEventsMeta() {
+  const bar = document.querySelector('.hs-feed-bar');
+  const state = $('hs-feed-state');
+  const description = $('hs-feed-description');
+  const autoLabel = $('hs-feed-auto');
+  const unavailable = !hotspotEvents.length && !!hotspotEventsMeta.error;
+  const loading = !hotspotEvents.length && !hotspotEventsMeta.error && hotspotEventsMeta.source === 'loading';
+  bar?.classList.toggle('hs-feed-stale', !!hotspotEventsMeta.stale && !unavailable);
+  bar?.classList.toggle('hs-feed-unavailable', unavailable);
+  if (state) state.textContent = loading
+    ? t('hotspot.eventLoadingShort')
+    : (unavailable
+      ? t('hotspot.eventUnavailableShort')
+      : t(hotspotEventsMeta.stale ? 'hotspot.cache' : 'hotspot.realtime'));
+  if (description) {
+    description.textContent = loading
+      ? t('hotspot.eventLoading')
+      : (unavailable
+        ? t('hotspot.sourceUnavailable')
+        : t('hotspot.eventSourceStatus', {
+          source: translateUiText(hotspotEventsMeta.sourceLabel || hotspotEventsMeta.source),
+          time: formatFetchedAt(hotspotEventsMeta.fetchedAt),
+        }));
+  }
+  if (autoLabel) autoLabel.textContent = loading
+    ? t('hotspot.eventLoadingShort')
+    : (unavailable || !feedAutoTimer
+      ? t('hotspot.eventPaused')
+      : t(hotspotEventsMeta.stale ? 'hotspot.cache' : 'hotspot.autoScrolling'));
+}
+
+function scheduleHotspotEventsRefresh() {
+  if (hotspotEventsRefreshTimer) clearTimeout(hotspotEventsRefreshTimer);
+  hotspotEventsRefreshTimer = null;
+  if (!hotspotActive) return;
+  const minutes = Math.max(5, Number(hotspotEventsMeta.refreshMinutes) || 15);
+  hotspotEventsRefreshTimer = setTimeout(() => {
+    refreshHotspotEvents().catch(() => {});
+  }, minutes * 60 * 1000);
+}
+
+async function refreshHotspotEvents({ force = false } = {}) {
+  if (hotspotEventsRefreshController) return;
+  const controller = new AbortController();
+  hotspotEventsRefreshController = controller;
+  try {
+    const query = force ? '?refresh=1' : '';
+    const res = await fetch(apiUrl(`/hotspot-events${query}`), { signal: controller.signal });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) throw new Error(data?.error || `HTTP ${res.status}`);
+    if (!hotspotActive) return;
+    hotspotEvents = Array.isArray(data?.events)
+      ? data.events.map(normalizeHotspotEvent).filter(Boolean)
+      : [];
+    hotspotEventsMeta = {
+      source: data.source || 'hotspot-events',
+      sourceLabel: data.sourceLabel || data.source || 'hotspot-events',
+      fetchedAt: data.fetchedAt || null,
+      checkedAt: data.checkedAt || null,
+      stale: !!data.stale,
+      refreshMinutes: data.refreshMinutes || 15,
+      error: hotspotEvents.length ? '' : t('hotspot.sourceUnavailable'),
+    };
+    feedIndex = Math.min(feedIndex, Math.max(0, hotspotEvents.length - 1));
+    renderFeed();
+    renderTicker();
+    updateHotspotEventsMeta();
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    hotspotEventsMeta = {
+      ...hotspotEventsMeta,
+      stale: hotspotEvents.length > 0,
+      error: err.message,
+    };
+    renderFeed();
+    renderTicker();
+    updateHotspotEventsMeta();
+    console.warn('[Hotspot] 实时事件刷新失败:', err.message);
+  } finally {
+    if (hotspotEventsRefreshController === controller) hotspotEventsRefreshController = null;
+    scheduleHotspotEventsRefresh();
+  }
+}
+
+function stopHotspotEventsRefresh() {
+  if (hotspotEventsRefreshTimer) clearTimeout(hotspotEventsRefreshTimer);
+  hotspotEventsRefreshTimer = null;
+  hotspotEventsRefreshController?.abort();
+  hotspotEventsRefreshController = null;
 }
 
 // ── 实时时钟 ─────────────────────────────────────────────────────────────────
@@ -420,6 +600,7 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
     stopClock();
     stopFeedAuto();
     stopHotspotRefresh();
+    stopHotspotEventsRefresh();
     earthLifecycle.close();
     restoreVoicePanel();
   } else {
@@ -439,6 +620,7 @@ export function setHotspotMode(visible, { source = 'brain-ui' } = {}) {
     startFeedAuto();
     startHotspotRefresh();
     refreshHotspots().catch(() => {});
+    refreshHotspotEvents().catch(() => {});
     moveVoicePanelToBody();
   }
 }
@@ -455,6 +637,7 @@ export async function initHotspot() {
   updateHotspotMeta();
   renderFeed();
   renderTicker();
+  updateHotspotEventsMeta();
 
   // 绑定关闭按钮
   const exitBtn = $('hs-exit-btn');
@@ -464,8 +647,8 @@ export async function initHotspot() {
   const prevBtn = $('hs-feed-prev');
   const nextBtn = $('hs-feed-next');
   const earthRetryBtn = $('hs-earth-retry');
-  if (prevBtn) prevBtn.addEventListener('click', () => { stopFeedAuto(); scrollFeedTo(feedIndex - 1); });
-  if (nextBtn) nextBtn.addEventListener('click', () => { stopFeedAuto(); scrollFeedTo(feedIndex + 1); });
+  if (prevBtn) prevBtn.addEventListener('click', () => { stopFeedAuto({ updateLabel: true }); scrollFeedTo(feedIndex - 1); });
+  if (nextBtn) nextBtn.addEventListener('click', () => { stopFeedAuto({ updateLabel: true }); scrollFeedTo(feedIndex + 1); });
   if (earthRetryBtn) earthRetryBtn.addEventListener('click', () => { earthLifecycle.retry(); });
 
   // 地球不在这里初始化：WebGL 场景只在热点模式首次打开时由生命周期控制器创建，

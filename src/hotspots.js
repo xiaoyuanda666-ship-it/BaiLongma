@@ -62,7 +62,7 @@ Current hotspot panel: ${status}. ${ttl}.
 Use the hotspot_mode tool to open or close the hotspot panel only when display, demo, troubleshooting, or an explicit user request calls for it. Do not open it proactively for ordinary answers.`
 }
 
-function readHotspotConfig() {
+export function readHotspotConfig() {
   let stored = {}
   try {
     stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.hotspots || {}
@@ -131,8 +131,10 @@ async function fetchJson(url, options = {}) {
 }
 
 function formatHeat(value) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return String(value || '')
+  const raw = value == null ? '' : String(value).trim()
+  if (!raw) return ''
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return raw
   if (n >= 100000000) return `${(n / 100000000).toFixed(n >= 1000000000 ? 1 : 2).replace(/\.0+$/, '')}亿`
   if (n >= 10000) return `${Math.round(n / 10000)}万`
   return String(n)

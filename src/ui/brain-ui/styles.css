@@ -4656,6 +4656,8 @@ body.typhoon-mode .console > #voice-panel .voice-canvas-card {
   background: color-mix(in srgb, var(--bg1) 60%, transparent);
 }
 .hs-feed-live-dot { color: #ff4444; font-size: 8px; animation: hs-blink 1.2s infinite; }
+.hs-feed-bar.hs-feed-stale .hs-feed-live-dot { color: #d8a443; }
+.hs-feed-bar.hs-feed-unavailable .hs-feed-live-dot { color: var(--dim); animation: none; }
 .hs-feed-label > span:nth-child(2) { font-size: 11px; font-weight: 700; color: var(--cool); letter-spacing: 0.06em; }
 .hs-feed-subtitle { font-size: 10px; color: var(--ink2); font-weight: 600; }
 .hs-feed-desc     { font-size: 8.5px; color: var(--dim); line-height: 1.4; margin-top: 2px; }
@@ -4692,14 +4694,22 @@ body.typhoon-mode .console > #voice-panel .voice-canvas-card {
   transition: border-color 0.15s ease, background 0.15s ease;
   min-width: 0;
 }
+.hs-feed-card[href] { cursor: pointer; color: inherit; text-decoration: none; }
 .hs-feed-card:hover { border-color: var(--cool); background: color-mix(in srgb, var(--bg1) 80%, var(--cool) 5%); }
+.hs-feed-card-empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  cursor: default;
+  text-align: center;
+}
 
 .hs-feed-card-top { display: flex; align-items: center; gap: 6px; }
 .hs-feed-time     { font-size: 9px; color: var(--dim); font-family: "JetBrains Mono", monospace; flex: 0 0 auto; }
 .hs-feed-cat      { font-size: 9px; border: 1px solid; border-radius: 3px; padding: 0 4px; line-height: 1.5; flex: 0 0 auto; }
 .hs-feed-title    { font-size: 11px; font-weight: 600; color: var(--ink); line-height: 1.35; }
 .hs-feed-desc     { font-size: 9.5px; color: var(--ink2); line-height: 1.4; flex: 1 1 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.hs-feed-loc      { font-size: 9px; color: var(--dim); margin-top: auto; }
+.hs-feed-source   { font-size: 9px; color: var(--dim); margin-top: auto; }
 
 .hs-feed-controls {
   flex: 0 0 auto;
@@ -4750,6 +4760,7 @@ body.typhoon-mode .console > #voice-panel .voice-canvas-card {
   animation: hs-ticker 60s linear infinite;
   will-change: transform;
 }
+.hs-ticker-inner-empty { animation: none; padding-left: 12px; color: var(--dim); font-size: 10.5px; }
 
 @keyframes hs-ticker {
   0%   { transform: translateX(0); }

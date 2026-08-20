@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.120",
+  "version": "2.2.121",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -40,6 +40,7 @@
     "test:i18n": "node ./src/test-i18n.js",
     "test:brain-ui-tools": "node ./src/test-brain-ui-tool-descriptions.js",
     "test:hotspot-earth": "node ./src/test-hotspot-earth-lifecycle.js",
+    "test:hotspot-events": "node ./src/test-hotspot-events.js",
     "test:information-subscriptions": "electron ./src/test-information-subscriptions.js",
     "test:device-information": "node ./src/test-device-information.js",
     "test:complex-task": "electron ./src/test-complex-task.js",
