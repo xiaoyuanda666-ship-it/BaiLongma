@@ -5,7 +5,7 @@
 // 不必再人肉同步 self-knowledge.js / config-faq.js。
 //
 //   工具真源：capabilities/schemas/*.js 的各 *Schemas 对象（与发给 LLM 的 schema 同一份）
-//   模型真源：config.js 的 getProviderSummaries()（即 PROVIDER_CONFIG）
+//   模型离线基线：config.js 的 getProviderSummaries()（即 PROVIDER_CONFIG）
 //
 // 仅依赖纯数据（schema 常量、PROVIDER_CONFIG 常量），不触发任何副作用，import 安全。
 
@@ -85,11 +85,14 @@ export function buildModelCatalogText() {
     const modelStr = def
       ? `默认 ${def}${others.length ? '；另有 ' + others.join(', ') : ''}`
       : (ids.join(', ') || '—')
-    lines.push(`■ ${info.label}（provider id: ${key}）— ${modelStr}`)
+    const catalogNote = info.modelCatalogSupported === false
+      ? '；供应商未公开模型目录 API，使用内置官方基线'
+      : '；支持使用 API Key 动态读取目录'
+    lines.push(`■ ${info.label}（provider id: ${key}）— ${modelStr}${catalogNote}`)
   }
   lines.push('■ 自定义端点（custom）— 任意 OpenAI Responses API 兼容服务，自填 baseURL + 模型名')
   lines.push('')
-  lines.push('注：本清单由 config.js 的 PROVIDER_CONFIG 自动生成，新增 provider 或模型会自动反映。')
+  lines.push('注：这里列的是离线内置基线；供应商公开目录 API 时，模型设置页会使用已配置的 API Key 动态读取，失败时回退到本清单。')
   lines.push('配置入口：⚙ → 模型设置。填入 API Key 后系统 Auto 模式会自动识别归属，无需手动选 provider。')
   return lines.join('\n')
 }

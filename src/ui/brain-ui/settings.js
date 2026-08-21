@@ -380,6 +380,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const autosaveStatusText = document.getElementById("settings-autosave-status-text");
   const providerSelect  = document.getElementById("settings-provider-select");
   const modelSelect     = document.getElementById("settings-model-select");
+  const refreshModelsBtn = document.getElementById("settings-refresh-models");
+  const modelCatalogStatus = document.getElementById("settings-model-catalog-status");
+  const modelCatalogStatusRow = document.getElementById("settings-model-catalog-status-row");
   const officialCustomModelInput = document.getElementById("settings-official-custom-model");
   const llmKeyInput     = document.getElementById("settings-llm-key");
   const llmKeyToggle    = document.getElementById("settings-llm-key-toggle");
@@ -426,6 +429,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
   let cachedProviders = null;
   let cachedMinimax = { configured: false };
+  let modelCatalogRequestId = 0;
 
   function syncContextWindowControls(changed = "load") {
     let chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
@@ -679,6 +683,83 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     providerSelect.value = providers[selected] || selected === "auto" ? selected : "auto";
   }
 
+  async function refreshProviderModels({ forceRefresh = false } = {}) {
+    const provider = providerSelect?.value || "auto";
+    const isOfficial = provider !== "auto" && provider !== "custom";
+    const supportsCatalog = isOfficial
+      && cachedProviders?.[provider]?.modelCatalogSupported !== false;
+    if (refreshModelsBtn) refreshModelsBtn.style.display = supportsCatalog ? "" : "none";
+    if (modelCatalogStatusRow) modelCatalogStatusRow.style.display = isOfficial ? "" : "none";
+    if (!isOfficial) return;
+    if (!supportsCatalog) {
+      if (modelCatalogStatus) {
+        modelCatalogStatus.textContent = t("dynamic.modelCatalogUnsupported");
+        modelCatalogStatus.className = "settings-feedback";
+      }
+      return;
+    }
+
+    const requestId = ++modelCatalogRequestId;
+    const current = modelSelect?.value === CUSTOM_MODEL_VALUE
+      ? officialCustomModelInput?.value?.trim()
+      : modelSelect?.value;
+    if (refreshModelsBtn) refreshModelsBtn.disabled = true;
+    if (modelCatalogStatus) {
+      modelCatalogStatus.className = "settings-feedback";
+      modelCatalogStatus.textContent = t("dynamic.modelCatalogLoading");
+    }
+
+    try {
+      const body = { provider, forceRefresh };
+      const apiKey = llmKeyInput?.value?.trim();
+      if (apiKey) body.apiKey = apiKey;
+      const res = await fetch(`${API}/settings/models`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || t("dynamic.modelCatalogLoadFailed"));
+      if (requestId !== modelCatalogRequestId || providerSelect?.value !== provider) return;
+
+      const providerCfg = cachedProviders?.[provider] || {};
+      const selectedModel = current || providerCfg.model || providerCfg.defaultModel;
+      populateModelSelect(data.models, selectedModel);
+      if (cachedProviders?.[provider]) {
+        cachedProviders[provider] = {
+          ...cachedProviders[provider],
+          models: data.models,
+          catalogSource: data.source,
+          catalogFetchedAt: data.fetchedAt,
+        };
+      }
+      if (modelCatalogStatus) {
+        const count = Array.isArray(data.models) ? data.models.length : 0;
+        const sourceText = data.source === "dynamic"
+          ? t("dynamic.modelsFromProvider", { count })
+          : data.source === "cache"
+            ? t("dynamic.modelsFromCache", { count })
+            : data.source === "stale-cache"
+              ? t("dynamic.modelsFromStaleCache", { count })
+              : data.source === "requires-key"
+                ? t("dynamic.modelCatalogRequiresKey", { count })
+                : data.source === "unsupported"
+                  ? t("dynamic.modelCatalogUnsupported")
+              : t("dynamic.modelsFromFallback", { count });
+        modelCatalogStatus.textContent = data.warning ? `${sourceText} · ${data.warning}` : sourceText;
+        modelCatalogStatus.className = `settings-feedback${data.warning ? " error" : ""}`;
+      }
+    } catch (err) {
+      if (requestId !== modelCatalogRequestId) return;
+      if (modelCatalogStatus) {
+        modelCatalogStatus.textContent = err.message || t("dynamic.modelCatalogLoadFailed");
+        modelCatalogStatus.className = "settings-feedback error";
+      }
+    } finally {
+      if (requestId === modelCatalogRequestId && refreshModelsBtn) refreshModelsBtn.disabled = false;
+    }
+  }
+
   function setLlmKeyVisible(visible) {
     llmKeyVisible = Boolean(visible);
     updateSecretVisibility(llmKeyInput, llmKeyToggle, llmKeyVisible);
@@ -746,6 +827,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       populateProviderSelect(providers, llm.provider || "auto");
       if (providerSelect && llm.provider) providerSelect.value = llm.provider;
       applyCustomProviderUI(llm);
+      void refreshProviderModels();
       if (typeof llm.temperature === "number" && tempSlider) {
         tempSlider.value = String(llm.temperature);
         if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
@@ -1734,11 +1816,16 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) closeSettings(); });
 
   if (providerSelect) {
-    providerSelect.addEventListener("change", () => {
+    providerSelect.addEventListener("change", async () => {
       applyCustomProviderUI(providerSelect.value);
+      await refreshProviderModels();
       llmAutosave.schedule({ immediate: true });
     });
   }
+
+  refreshModelsBtn?.addEventListener("click", () => {
+    void refreshProviderModels({ forceRefresh: true });
+  });
 
   if (modelSelect) {
     modelSelect.addEventListener("change", () => {
@@ -1829,6 +1916,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       };
     }
     refreshConfigSummary({ llm: cachedLlm, minimax: cachedMinimax });
+    if (provider !== "auto" && provider !== "custom") void refreshProviderModels();
     return { message: "LLM 配置已自动保存" };
   }, { feedback: llmFeedback });
 

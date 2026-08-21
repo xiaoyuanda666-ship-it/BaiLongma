@@ -143,6 +143,7 @@ http://127.0.0.1:3721
 | `GET` | `/settings` | 获取设置摘要 |
 | `POST` | `/activate` | 写入 Provider 配置并激活 |
 | `POST` | `/settings/model` | 切换模型 |
+| `POST` | `/settings/models` | 从提供商动态读取模型列表（区分未配置、未公开目录 API、缓存及内置兜底） |
 | `POST` | `/settings/temperature` | 调整温度 |
 | `GET` | `/settings/heartbeat` | 获取心跳开关和默认间隔 |
 | `POST` | `/settings/heartbeat` | 保存心跳开关和默认间隔 |

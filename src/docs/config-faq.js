@@ -1,5 +1,6 @@
 // 模型配置 & 微信/社交平台配置文档
-// 模型总览一节由 auto-catalog.js 从 config.js 的 PROVIDER_CONFIG 自动生成，杜绝随版本漂移。
+// 模型总览一节由 auto-catalog.js 从 config.js 的 PROVIDER_CONFIG 生成离线兜底基线；
+// 设置页中的实际可选模型会在提供商公开目录 API 时动态刷新；否则使用本地维护的官方基线。
 
 import { buildModelCatalogText } from './auto-catalog.js'
 

@@ -12,6 +12,7 @@ import {
   getMinimaxKey,
   getNetworkConfig,
   getProviderSummaries,
+  getProviderModels,
   getSecurity,
   getSocialConfig,
   getTTSConfig,
@@ -122,6 +123,17 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         : switchModel(model)
       emitEvent('model_switched', result)
       jsonResponse(res, 200, { ok: true, ...result })
+    } catch (err) {
+      jsonResponse(res, 400, { ok: false, error: err.message })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/settings/models') {
+    try {
+      const { provider, apiKey, baseURL, forceRefresh } = await readJsonBody(req)
+      const catalog = await getProviderModels({ provider, apiKey, baseURL, forceRefresh: forceRefresh === true })
+      jsonResponse(res, 200, { ok: true, provider, ...catalog })
     } catch (err) {
       jsonResponse(res, 400, { ok: false, error: err.message })
     }

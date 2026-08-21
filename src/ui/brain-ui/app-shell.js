@@ -340,7 +340,13 @@ const createSettingsModal = () => `
             </div>
             <div class="settings-row" id="settings-model-row">
               <label class="settings-label" for="settings-model-select">模型</label>
-              <select class="settings-select" id="settings-model-select"></select>
+              <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+                <select class="settings-select" id="settings-model-select" style="flex:1;min-width:0;"></select>
+                <button class="settings-save-btn" id="settings-refresh-models" type="button" style="width:auto;padding:0 12px;white-space:nowrap;">刷新列表</button>
+              </div>
+            </div>
+            <div class="settings-row-action" id="settings-model-catalog-status-row">
+              <span class="settings-feedback" id="settings-model-catalog-status"></span>
             </div>
             <div class="settings-row" id="settings-official-custom-model-row" style="display:none;">
               <label class="settings-label" for="settings-official-custom-model">自定义模型名</label>

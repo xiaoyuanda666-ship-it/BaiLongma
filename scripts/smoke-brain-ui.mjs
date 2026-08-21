@@ -219,6 +219,46 @@ function createServer() {
       return
     }
 
+    if (req.method === 'POST' && url.pathname === '/settings/models') {
+      readJsonRequest(req).then(body => {
+        settingsRequests.push({ pathname: url.pathname, body })
+        sendJson(res, {
+          ok: true,
+          provider: body.provider,
+          source: 'dynamic',
+          fetchedAt: new Date().toISOString(),
+          warning: '',
+          models: [
+            { id: 'smoke', label: 'Smoke' },
+            { id: 'smoke-dynamic-new', label: 'Smoke Dynamic New' },
+          ],
+        })
+      }).catch(error => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/settings/model') {
+      readJsonRequest(req).then(body => {
+        settingsRequests.push({ pathname: url.pathname, body })
+        sendJson(res, {
+          ok: true,
+          provider: body.provider || 'deepseek',
+          model: body.model || 'smoke',
+          models: [
+            { id: 'smoke', label: 'Smoke' },
+            { id: 'smoke-dynamic-new', label: 'Smoke Dynamic New' },
+          ],
+        })
+      }).catch(error => {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: error.message }))
+      })
+      return
+    }
+
     if (url.pathname === '/settings') {
       sendJson(res, {
         llm: { activated: true, provider: 'deepseek', model: 'smoke', models: [{ id: 'smoke', label: 'Smoke' }] },
@@ -600,6 +640,26 @@ try {
   await page.click('#settings-btn')
   await page.waitForSelector('#settings-overlay:not([hidden])')
   await page.waitForFunction(() => document.querySelector('#settings-temperature')?.value === '0.5')
+  await page.waitForFunction(() => (
+    [...document.querySelectorAll('#settings-model-select option')]
+      .some(option => option.value === 'smoke-dynamic-new')
+    && document.querySelector('#settings-model-catalog-status')?.textContent.includes('2 个模型')
+  ))
+  const initialModelCatalogRequest = server.settingsRequests.find(request => (
+    request.pathname === '/settings/models'
+    && request.body.provider === 'deepseek'
+    && request.body.forceRefresh === false
+  ))
+  if (!initialModelCatalogRequest) throw new Error('provider model catalog was not loaded dynamically')
+  await page.click('.settings-nav-item[data-tab="llm"]')
+  await page.click('#settings-refresh-models')
+  await page.waitForFunction(() => !document.querySelector('#settings-refresh-models')?.disabled)
+  const forcedModelCatalogRequest = server.settingsRequests.find(request => (
+    request.pathname === '/settings/models'
+    && request.body.provider === 'deepseek'
+    && request.body.forceRefresh === true
+  ))
+  if (!forcedModelCatalogRequest) throw new Error('model catalog refresh button did not force a reload')
   const manualSaveButtons = await page.$$eval('#settings-overlay button', buttons => buttons
     .map(button => button.textContent.trim())
     .filter(text => /^保存(?:$|所有|心跳|地图)/.test(text)))
@@ -610,6 +670,16 @@ try {
   if (autosaveHeader !== '所有更改自动保存') {
     throw new Error(`settings autosave status missing: ${autosaveHeader}`)
   }
+  await page.selectOption('#settings-model-select', 'smoke-dynamic-new')
+  await page.waitForFunction(() => (
+    document.querySelector('#settings-cfg-llm')?.textContent.includes('smoke-dynamic-new')
+  ))
+  const modelSwitchRequest = server.settingsRequests.find(request => (
+    request.pathname === '/settings/model'
+    && request.body.provider === 'deepseek'
+    && request.body.model === 'smoke-dynamic-new'
+  ))
+  if (!modelSwitchRequest) throw new Error('dynamic model selection was not auto-saved')
   await page.evaluate(() => {
     const slider = document.querySelector('#settings-temperature')
     slider.value = '0.65'
@@ -2195,6 +2265,9 @@ try {
   await englishPage.waitForSelector('#settings-btn[title="Settings"]')
   await englishPage.click('#settings-btn')
   await englishPage.waitForSelector('#settings-overlay:not([hidden])')
+  await englishPage.waitForFunction(() => (
+    document.querySelector('#settings-model-catalog-status')?.textContent === 'Loaded 2 models from the provider'
+  ))
   const englishUi = await englishPage.evaluate(() => ({
     lang: document.documentElement.lang,
     settingsTitle: document.querySelector('.settings-title')?.textContent?.trim(),
@@ -2204,6 +2277,8 @@ try {
     sendLabel: document.querySelector('#send-btn')?.textContent?.trim(),
     connection: document.querySelector('#conn-state')?.textContent?.trim(),
     heartbeatInterval: document.querySelector('#heartbeat-state-label')?.textContent?.trim(),
+    refreshModels: document.querySelector('#settings-refresh-models')?.textContent?.trim(),
+    modelCatalogStatus: document.querySelector('#settings-model-catalog-status')?.textContent?.trim(),
   }))
   if (englishUi.lang !== 'en-US'
       || englishUi.settingsTitle !== 'Settings'
@@ -2212,7 +2287,9 @@ try {
       || englishUi.messagePlaceholder !== 'Hold Space to speak'
       || englishUi.sendLabel !== 'Send'
       || englishUi.connection !== 'Connected'
-      || englishUi.heartbeatInterval !== '20 min') {
+      || englishUi.heartbeatInterval !== '20 min'
+      || englishUi.refreshModels !== 'Refresh list'
+      || englishUi.modelCatalogStatus !== 'Loaded 2 models from the provider') {
     throw new Error(`English UI localization failed: ${JSON.stringify(englishUi)}`)
   }
   await englishPage.click('#settings-close')

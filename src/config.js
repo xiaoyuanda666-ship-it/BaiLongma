@@ -11,6 +11,7 @@ import {
   normalizeDoubaoSpeechRate,
 } from './voice/tts-defaults.js'
 import { buildResponsesRequest } from './llm-responses.js'
+import { resolveModelCatalog } from './model-catalog.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
 export const MINIMAX_PROVIDER = 'minimax'
@@ -415,6 +416,11 @@ const PROVIDER_CONFIG = {
   [MINIMAX_PROVIDER]: {
     label: 'MiniMax',
     baseURL: 'https://api.minimax.chat/v1',
+    // 中国区官方 OpenAI-compatible 模型目录；与历史推理 Base URL 分开配置，便于平滑兼容旧 Key。
+    modelsURL: [
+      'https://api.minimaxi.com/v1/models',
+      'https://api.minimax.io/v1/models',
+    ],
     envVar: 'MINIMAX_API_KEY',
     models: MINIMAX_MODELS,
     defaultModel: DEFAULT_MINIMAX_MODEL,
@@ -429,6 +435,8 @@ const PROVIDER_CONFIG = {
   [QWEN_PROVIDER]: {
     label: 'Qwen',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    // 通用 DashScope 域名可按当前 API Key 查询已授权模型，不要求用户额外填写 Workspace ID。
+    modelsURL: 'https://dashscope.aliyuncs.com/api/v1/models/permissions?name=qwen&authorization_scope=AUTHORIZED&action=INFERENCE&page_no=1&page_size=200',
     envVar: 'DASHSCOPE_API_KEY',
     models: QWEN_MODELS,
     defaultModel: DEFAULT_QWEN_MODEL,
@@ -443,6 +451,8 @@ const PROVIDER_CONFIG = {
   [ZHIPU_PROVIDER]: {
     label: '智谱 GLM',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    // 智谱目前没有在官方 API 文档或 SDK 中公开 models.list；避免把网关的 401 误判为目录能力。
+    modelCatalogSupported: false,
     envVar: 'ZHIPU_API_KEY',
     models: ZHIPU_MODELS,
     defaultModel: DEFAULT_ZHIPU_MODEL,
@@ -450,6 +460,10 @@ const PROVIDER_CONFIG = {
   [MIMO_PROVIDER]: {
     label: '小米 MiMo',
     baseURL: 'https://api.xiaomimimo.com/v1',
+    // /models 同时返回对话、ASR、TTS 和音色模型。当前 LLM 链路只接受会产出文本回复的模型；
+    // 采用排除明确非对话后缀的方式，未来新增的文本/多模态模型仍会自动进入列表。
+    modelFilter: model => !/(?:^|[-_.])(?:asr|tts)(?:[-_.]|$)/i.test(String(model?.id || '')),
+    modelsAuth: 'api-key',
     envVar: 'MIMO_API_KEY',
     models: MIMO_MODELS,
     defaultModel: DEFAULT_MIMO_MODEL,
@@ -1294,6 +1308,7 @@ export function getProviderSummaries() {
       apiFormat: LLM_API_FORMAT,
       models: withCurrentModel(pConfig.models, stored?.model),
       defaultModel: pConfig.defaultModel,
+      modelCatalogSupported: pConfig.modelCatalogSupported !== false,
       configured: !!stored,
       apiKey: stored?.apiKey || '',
       model: stored?.model ? normalizeModel(stored.model, name) : pConfig.defaultModel,
@@ -1312,6 +1327,62 @@ export function getProviderSummaries() {
     baseURL: custom?.baseURL || '',
   }
   return result
+}
+
+export async function getProviderModels({ provider, apiKey, baseURL, forceRefresh = false } = {}) {
+  const p = String(provider || '').trim().toLowerCase()
+  if (!p || p === AUTO_PROVIDER) throw new Error('Choose a provider before loading its models')
+
+  if (p === 'custom') {
+    const stored = resolveStoredLlmForProvider('custom')
+    const resolvedBaseURL = String(baseURL || stored?.baseURL || '').trim()
+    const resolvedKey = String(apiKey || stored?.apiKey || 'none').trim()
+    const currentModel = String(stored?.model || (config.provider === 'custom' ? config.model : '') || '').trim()
+    if (!resolvedBaseURL) throw new Error('Custom endpoint requires a Base URL')
+    return resolveModelCatalog({
+      provider: p,
+      baseURL: resolvedBaseURL,
+      apiKey: resolvedKey,
+      fallbackModels: currentModel
+        ? [{ id: currentModel, label: currentModel, deprecated: false }]
+        : [],
+      currentModel,
+      forceRefresh,
+    })
+  }
+
+  const pConfig = PROVIDER_CONFIG[p]
+  if (!pConfig) throw new Error(`Unsupported provider: "${p}"`)
+  const stored = resolveStoredLlmForProvider(p)
+  const resolvedKey = String(apiKey || stored?.apiKey || (config.provider === p ? config.apiKey : '') || '').trim()
+  const currentModel = normalizeModel(stored?.model || (config.provider === p ? config.model : ''), p)
+  if (pConfig.modelCatalogSupported === false) {
+    return {
+      models: withCurrentModel(pConfig.models, currentModel),
+      source: 'unsupported',
+      fetchedAt: null,
+      warning: '',
+    }
+  }
+  if (!resolvedKey) {
+    return {
+      models: withCurrentModel(pConfig.models, currentModel),
+      source: 'requires-key',
+      fetchedAt: null,
+      warning: '',
+    }
+  }
+  return resolveModelCatalog({
+    provider: p,
+    baseURL: pConfig.baseURL,
+    modelsURL: pConfig.modelsURL,
+    apiKey: resolvedKey,
+    authType: pConfig.modelsAuth,
+    modelFilter: pConfig.modelFilter,
+    fallbackModels: pConfig.models,
+    currentModel,
+    forceRefresh,
+  })
 }
 
 export function deactivate() {
