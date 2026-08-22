@@ -1,16 +1,1 @@
-{
-  "clawbot": {},
-  "tts": {
-    "ttsProvider": "doubao",
-    "ttsVoiceId": "zh_male_m191_uranus_bigtts",
-    "doubaoSpeechRate": 20,
-    "doubaoKey": "0f9a6c2b-8d91-4f2b-92b0-531c357b24da"
-  },
-  "embedding": {},
-  "schemaVersion": 4,
-  "contextWindow": {
-    "chatMessageLimit": 20,
-    "toolCallLimit": 5
-  },
-  "provider": "deepseek"
-}
+{}
