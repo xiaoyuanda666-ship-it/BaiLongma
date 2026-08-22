@@ -1,3 +1,4 @@
+
 # Logs
 logs
 *.log
@@ -157,3 +158,6 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# local runtime config (contains real API keys)
+config.json
