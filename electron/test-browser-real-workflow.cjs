@@ -15,7 +15,9 @@ process.env.BAILONGMA_USER_DIR = path.join(testRoot, 'user')
 process.env.BAILONGMA_RESOURCES_DIR = projectRoot
 process.env.BAILONGMA_MCP_NODE_PATH = path.join(projectRoot, 'build', 'node-runtime', 'mac-arm64', 'node')
 fs.mkdirSync(process.env.BAILONGMA_USER_DIR, { recursive: true })
+const downloadDirectory = path.join(testRoot, 'Downloads')
 app.setPath('userData', process.env.BAILONGMA_USER_DIR)
+app.setPath('downloads', downloadDirectory)
 app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
 app.commandLine.appendSwitch('remote-debugging-port', '0')
 
@@ -60,7 +62,52 @@ function targetFor(text, label) {
   return match[1]
 }
 
+function waitForFile(filePath, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) return resolve(filePath)
+      if (Date.now() >= deadline) return reject(new Error(`download did not create ${filePath}`))
+      setTimeout(poll, 50)
+    }
+    poll()
+  })
+}
+
+function waitForDownloadRecord(host, filename, state = 'completed', timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      const snapshot = host.getDownloads()
+      const records = [...(snapshot.active || []), ...(snapshot.recent || [])]
+      const record = records.find(item => item.filename === filename && item.state === state)
+      if (record) return resolve(record)
+      if (Date.now() >= deadline) {
+        return reject(new Error(`download ${filename} did not reach ${state}`))
+      }
+      setTimeout(poll, 25)
+    }
+    poll()
+  })
+}
+
 const fixtureServer = http.createServer((request, response) => {
+  if (request.url === '/download') {
+    response.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'content-disposition': 'attachment; filename="fixture-report.txt"',
+    })
+    response.end('downloaded through Bailongma WebContentsView')
+    return
+  }
+  if (request.url === '/download-generic') {
+    response.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'content-disposition': 'attachment; filename="generic-report.txt"',
+    })
+    response.end('generic download button fixture')
+    return
+  }
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
   if (request.url === '/form') {
     response.end('<!doctype html><title>Stable Search</title><form action="/results"><label>Query <input name="q"></label><button>Search</button></form>')
@@ -83,13 +130,14 @@ const fixtureServer = http.createServer((request, response) => {
     response.end('<!doctype html><title>Blank Target Final</title><h1>Target blank arrived</h1>')
     return
   }
-  response.end('<!doctype html><title>Workflow One</title><h1>Page One</h1><a href="/two">Go two</a><a href="/blank" target="_blank">Open blank target</a>')
+  response.end('<!doctype html><title>Workflow One</title><h1>Page One</h1><a href="/two">Go two</a><a href="/blank" target="_blank">Open blank target</a><a href="/download" download onclick="event.preventDefault(); setTimeout(() => { location.href = this.href }, 1500)">Download fixture</a><a href="/download-generic" download onclick="event.preventDefault(); setTimeout(() => { location.href = this.href }, 60)">請按這裡</a>')
 })
 
 app.whenReady().then(async () => {
   let mainWindow
   let host
   let clearDataCalls = 0
+  const downloadEvents = []
   try {
     await new Promise((resolve, reject) => {
       fixtureServer.once('error', reject)
@@ -104,6 +152,8 @@ app.whenReady().then(async () => {
       View,
       BrowserWindow,
       BaseWindow,
+      downloadDirectory,
+      onDownload: event => downloadEvents.push(event),
       assertNavigationAllowed: async url => url,
       transitionDurationMs: 0,
     })
@@ -136,6 +186,10 @@ app.whenReady().then(async () => {
       getTarget: resolveTarget,
       closePage: () => host.closePage(),
       clearData: async () => { clearDataCalls += 1 },
+      getDownloads: () => host.getDownloads(),
+      waitForDownloadChange: options => host.waitForDownloadChange(options),
+      controlDownload: (downloadId, action) => host.controlDownload(downloadId, action),
+      setDownloadNotificationContext: notification => host.setDownloadNotificationContext(notification),
     }
 
     const [{ executeBuiltInChromeTool, shutdownBuiltInChrome }, { config }, { evaluateToolPolicy }] = await Promise.all([
@@ -144,7 +198,14 @@ app.whenReady().then(async () => {
       import(pathToFileURL(path.join(projectRoot, 'src', 'capabilities', 'tool-policy.js')).href),
     ])
     config.security.browserPrivateNetwork = true
-    const context = { browserDisplayMode: 'card', browserDisplayState: { mode: 'card' } }
+    const context = {
+      browserDisplayMode: 'card',
+      browserDisplayState: { mode: 'card' },
+      currentTargetId: 'ID:real-browser-user',
+      currentChannel: 'TUI',
+      currentExternalPartyId: null,
+      voiceReply: false,
+    }
     const call = async (name, args = {}) => JSON.parse(await executeBuiltInChromeTool(name, args, context))
 
     const opened = await call('browser_navigate', { url: `${baseUrl}/one` })
@@ -154,6 +215,45 @@ app.whenReady().then(async () => {
     assert.match(resultText(opened), /## Latest page snapshot/)
     assert.match(resultText(opened), /"scrollY":0/)
     const originalTarget = host.getTarget()
+
+    const downloadTarget = targetFor(resultText(opened), 'Download fixture')
+    const clickedDownload = await call('browser_click', { element: 'Download fixture', target: downloadTarget })
+    assert.equal(clickedDownload.ok, true, JSON.stringify(clickedDownload))
+    assert.match(resultText(clickedDownload), /## Automatic download state/,
+      'a delayed will-download event is included in the initiating click result')
+    const downloadedFile = await waitForFile(path.join(downloadDirectory, 'fixture-report.txt'))
+    const completedFixture = await waitForDownloadRecord(host, 'fixture-report.txt')
+    assert.equal(fs.readFileSync(downloadedFile, 'utf8'), 'downloaded through Bailongma WebContentsView')
+    assert.equal(clickedDownload.structured_content.browser_downloads.directory, downloadDirectory)
+    assert.equal(completedFixture.state, 'completed')
+    assert.equal(completedFixture.path, downloadedFile)
+    assert.deepEqual(downloadEvents.find(event => event.state === 'completed')?.notification, {
+      targetId: 'ID:real-browser-user',
+      channel: 'TUI',
+      externalPartyId: null,
+      voiceReply: false,
+    }, 'the initiating Agent turn is retained for proactive completion delivery')
+
+    context.browserDownloadJobId = 'bg-real-generic'
+    context.runtimeLane = 'background'
+    context.taskType = 'browser_download'
+    const genericPage = await call('browser_navigate', { url: `${baseUrl}/one` })
+    const genericTarget = targetFor(resultText(genericPage), '請按這裡')
+    const clickedGeneric = await call('browser_click', { element: '請按這裡', target: genericTarget })
+    assert.equal(clickedGeneric.ok, true, JSON.stringify(clickedGeneric))
+    assert.match(resultText(clickedGeneric), /## Automatic download state/,
+      'a generic final-link label still observes the short native will-download window')
+    const genericFile = await waitForFile(path.join(downloadDirectory, 'generic-report.txt'))
+    await waitForDownloadRecord(host, 'generic-report.txt')
+    assert.equal(fs.readFileSync(genericFile, 'utf8'), 'generic download button fixture')
+    const genericStartedEvent = downloadEvents.find(event => event.filename === 'generic-report.txt' && event.event === 'started')
+    assert.equal(genericStartedEvent?.jobId, 'bg-real-generic',
+      'will-download binds the native id to the background job that performed the click')
+    assert.equal(genericStartedEvent?.runtimeLane, 'background')
+    assert.equal(genericStartedEvent?.taskType, 'browser_download')
+    delete context.browserDownloadJobId
+    delete context.runtimeLane
+    delete context.taskType
 
     context.browserDisplayState.mode = 'window'
     await host.update(mainWindow, { mode: 'window', visible: true, interactive: true })
@@ -183,7 +283,7 @@ app.whenReady().then(async () => {
     assert.equal(keepOpenPolicy.allowed, false)
     const browserCloseCalls = 0
 
-    const goTwo = targetFor(resultText(opened), 'Go two')
+    const goTwo = targetFor(resultText(genericPage), 'Go two')
     const clickedTwo = await call('browser_click', { element: 'Go two', target: goTwo })
     assert.equal(clickedTwo.ok, true)
     assert.equal(clickedTwo.browser_preview.url, `${baseUrl}/two`)
@@ -264,6 +364,8 @@ app.whenReady().then(async () => {
       submittedUrl: submitted.browser_preview.url,
       fallbackSubmittedUrl: fallbackSubmitted.browser_preview.url,
       currentPageFindMatches: foundOnCurrentPage.structured_content?.page_find?.total_matches,
+      downloadedFile: path.relative(process.env.BAILONGMA_USER_DIR, downloadedFile),
+      genericDownloadedFile: path.relative(process.env.BAILONGMA_USER_DIR, genericFile),
       scrollBefore: beforeScroll,
       scrollAfter: afterScroll,
       stabilityOperations: 30,

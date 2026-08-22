@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import {
   BROWSER_CAPABILITY_TOOLS,
   BROWSER_DATA_TOOLS,
+  BROWSER_DOWNLOAD_TOOLS,
   BROWSER_DISPLAY_TOOLS,
   BROWSER_TOOLS,
   SYSTEM_BROWSER_TOOLS,
   capabilityContextBlocks,
   findCapabilitiesByQuery,
+  isBrowserDownloadIntent,
 } from './capabilities/capability-registry.js'
 import { selectTools } from './memory/tool-router.js'
 import { classifyTool, evaluateToolPolicy } from './capabilities/tool-policy.js'
@@ -19,10 +21,11 @@ import {
 import { TOOL_SCHEMAS } from './capabilities/builtin-tools.js'
 import { getToolSchemas } from './capabilities/schemas.js'
 import { execBrowserSetDisplayMode } from './capabilities/tools/browser-display.js'
+import { execBrowserDownloadManage } from './capabilities/tools/browser-downloads.js'
 import { execBrowserClearData } from './capabilities/tools/browser-data.js'
 import { execSystemBrowserOpen } from './capabilities/tools/system-browser.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from './mcp/browser-data-intent.js'
-import { executeBuiltInChromeTool } from './mcp/client-manager.js'
+import { __internal as clientManagerInternal, executeBuiltInChromeTool } from './mcp/client-manager.js'
 
 const EXPECTED_BROWSER_TOOLS = [
   'browser_navigate',
@@ -97,6 +100,23 @@ assert.deepEqual(getToolSchemas(REMOVED_WEB_AND_BROWSER_TOOLS), [],
 assert.deepEqual(BROWSER_DISPLAY_TOOLS, ['browser_set_display_mode'])
 assert.ok(TOOL_SCHEMAS.browser_set_display_mode,
   'the presentation-only browser mode tool has a built-in schema')
+assert.deepEqual(BROWSER_DOWNLOAD_TOOLS, ['start_browser_download_task', 'browser_download_manage'])
+assert.ok(TOOL_SCHEMAS.start_browser_download_task,
+  'new browser downloads start through an independent background-task tool')
+assert.ok(TOOL_SCHEMAS.browser_download_manage,
+  'download lifecycle controls have a guarded local built-in schema')
+assert.equal(clientManagerInternal.browserClickMayStartDownload({ element: 'macOS 下载' }), true)
+assert.equal(clientManagerInternal.browserClickMayStartDownload({ element: '免費下載 DMG' }), true)
+assert.equal(clientManagerInternal.browserDownloadClickSettleMs(
+  { element: '請按這裡' },
+  { browserDownloadJobId: 'bg-download-1' },
+) > 0, true, 'a generic final link gets a short native-download observation window inside a download task')
+assert.equal(clientManagerInternal.browserDownloadClickSettleMs(
+  { element: '請按這裡' },
+  {},
+), 0, 'the same generic button does not slow an ordinary browser turn')
+assert.equal(clientManagerInternal.browserClickMayStartDownload({ element: '打开产品介绍' }), false,
+  'ordinary browser clicks do not pay the download settle delay')
 assert.deepEqual(SYSTEM_BROWSER_TOOLS, ['system_browser_open'])
 assert.ok(TOOL_SCHEMAS.system_browser_open,
   'the installed computer browser has a dedicated built-in schema')
@@ -108,6 +128,22 @@ assert.equal(browserDiscoveryTools[0], 'browser_set_display_mode',
   'browser discovery puts the required model-selected display mode before page actions')
 assert.deepEqual([...browserDiscoveryTools].sort(), [...BROWSER_CAPABILITY_TOOLS].sort(),
   'find_tool discovery loads dedicated Chrome plus the presentation-only display switch')
+
+for (const messageBody of [
+  '你现在下载豆包电脑版，我要用',
+  '你需要用你的内在浏览器访问网页下载',
+  '用内置浏览器打开豆包官网，像人一样点击下载电脑版',
+  '下载豆包最新版本的安装包',
+  '暂停这个下载',
+  '继续下载',
+  '取消下载',
+  '重试下载',
+]) {
+  assert.equal(isBrowserDownloadIntent(messageBody), true, `browser download intent recognized: ${messageBody}`)
+  const routed = selectTools({ messageBody, isTick: false })
+  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => routed.includes(name)),
+    `browser download and lifecycle tools are ready in the first round: ${messageBody}`)
+}
 
 for (const messageBody of [
   '切换到小浏览器', '切换到大浏览器', '换成浏览器卡片', '改成外部浏览器',
@@ -304,6 +340,9 @@ assert.match(browserContext, /browser_close closes\/resets the active dedicated-
 assert.match(browserContext, /Closing a page never deletes browser data[\s\S]*dedicated Chrome profile/)
 assert.match(browserContext, /browser_clear_data is the only operation allowed[\s\S]*current user message explicitly asks/)
 assert.match(browserContext, /browser_set_display_mode[\s\S]*mode="card"[\s\S]*mode="window"/)
+assert.match(browserContext, /browser_download_manage[\s\S]*CURRENT user explicitly requests/)
+assert.match(browserContext, /active background APP_SIGNAL that wakes the Agent/)
+assert.match(browserContext, /retry_of/)
 assert.match(browserContext, /must not navigate or reload/)
 for (const name of ['browser_run_code_unsafe', 'browser_evaluate', 'browser_file_upload', 'browser_drop']) {
   assert.match(browserContext, new RegExp(name), `${name} is explicitly unavailable in the workflow`)
@@ -327,6 +366,36 @@ for (const name of READ_ONLY_BROWSER_TOOLS) {
 assert.equal(classifyTool('browser_set_display_mode'), 'low')
 assert.equal(evaluateToolPolicy('browser_set_display_mode', {}, { autonomous: true }).allowed, true,
   'presentation-only mode switching is reversible and available to autonomous Agent judgment')
+assert.equal(classifyTool('browser_download_manage'), 'high')
+assert.equal(classifyTool('start_browser_download_task'), 'medium')
+assert.equal(evaluateToolPolicy('start_browser_download_task', { target: 'CapCut' }, {
+  currentUserMessage: '下载 CapCut',
+}).allowed, true)
+assert.equal(evaluateToolPolicy('start_browser_download_task', { target: 'CapCut' }, {
+  currentUserMessage: 'CapCut 是什么？',
+}).allowed, false)
+for (const [action, currentUserMessage] of [
+  ['pause', '暂停这个下载'],
+  ['resume', '继续下载'],
+  ['cancel', '取消下载'],
+  ['retry', '重试下载'],
+]) {
+  assert.equal(evaluateToolPolicy('browser_download_manage', { action }, { currentUserMessage }).allowed, true,
+    `an explicit current-user ${action} request authorizes only that lifecycle action`)
+  assert.equal(evaluateToolPolicy('browser_download_manage', { action }, {
+    currentUserMessage,
+    autonomous: true,
+  }).allowed, false, `autonomous work cannot ${action} a browser download`)
+}
+assert.equal(evaluateToolPolicy('browser_download_manage', { action: 'cancel' }, {
+  currentUserMessage: '不要取消下载',
+}).allowed, false)
+assert.equal(evaluateToolPolicy('browser_download_manage', { action: 'retry' }, {
+  currentUserMessage: '下载失败了',
+}).allowed, false, 'a lifecycle signal without a current explicit retry request grants no control authority')
+assert.equal(evaluateToolPolicy('browser_download_manage', { action: 'pause' }, {
+  currentUserMessage: '暂停音乐',
+}).allowed, false, 'an unrelated pause request cannot control a download')
 assert.equal(classifyTool('system_browser_open'), 'medium')
 assert.equal(evaluateToolPolicy('system_browser_open', {}, { autonomous: true }).allowed, false,
   'an autonomous Tick cannot open a user-owned desktop browser')
@@ -455,6 +524,31 @@ assert.equal(switchResult.browser_preview.mode, 'window')
 assert.equal(switchResult.browser_preview.transition, true)
 assert.equal(displayState.mode, 'window', 'mode switching updates the shared per-turn browser state')
 
+const downloadControlCalls = []
+const downloadControlResult = JSON.parse(await execBrowserDownloadManage(
+  { download_id: 'download-42', action: 'resume' },
+  {
+    backgroundJobManager: { findByDownloadId: () => null, applyDownloadControl: () => null },
+    browserDownloadBridge: {
+      controlDownload: async (downloadId, action) => {
+        downloadControlCalls.push({ downloadId, action })
+        return {
+          ok: true,
+          action,
+          download: { id: downloadId, state: 'progressing', availableActions: ['pause', 'cancel'] },
+        }
+      },
+    },
+  },
+))
+assert.equal(downloadControlResult.ok, true)
+assert.deepEqual(downloadControlCalls, [{ downloadId: 'download-42', action: 'resume' }])
+assert.equal(downloadControlResult.download.state, 'progressing')
+assert.equal(JSON.parse(await execBrowserDownloadManage(
+  { download_id: '', action: 'resume' },
+  { browserDownloadBridge: { controlDownload: async () => ({ ok: true }) } },
+)).code, 'INVALID_DOWNLOAD_ID')
+
 const displayRequired = JSON.parse(await executeBuiltInChromeTool(
   'browser_navigate',
   { url: 'https://example.com' },
@@ -530,5 +624,22 @@ for (const name of ['browser_type', 'browser_fill_form']) {
   assert.equal(log.resultPreview, 'browser input failed')
   assert.equal(log.error, 'browser input failed')
 }
+
+const backgroundAudit = buildToolAuditRecord({
+  name: 'browser_click',
+  args: { element: '請按這裡', target: 'ref-download' },
+  context: {
+    browserDownloadJobId: 'bg-audit-1',
+    runtimeLane: 'background',
+    taskType: 'browser_download',
+  },
+  policy: { risk: 'high' },
+  status: 'success',
+  result: JSON.stringify({ ok: true }),
+  startedAt: Date.now(),
+})
+assert.match(backgroundAudit.detail, /job_id=bg-audit-1/)
+assert.match(backgroundAudit.detail, /runtime_lane=background/)
+assert.match(backgroundAudit.detail, /task_type=browser_download/)
 
 console.log('test-browser-agent-integration passed')

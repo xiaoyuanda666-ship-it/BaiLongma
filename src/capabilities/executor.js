@@ -39,6 +39,8 @@ import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from 
 import { execManageRule } from './tools/rules.js'
 import { execManageInformationSubscription } from './tools/information-subscriptions.js'
 import { execBrowserSetDisplayMode } from './tools/browser-display.js'
+import { execBrowserDownloadManage } from './tools/browser-downloads.js'
+import { execStartBrowserDownloadTask } from './tools/browser-download-task.js'
 import { execBrowserClearData } from './tools/browser-data.js'
 import { execSystemBrowserOpen } from './tools/system-browser.js'
 import { execSystemMusic } from './tools/macos-music.js'
@@ -334,6 +336,10 @@ async function executeToolUnchecked(name, args, context = {}) {
         return execUISet(args)
       case 'browser_set_display_mode':
         return execBrowserSetDisplayMode(args, context)
+      case 'start_browser_download_task':
+        return await execStartBrowserDownloadTask(args, context)
+      case 'browser_download_manage':
+        return await execBrowserDownloadManage(args, context)
       case 'browser_clear_data':
         return await execBrowserClearData(args, context)
       case 'system_browser_open':

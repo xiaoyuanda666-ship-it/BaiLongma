@@ -2195,6 +2195,8 @@ setInterval(updateHeartbeatFacts, 30_000);
 // routing is determined by the most recent message_received / tick / scheduled_task event.
 let currentPath = "l2";
 function currentStream() { return currentPath === "l1" ? L1 : L2; }
+function isBackgroundRuntimeEvent(data = {}) { return data.runtime_lane === "background"; }
+function streamForRuntimeEvent(data = {}) { return isBackgroundRuntimeEvent(data) ? L2 : currentStream(); }
 
 function isBusyErrorMessage(message = "") {
   return /(429|rate limit|too many requests|busy|overload|temporarily unavailable|server busy|resource exhausted)/i.test(String(message || ""));
@@ -2616,16 +2618,18 @@ function handle({ type, data = {}, ts = null }) {
       break;
     }
     case "tool_executing": {
-      setVoiceThinking(false);
+      const backgroundRuntime = isBackgroundRuntimeEvent(data);
+      if (!backgroundRuntime) setVoiceThinking(false);
       // 开始时立即跳一次；未完成前每 3 秒继续小跳。
       beginToolHeartbeat(data.name);
-      const stream = currentStream();
+      const stream = streamForRuntimeEvent(data);
       const action = data.name ? stream.toolAction(data.name, data.args) : t("runtime.activityGeneral");
       if (isCardBrowserAction(data)) prepareBrowserPreview(data);
       else if (String(data.name || "").startsWith("browser_") && data.browser_display_mode === "window") {
         void showNativeBrowserWindow(data);
       }
-      if (currentPath !== "l1") setCognitionState(t("runtime.workingAction", { action }), "tool");
+      if (backgroundRuntime) revealCognitionStream();
+      if (backgroundRuntime || currentPath !== "l1") setCognitionState(t("runtime.workingAction", { action }), "tool");
       stream.setTimedStatus(t("runtime.workingActionStatus", { action }), "busy", {
         staleAfterMs: 45000,
         staleText: t("runtime.longRunningAction", { action }),
@@ -2634,8 +2638,9 @@ function handle({ type, data = {}, ts = null }) {
     }
     case "tool_call": {
       finishToolHeartbeat(data.name);
-      const stream = currentStream();
-      if (currentPath !== "l1") {
+      const backgroundRuntime = isBackgroundRuntimeEvent(data);
+      const stream = streamForRuntimeEvent(data);
+      if (backgroundRuntime || currentPath !== "l1") {
         const action = stream.toolAction(data.name, data.args);
         setCognitionState(t(data.ok === false ? "runtime.incompleteAction" : "runtime.completedAction", { action }), "tool");
       }

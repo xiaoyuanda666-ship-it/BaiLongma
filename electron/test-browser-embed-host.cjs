@@ -2,13 +2,22 @@
 
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
 const {
   BROWSER_EMBED_PARTITION,
+  DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
   createBrowserEmbedHost,
   isAllowedWebUrl,
   isTrustedGoogleOauthPopupUrl,
   normalizeBounds,
+  resolveDownloadSavePath,
+  sanitizeDownloadFilename,
 } = require('./browser-embed-host.cjs')
+
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-browser-host-'))
+const downloadDirectory = path.join(testRoot, 'sandbox', 'downloads')
 
 class FakeSession extends EventEmitter {
   constructor() {
@@ -22,6 +31,7 @@ class FakeSession extends EventEmitter {
   }
   setPermissionRequestHandler(handler) { this.permissionRequestHandler = handler }
   setPermissionCheckHandler(handler) { this.permissionCheckHandler = handler }
+  async resolveProxy() { return 'PROXY 192.0.2.10:1082' }
 }
 
 class FakeWebContents extends EventEmitter {
@@ -31,6 +41,7 @@ class FakeWebContents extends EventEmitter {
     this.session = new FakeSession()
     this.url = ''
     this.loadCalls = []
+    this.downloadCalls = []
     this.insertCssCalls = []
     this.removedCssKeys = []
     this.nextCssKey = 0
@@ -55,6 +66,7 @@ class FakeWebContents extends EventEmitter {
     return key
   }
   async removeInsertedCSS(key) { this.removedCssKeys.push(key) }
+  downloadURL(url) { this.downloadCalls.push(url) }
   setZoomFactor(value) { this.zoomFactor = value }
   close() { this.destroyed = true }
 }
@@ -153,6 +165,15 @@ async function run() {
   assert.equal(isTrustedGoogleOauthPopupUrl('https://accounts.google.com/gsi/select?client_id=test'), true)
   assert.equal(isTrustedGoogleOauthPopupUrl('https://accounts.google.evil.example/gsi/select'), false)
   assert.equal(isTrustedGoogleOauthPopupUrl('http://accounts.google.com/gsi/select'), false)
+  assert.equal(sanitizeDownloadFilename('../unsafe\\report?.pdf'), 'report_.pdf')
+  assert.equal(sanitizeDownloadFilename('CON.txt'), '_CON.txt')
+  assert.equal(sanitizeDownloadFilename('..'), 'download')
+  fs.mkdirSync(downloadDirectory, { recursive: true })
+  fs.writeFileSync(path.join(downloadDirectory, 'report_.pdf'), 'existing')
+  assert.equal(
+    resolveDownloadSavePath(downloadDirectory, '../unsafe\\report?.pdf'),
+    path.join(downloadDirectory, 'report_ (1).pdf'),
+  )
   assert.deepEqual(
     normalizeBounds({ x: 10.25, y: 20.5, width: 300.25, height: 200 }, { width: 1000, height: 700 }),
     { x: 10, y: 20, width: 301, height: 201 },
@@ -180,12 +201,17 @@ async function run() {
   const warnings = []
   const navigations = []
   const diagnosticInputs = []
+  const downloadEvents = []
+  let downloadClock = Date.parse('2026-08-22T01:00:00.000Z')
   const host = createBrowserEmbedHost({
     WebContentsView: FakeWebContentsView,
     View: FakeView,
     BaseWindow: FakeBaseWindow,
     logger: { warn: (...args) => warnings.push(args) },
     platform: 'win32',
+    downloadDirectory,
+    downloadNow: () => downloadClock,
+    onDownload: event => downloadEvents.push(event),
     onNavigation: entry => navigations.push(entry),
     nativeRequestGuard: true,
     onDiagnosticInput: input => {
@@ -259,15 +285,194 @@ async function run() {
   let permissionResult = true
   view.webContents.session.permissionRequestHandler(null, 'geolocation', result => { permissionResult = result })
   assert.equal(permissionResult, false)
-  let downloadPrevented = false
-  let downloadCancelled = false
+  host.setDownloadNotificationContext({
+    targetId: 'ID:test-download-user',
+    channel: 'TUI',
+    externalPartyId: 'wechat:test-download-user',
+    jobId: 'bg-download-test',
+    runtimeLane: 'background',
+    taskType: 'browser_download',
+  })
+  const firstDownload = new EventEmitter()
+  let firstReceivedBytes = 0
+  let firstPaused = false
+  firstDownload.getFilename = () => '../unsafe\\report?.pdf'
+  firstDownload.getURL = () => 'https://downloads.example.test/first.pdf'
+  firstDownload.getURLChain = () => [
+    'https://redirect.example.test/download?token=private',
+    'https://downloads.example.test/first.pdf?signature=private',
+  ]
+  firstDownload.getMimeType = () => 'application/pdf'
+  firstDownload.getContentDisposition = () => 'attachment; filename="report.pdf"'
+  firstDownload.getETag = () => 'fixture-etag'
+  firstDownload.getLastModifiedTime = () => 'Sat, 22 Aug 2026 01:00:00 GMT'
+  firstDownload.getReceivedBytes = () => firstReceivedBytes
+  firstDownload.getTotalBytes = () => 100
+  firstDownload.isPaused = () => firstPaused
+  firstDownload.canResume = () => true
+  firstDownload.setSavePath = value => { firstDownload.savePath = value }
+  firstDownload.pause = () => { firstPaused = true }
+  firstDownload.resume = () => { firstPaused = false }
+  firstDownload.cancel = () => { firstDownload.cancelled = true }
+  const secondDownload = new EventEmitter()
+  let secondReceivedBytes = 0
+  let secondPaused = false
+  secondDownload.getFilename = () => '../unsafe\\report?.pdf'
+  secondDownload.getURL = () => 'https://downloads.example.test/second.pdf'
+  secondDownload.getReceivedBytes = () => secondReceivedBytes
+  secondDownload.getTotalBytes = () => 200
+  secondDownload.isPaused = () => secondPaused
+  secondDownload.canResume = () => true
+  secondDownload.setSavePath = value => { secondDownload.savePath = value }
+  secondDownload.pause = () => { secondPaused = true }
+  secondDownload.resume = () => { secondPaused = false }
+  secondDownload.cancel = () => {
+    secondDownload.cancelled = true
+    secondDownload.emit('done', {}, 'cancelled')
+  }
+  let firstDownloadPrevented = false
+  let secondDownloadPrevented = false
+  const firstDownloadStarted = host.waitForDownloadChange({ knownIds: [], timeoutMs: 1_000 })
   view.webContents.session.emit(
     'will-download',
-    { preventDefault: () => { downloadPrevented = true } },
-    { cancel: () => { downloadCancelled = true } },
+    { preventDefault: () => { firstDownloadPrevented = true } },
+    firstDownload,
   )
-  assert.equal(downloadPrevented, true)
-  assert.equal(downloadCancelled, true)
+  view.webContents.session.emit(
+    'will-download',
+    { preventDefault: () => { secondDownloadPrevented = true } },
+    secondDownload,
+  )
+  assert.equal(firstDownloadPrevented, false)
+  assert.equal(secondDownloadPrevented, false)
+  assert.equal(firstDownload.cancelled, undefined)
+  assert.equal(secondDownload.cancelled, undefined)
+  assert.equal((await firstDownloadStarted).active[0].id, 'download-1',
+    'download waiters resolve from the native will-download event without polling')
+  assert.equal(firstDownload.savePath, path.join(downloadDirectory, 'report_ (1).pdf'))
+  assert.equal(secondDownload.savePath, path.join(downloadDirectory, 'report_ (2).pdf'),
+    'concurrent downloads must not reserve the same destination')
+  assert.deepEqual(downloadEvents.map(event => event.state), ['progressing', 'progressing'])
+  assert.deepEqual(downloadEvents.map(event => event.path), [firstDownload.savePath, secondDownload.savePath])
+  assert.equal(downloadEvents[0].percent, 0)
+  assert.equal(downloadEvents[0].jobId, 'bg-download-test',
+    'the native will-download event is bound to the initiating background job')
+  assert.equal(downloadEvents[0].runtimeLane, 'background')
+  assert.equal(downloadEvents[0].taskType, 'browser_download')
+  assert.equal(downloadEvents[1].jobId, null,
+    'the one-shot job binding is not reused by an unrelated later download')
+  assert.deepEqual(downloadEvents[0].notification, {
+    targetId: 'ID:test-download-user',
+    channel: 'TUI',
+    externalPartyId: 'wechat:test-download-user',
+    voiceReply: false,
+    jobId: 'bg-download-test',
+    runtimeLane: 'background',
+    taskType: 'browser_download',
+  })
+  assert.deepEqual(host.getDownloads().active.map(download => download.filename), [
+    'report_ (1).pdf',
+    'report_ (2).pdf',
+  ])
+
+  const firstDownloadId = host.getDownloads().active[0].id
+  const secondDownloadId = host.getDownloads().active[1].id
+  assert.deepEqual(host.getDownloads().active[0].availableActions, ['pause', 'cancel'])
+  assert.equal((await host.controlDownload(firstDownloadId, 'pause')).ok, true)
+  assert.equal(firstPaused, true)
+  assert.equal(host.getDownloads().active[0].state, 'paused')
+  assert.deepEqual(host.getDownloads().active[0].availableActions, ['resume', 'cancel'])
+  assert.equal((await host.controlDownload(firstDownloadId, 'resume')).ok, true)
+  assert.equal(firstPaused, false)
+  assert.equal(host.getDownloads().active[0].state, 'progressing')
+
+  downloadClock += 1_000
+  firstReceivedBytes = 25
+  firstDownload.emit('updated', {}, 'progressing')
+  assert.equal(downloadEvents.at(-1).receivedBytes, 25)
+  assert.equal(downloadEvents.at(-1).totalBytes, 100)
+  assert.equal(downloadEvents.at(-1).percent, 25)
+  assert.equal(host.getDownloads().active[0].percent, 25,
+    'live DownloadItem progress must be available without a tool query')
+
+  downloadClock += 1_000
+  firstReceivedBytes = 100
+  firstDownload.emit('done', {}, 'completed')
+  fs.writeFileSync(firstDownload.savePath, 'completed')
+  secondReceivedBytes = 40
+  secondDownload.emit('updated', {}, 'interrupted')
+  await waitUntil(
+    () => host.getDownloads().active[0]?.diagnostics?.proxy === 'PROXY 192.0.2.10:1082',
+    'download proxy diagnostics were not resolved',
+  )
+  assert.equal(host.getDownloads().active[0].state, 'interrupted')
+  assert.equal(host.getDownloads().active[0].interruptionCount, 1)
+  assert.deepEqual(host.getDownloads().recent[0].diagnostics, {
+    sourceUrl: 'https://downloads.example.test/first.pdf',
+    urlChain: [
+      'https://redirect.example.test/download',
+      'https://downloads.example.test/first.pdf',
+    ],
+    proxy: 'PROXY 192.0.2.10:1082',
+    mimeType: 'application/pdf',
+    contentDisposition: 'attachment; filename="report.pdf"',
+    etag: 'fixture-etag',
+    lastModified: 'Sat, 22 Aug 2026 01:00:00 GMT',
+    lastState: 'completed',
+    elapsedMs: 2_000,
+    interruptedAt: null,
+  })
+  assert.deepEqual(host.getDownloads().active[0].availableActions, ['resume', 'cancel', 'retry'])
+  assert.equal((await host.controlDownload(secondDownloadId, 'resume')).ok, true)
+  assert.equal(host.getDownloads().active[0].state, 'progressing')
+  const cancelled = await host.controlDownload(secondDownloadId, 'cancel')
+  assert.equal(cancelled.ok, true)
+  assert.equal(cancelled.download.state, 'cancelled')
+  assert.equal(secondDownload.cancelled, true)
+  assert.equal(
+    downloadEvents.find(event => event.id === secondDownloadId && event.state === 'cancelled')?.cancelRequestedByManager,
+    true,
+    'managed cancellation events are marked so the Agent wake-up layer can avoid duplicate confirmation',
+  )
+  fs.writeFileSync(secondDownload.savePath, 'partial')
+
+  const retried = await host.controlDownload(secondDownloadId, 'retry')
+  assert.equal(retried.ok, true)
+  assert.equal(retried.download.state, 'retried')
+  assert.deepEqual(view.webContents.downloadCalls, ['https://downloads.example.test/second.pdf'])
+  const retryDownload = new EventEmitter()
+  let retryReceivedBytes = 0
+  retryDownload.getFilename = () => '../unsafe\\report?.pdf'
+  retryDownload.getURL = () => 'https://downloads.example.test/second.pdf'
+  retryDownload.getReceivedBytes = () => retryReceivedBytes
+  retryDownload.getTotalBytes = () => 200
+  retryDownload.isPaused = () => false
+  retryDownload.canResume = () => true
+  retryDownload.setSavePath = value => { retryDownload.savePath = value }
+  retryDownload.pause = () => {}
+  retryDownload.resume = () => {}
+  retryDownload.cancel = () => {}
+  view.webContents.session.emit('will-download', { preventDefault: () => {} }, retryDownload)
+  const retryRecord = host.getDownloads().active[0]
+  assert.equal(retryRecord.retryOf, secondDownloadId)
+  assert.equal(retryRecord.attempt, 2)
+  assert.equal(retryRecord.path, path.join(downloadDirectory, 'report_ (3).pdf'))
+  retryReceivedBytes = 200
+  retryDownload.emit('done', {}, 'completed')
+
+  assert.equal(downloadEvents.find(event => event.id === firstDownloadId && event.state === 'completed').percent, 100)
+  assert.equal(host.getDownloads().active.length, 0)
+  assert.deepEqual(host.getDownloads().recent.map(download => download.state), ['completed', 'retried', 'completed'])
+  assert.equal(
+    Date.parse(host.getDownloads().recent[0].retainedUntil) - Date.parse(host.getDownloads().recent[0].completedAt),
+    DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
+    'finished download context must be retained for ten minutes',
+  )
+  downloadClock += DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS - 1
+  assert.equal(host.getDownloads().recent.length, 3)
+  downloadClock += 1
+  assert.equal(host.getDownloads().recent.length, 0,
+    'finished download context expires exactly after ten minutes')
   assert.deepEqual(view.webContents.session.beforeRequestFilter.urls, [
     'http://*/*',
     'https://*/*',
@@ -515,7 +720,10 @@ async function run() {
   host.destroyAll()
   assert.equal(FakeWebContentsView.instances[1].webContents.destroyed, true)
   assert.equal(host.getTarget(), null)
-  assert.equal(warnings.length, 5, 'native request and popup policy blocks are observable')
+  assert.equal(warnings.length, 6, 'download interruptions plus native request and popup policy blocks are observable')
+  const interruptedWarning = warnings.find(args => String(args[0]).includes('download interrupted'))
+  assert.match(String(interruptedWarning?.[0]), /proxy=PROXY 192\.0\.2\.10:1082/)
+  assert.match(String(interruptedWarning?.[0]), /url_chain=https:\/\/downloads\.example\.test\/second\.pdf/)
   assert.equal(
     warnings.filter(args => String(args[0]).includes('blocked new-window navigation')).length,
     3,
@@ -598,7 +806,9 @@ async function run() {
   console.log('browser embed host tests passed')
 }
 
-run().catch(error => {
-  console.error(error)
-  process.exitCode = 1
-})
+run()
+  .catch(error => {
+    console.error(error)
+    process.exitCode = 1
+  })
+  .finally(() => fs.rmSync(testRoot, { recursive: true, force: true }))

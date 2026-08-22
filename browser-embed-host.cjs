@@ -1,8 +1,15 @@
 'use strict'
 
+const fs = require('node:fs')
+const path = require('node:path')
+
 const BROWSER_EMBED_PARTITION = 'persist:bailongma-browser'
 const TRUSTED_GOOGLE_OAUTH_HOSTS = new Set(['accounts.google.com'])
 const configuredSessions = new WeakMap()
+const WINDOWS_RESERVED_FILENAME_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const MAX_DOWNLOAD_FILENAME_LENGTH = 180
+const MAX_DOWNLOAD_DIAGNOSTIC_TEXT_LENGTH = 1_024
+const DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS = 10 * 60 * 1000
 const WINDOWS_CARD_SCROLLBAR_CSS = `
   ::-webkit-scrollbar {
     display: none !important;
@@ -101,9 +108,563 @@ function requestPolicyUrl(value) {
   return parsed.href
 }
 
+function sanitizeDownloadFilename(value) {
+  const leaf = String(value || '').split(/[\\/]/).pop() || ''
+  let filename = leaf
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]/g, '_')
+    .trim()
+    .replace(/[. ]+$/g, '')
+  if (!filename || filename === '.' || filename === '..') filename = 'download'
+  if (WINDOWS_RESERVED_FILENAME_RE.test(filename)) filename = `_${filename}`
+  if (filename.length <= MAX_DOWNLOAD_FILENAME_LENGTH) return filename
+
+  const extension = path.extname(filename)
+  const extensionBudget = Math.min(extension.length, 24)
+  const keptExtension = extension.slice(0, extensionBudget)
+  const stemBudget = MAX_DOWNLOAD_FILENAME_LENGTH - keptExtension.length
+  return `${filename.slice(0, Math.max(1, stemBudget))}${keptExtension}`
+}
+
+function resolveDownloadSavePath(downloadDirectory, suggestedFilename, reservedPaths = new Set()) {
+  const directory = path.resolve(String(downloadDirectory || ''))
+  const filename = sanitizeDownloadFilename(suggestedFilename)
+  const extension = path.extname(filename)
+  const stem = extension ? filename.slice(0, -extension.length) : filename
+
+  for (let copy = 0; copy < 10_000; copy += 1) {
+    const candidateName = copy === 0 ? filename : `${stem} (${copy})${extension}`
+    const candidate = path.join(directory, candidateName)
+    if (!reservedPaths.has(candidate) && !fs.existsSync(candidate)) return candidate
+  }
+  throw new Error(`unable to allocate a unique download filename for ${filename}`)
+}
+
+function cancelDownload(event, item) {
+  event?.preventDefault?.()
+  try { item?.cancel?.() } catch {}
+}
+
+function readDownloadItemNumber(item, method) {
+  try {
+    const value = Number(item?.[method]?.())
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch {
+    return 0
+  }
+}
+
+function readDownloadItemBoolean(item, method) {
+  try { return item?.[method]?.() === true } catch { return false }
+}
+
+function readDownloadItemString(item, method) {
+  try {
+    return String(item?.[method]?.() || '')
+      .replace(/[\u0000-\u001f\u007f]/g, ' ')
+      .trim()
+      .slice(0, MAX_DOWNLOAD_DIAGNOSTIC_TEXT_LENGTH)
+  } catch {
+    return ''
+  }
+}
+
+function diagnosticDownloadUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''))
+    if (!['http:', 'https:'].includes(parsed.protocol)) return ''
+    parsed.username = ''
+    parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
+    return parsed.href.slice(0, MAX_DOWNLOAD_DIAGNOSTIC_TEXT_LENGTH)
+  } catch {
+    return ''
+  }
+}
+
+function readDownloadItemUrlChain(item, sourceUrl) {
+  try {
+    const chain = item?.getURLChain?.()
+    if (Array.isArray(chain)) {
+      const safeChain = chain.map(diagnosticDownloadUrl).filter(Boolean).slice(-10)
+      if (safeChain.length) return safeChain
+    }
+  } catch {}
+  const safeSourceUrl = diagnosticDownloadUrl(sourceUrl)
+  return safeSourceUrl ? [safeSourceUrl] : []
+}
+
+function downloadPercent(receivedBytes, totalBytes, state) {
+  if (state === 'completed') return 100
+  if (!(totalBytes > 0)) return null
+  return Math.max(0, Math.min(100, Math.round((receivedBytes / totalBytes) * 1_000) / 10))
+}
+
+function readDownloadItemUrl(item) {
+  try {
+    const value = String(item?.getURL?.() || '').trim()
+    if (value) return value
+  } catch {}
+  try {
+    const chain = item?.getURLChain?.()
+    return Array.isArray(chain) ? String(chain.at(-1) || '').trim() : ''
+  } catch {
+    return ''
+  }
+}
+
+function createBrowserDownloadManager({
+  downloadDirectory,
+  onDownload = () => {},
+  retryDownload = null,
+  resolveProxy = null,
+  logger = console,
+  now = Date.now,
+  completedRetentionMs = DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
+} = {}) {
+  const directory = typeof downloadDirectory === 'string' && downloadDirectory.trim()
+    ? path.resolve(downloadDirectory)
+    : null
+  const retentionMs = Number.isFinite(completedRetentionMs) && completedRetentionMs >= 0
+    ? completedRetentionMs
+    : DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS
+  const records = new Map()
+  const reservedPaths = new Set()
+  const pendingRetries = []
+  const downloadWaiters = new Set()
+  let notificationContext = null
+  let sequence = 0
+
+  function availableActions(record) {
+    const actions = []
+    const canPause = typeof record.item?.pause === 'function'
+    const canResume = typeof record.item?.resume === 'function'
+    const canCancel = typeof record.item?.cancel === 'function'
+    if (record.finishedAtMs == null) {
+      if (record.state === 'paused') {
+        if (canResume) actions.push('resume')
+        if (canCancel) actions.push('cancel')
+      }
+      else if (record.state === 'interrupted') {
+        if (record.canResume && canResume) actions.push('resume')
+        if (canCancel) actions.push('cancel')
+      } else if (!['cancelling', 'retrying'].includes(record.state)) {
+        if (canPause) actions.push('pause')
+        if (canCancel) actions.push('cancel')
+      }
+    }
+    if (
+      typeof retryDownload === 'function'
+      && record.sourceUrl
+      && (record.finishedAtMs != null || record.state === 'interrupted')
+    ) actions.push('retry')
+    return [...new Set(actions)]
+  }
+
+  function publicRecord(record) {
+    return {
+      id: record.id,
+      jobId: record.jobId || null,
+      runtimeLane: record.runtimeLane || null,
+      taskType: record.taskType || null,
+      state: record.state,
+      filename: record.filename,
+      path: record.path,
+      receivedBytes: record.receivedBytes,
+      totalBytes: record.totalBytes,
+      percent: record.percent,
+      paused: record.paused,
+      canResume: record.canResume,
+      canRetry: availableActions(record).includes('retry'),
+      availableActions: availableActions(record),
+      attempt: record.attempt,
+      retryOf: record.retryOf,
+      interruptionCount: record.interruptionCount,
+      startedAt: record.startedAt,
+      updatedAt: record.updatedAt,
+      completedAt: record.completedAt,
+      finishedAt: record.finishedAt,
+      retainedUntil: record.retainedUntil,
+      cancelRequestedByManager: record.cancelRequestedByManager === true,
+      diagnostics: {
+        ...record.diagnostics,
+        urlChain: [...record.diagnostics.urlChain],
+      },
+    }
+  }
+
+  function updateMetrics(record, item, state = record.state) {
+    record.receivedBytes = readDownloadItemNumber(item, 'getReceivedBytes')
+    record.totalBytes = readDownloadItemNumber(item, 'getTotalBytes')
+    record.percent = downloadPercent(record.receivedBytes, record.totalBytes, state)
+    record.paused = readDownloadItemBoolean(item, 'isPaused')
+    record.canResume = readDownloadItemBoolean(item, 'canResume')
+    const stateName = String(state || record.state || 'unknown')
+    record.diagnostics.lastState = stateName
+    record.diagnostics.elapsedMs = Math.max(0, Number(now()) - record.startedAtMs)
+    if (stateName === 'interrupted') {
+      record.diagnostics.interruptedAt = new Date(Number(now())).toISOString()
+    }
+  }
+
+  function hasUnknownDownload(knownIds) {
+    for (const id of records.keys()) {
+      if (!knownIds.has(id)) return true
+    }
+    return false
+  }
+
+  function resolveDownloadWaiters() {
+    for (const waiter of [...downloadWaiters]) {
+      if (!hasUnknownDownload(waiter.knownIds)) continue
+      clearTimeout(waiter.timer)
+      downloadWaiters.delete(waiter)
+      waiter.resolve(getSnapshot())
+    }
+  }
+
+  function waitForDownloadChange({ knownIds = [], timeoutMs = 3_000 } = {}) {
+    prune()
+    const normalizedKnownIds = new Set(
+      (Array.isArray(knownIds) ? knownIds : []).map(value => String(value || '').trim()).filter(Boolean),
+    )
+    if (hasUnknownDownload(normalizedKnownIds)) return Promise.resolve(getSnapshot())
+    const boundedTimeoutMs = Math.max(0, Math.min(5_000, Number(timeoutMs) || 0))
+    if (boundedTimeoutMs === 0) return Promise.resolve(getSnapshot())
+    return new Promise(resolve => {
+      const waiter = { knownIds: normalizedKnownIds, resolve, timer: null }
+      waiter.timer = setTimeout(() => {
+        downloadWaiters.delete(waiter)
+        resolve(getSnapshot())
+      }, boundedTimeoutMs)
+      downloadWaiters.add(waiter)
+    })
+  }
+
+  function resolveProxyDiagnostics(record) {
+    if (typeof resolveProxy !== 'function' || !record.sourceUrl) return
+    Promise.resolve(resolveProxy(record.sourceUrl)).then(
+      value => {
+        record.diagnostics.proxy = String(value || 'DIRECT')
+          .replace(/[\u0000-\u001f\u007f]/g, ' ')
+          .trim()
+          .slice(0, MAX_DOWNLOAD_DIAGNOSTIC_TEXT_LENGTH) || 'DIRECT'
+      },
+      error => {
+        record.diagnostics.proxy = `unresolved: ${String(error?.message || error || 'unknown error')}`
+          .replace(/[\u0000-\u001f\u007f]/g, ' ')
+          .trim()
+          .slice(0, MAX_DOWNLOAD_DIAGNOSTIC_TEXT_LENGTH)
+      },
+    )
+  }
+
+  function logInterruptedDownload(record) {
+    if (record.interruptionCount <= record.lastLoggedInterruptionCount) return
+    record.lastLoggedInterruptionCount = record.interruptionCount
+    logger.warn?.(
+      `[browser-embed] download interrupted: ${record.path}; received=${record.receivedBytes}; total=${record.totalBytes}; resumable=${record.canResume}; interruption=${record.interruptionCount}; proxy=${record.diagnostics.proxy || 'unresolved'}; url_chain=${record.diagnostics.urlChain.join(' -> ') || 'unknown'}`,
+    )
+  }
+
+  function publish(record, event = 'updated', { force = false } = {}) {
+    const nowMs = Number(now())
+    const stateChanged = record.lastPublishedState !== record.state
+    if (
+      !force
+      && event === 'updated'
+      && !stateChanged
+      && nowMs - record.lastPublishedAtMs < 500
+    ) return
+    record.lastPublishedAtMs = nowMs
+    record.lastPublishedPercent = record.percent
+    record.lastPublishedState = record.state
+    try {
+      onDownload({
+        event,
+        ...publicRecord(record),
+        notification: record.notification ? { ...record.notification } : null,
+      })
+    } catch (error) {
+      logger.warn?.('[browser-embed] download event sink failed:', error?.message || error)
+    }
+  }
+
+  function prune(nowMs = Number(now())) {
+    for (const [id, record] of records) {
+      if (record.expiresAtMs != null && nowMs >= record.expiresAtMs) records.delete(id)
+    }
+    while (pendingRetries.length && nowMs >= pendingRetries[0].expiresAtMs) pendingRetries.shift()
+  }
+
+  function getSnapshot() {
+    prune()
+    const downloads = [...records.values()]
+      .sort((left, right) => left.startedAtMs - right.startedAtMs)
+      .map(publicRecord)
+    return {
+      directory,
+      completionRetentionMs: retentionMs,
+      active: downloads.filter(record => record.finishedAt == null),
+      recent: downloads.filter(record => record.finishedAt != null),
+    }
+  }
+
+  function normalizeNotificationContext(value = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const jobId = String(value.jobId || value.job_id || '').trim()
+    const runtimeLane = String(value.runtimeLane || value.runtime_lane || '').trim()
+    const taskType = String(value.taskType || value.task_type || '').trim()
+    return {
+      targetId: String(value.targetId || '').trim() || null,
+      channel: String(value.channel || '').trim() || 'AUTO',
+      externalPartyId: String(value.externalPartyId || '').trim() || null,
+      voiceReply: value.voiceReply === true,
+      ...(jobId ? { jobId } : {}),
+      ...(runtimeLane ? { runtimeLane } : {}),
+      ...(taskType ? { taskType } : {}),
+      expiresAtMs: Number(now()) + 2 * 60 * 1000,
+    }
+  }
+
+  function setNotificationContext(value) {
+    notificationContext = normalizeNotificationContext(value)
+    return Boolean(notificationContext)
+  }
+
+  function currentNotificationContext() {
+    if (!notificationContext || Number(now()) >= notificationContext.expiresAtMs) return null
+    const { expiresAtMs: _expiresAtMs, ...context } = notificationContext
+    return context
+  }
+
+  function finishRecord(record, state, finishedAtMs = Number(now())) {
+    record.state = String(state || 'unknown')
+    record.updatedAt = new Date(finishedAtMs).toISOString()
+    record.finishedAtMs = finishedAtMs
+    record.finishedAt = record.updatedAt
+    record.completedAt = record.state === 'completed' ? record.updatedAt : null
+    record.expiresAtMs = finishedAtMs + retentionMs
+    record.retainedUntil = new Date(record.expiresAtMs).toISOString()
+    reservedPaths.delete(record.path)
+  }
+
+  function consumePendingRetry(sourceUrl) {
+    prune()
+    const index = pendingRetries.findIndex(candidate => candidate.sourceUrl === sourceUrl)
+    if (index < 0) return null
+    return pendingRetries.splice(index, 1)[0]
+  }
+
+  function handleWillDownload(event, item) {
+    if (!directory || typeof item?.setSavePath !== 'function') {
+      cancelDownload(event, item)
+      logger.warn?.('[browser-embed] download cancelled because the user Downloads directory is unavailable')
+      return
+    }
+
+    let savePath
+    try {
+      fs.mkdirSync(directory, { recursive: true })
+      savePath = resolveDownloadSavePath(directory, item.getFilename?.(), reservedPaths)
+      reservedPaths.add(savePath)
+      item.setSavePath(savePath)
+
+      const startedAtMs = Number(now())
+      const sourceUrl = readDownloadItemUrl(item)
+      const retryMetadata = consumePendingRetry(sourceUrl)
+      const notification = retryMetadata?.notification || currentNotificationContext()
+      if (!retryMetadata && notification) notificationContext = null
+      const record = {
+        id: `download-${++sequence}`,
+        jobId: String(notification?.jobId || '').trim() || null,
+        runtimeLane: String(notification?.runtimeLane || '').trim() || null,
+        taskType: String(notification?.taskType || '').trim() || null,
+        state: 'progressing',
+        filename: path.basename(savePath),
+        path: savePath,
+        receivedBytes: 0,
+        totalBytes: 0,
+        percent: null,
+        paused: false,
+        canResume: false,
+        item,
+        sourceUrl,
+        notification,
+        attempt: retryMetadata?.attempt || 1,
+        retryOf: retryMetadata?.retryOf || null,
+        interruptionCount: 0,
+        startedAtMs,
+        startedAt: new Date(startedAtMs).toISOString(),
+        updatedAt: new Date(startedAtMs).toISOString(),
+        completedAt: null,
+        finishedAtMs: null,
+        finishedAt: null,
+        retainedUntil: null,
+        expiresAtMs: null,
+        retryRequested: false,
+        cancelRequestedByManager: false,
+        diagnostics: {
+          sourceUrl: diagnosticDownloadUrl(sourceUrl),
+          urlChain: readDownloadItemUrlChain(item, sourceUrl),
+          proxy: null,
+          mimeType: readDownloadItemString(item, 'getMimeType'),
+          contentDisposition: readDownloadItemString(item, 'getContentDisposition'),
+          etag: readDownloadItemString(item, 'getETag'),
+          lastModified: readDownloadItemString(item, 'getLastModifiedTime'),
+          lastState: 'progressing',
+          elapsedMs: 0,
+          interruptedAt: null,
+        },
+        lastPublishedAtMs: 0,
+        lastPublishedPercent: null,
+        lastPublishedState: null,
+        lastLoggedInterruptionCount: 0,
+      }
+      updateMetrics(record, item)
+      records.set(record.id, record)
+      resolveProxyDiagnostics(record)
+
+      item.on?.('updated', (_downloadEvent, state) => {
+        if (record.finishedAtMs != null || record.retryRequested) return
+        const updatedAtMs = Number(now())
+        const previousState = record.state
+        const rawState = String(state || 'progressing')
+        record.updatedAt = new Date(updatedAtMs).toISOString()
+        updateMetrics(record, item, rawState)
+        record.state = record.paused ? 'paused' : rawState
+        if (record.state === 'interrupted' && previousState !== 'interrupted') {
+          record.interruptionCount += 1
+          logInterruptedDownload(record)
+        }
+        publish(record, 'updated')
+      })
+
+      item.on?.('done', (_downloadEvent, state) => {
+        if (record.retryRequested) return
+        const completedAtMs = Number(now())
+        const doneState = String(state || 'unknown')
+        if (record.finishedAtMs != null && record.state === doneState) return
+        updateMetrics(record, item, doneState)
+        if (doneState === 'interrupted' && record.canResume) {
+          if (record.state !== 'interrupted') record.interruptionCount += 1
+          record.state = 'interrupted'
+          record.updatedAt = new Date(completedAtMs).toISOString()
+        } else {
+          finishRecord(record, doneState, completedAtMs)
+        }
+        if (record.state === 'completed') logger.info?.(`[browser-embed] download completed: ${savePath}`)
+        else if (record.state === 'cancelled') logger.info?.(`[browser-embed] download cancelled: ${savePath}`)
+        else if (record.state === 'interrupted') logInterruptedDownload(record)
+        else logger.warn?.(
+          `[browser-embed] download ${record.state}: ${savePath}; received=${record.receivedBytes}; total=${record.totalBytes}; resumable=${record.canResume}; proxy=${record.diagnostics.proxy || 'unresolved'}; url=${record.diagnostics.sourceUrl || 'unknown'}`,
+        )
+        publish(record, 'done', { force: true })
+      })
+
+      logger.info?.(`[browser-embed] download started: ${savePath}`)
+      publish(record, 'started', { force: true })
+      resolveDownloadWaiters()
+    } catch (error) {
+      if (savePath) reservedPaths.delete(savePath)
+      cancelDownload(event, item)
+      logger.warn?.('[browser-embed] unable to prepare user download:', error?.message || error)
+    }
+  }
+
+  async function control(downloadId, action) {
+    prune()
+    const id = String(downloadId || '').trim()
+    const normalizedAction = String(action || '').trim().toLowerCase()
+    const record = records.get(id)
+    if (!record) return { ok: false, code: 'DOWNLOAD_NOT_FOUND', error: `download ${id || '(missing)'} was not found` }
+    if (!['pause', 'resume', 'cancel', 'retry'].includes(normalizedAction)) {
+      return { ok: false, code: 'INVALID_DOWNLOAD_ACTION', error: 'action must be pause, resume, cancel, or retry' }
+    }
+    if (!availableActions(record).includes(normalizedAction)) {
+      return {
+        ok: false,
+        code: 'DOWNLOAD_ACTION_UNAVAILABLE',
+        error: `${normalizedAction} is unavailable while download ${id} is ${record.state}`,
+        download: publicRecord(record),
+      }
+    }
+
+    const stateBeforeAction = record.state
+    try {
+      if (normalizedAction === 'pause') {
+        record.item.pause()
+        record.state = 'paused'
+        record.updatedAt = new Date(Number(now())).toISOString()
+        updateMetrics(record, record.item, record.state)
+        publish(record, 'control', { force: true })
+      } else if (normalizedAction === 'resume') {
+        record.item.resume()
+        record.cancelRequestedByManager = false
+        record.state = 'progressing'
+        record.finishedAtMs = null
+        record.finishedAt = null
+        record.completedAt = null
+        record.expiresAtMs = null
+        record.retainedUntil = null
+        record.updatedAt = new Date(Number(now())).toISOString()
+        updateMetrics(record, record.item, record.state)
+        reservedPaths.add(record.path)
+        publish(record, 'control', { force: true })
+      } else if (normalizedAction === 'cancel') {
+        record.cancelRequestedByManager = true
+        record.state = 'cancelling'
+        record.updatedAt = new Date(Number(now())).toISOString()
+        publish(record, 'control', { force: true })
+        record.item.cancel()
+      } else {
+        const retryMetadata = {
+          sourceUrl: record.sourceUrl,
+          retryOf: record.id,
+          attempt: record.attempt + 1,
+          notification: record.notification ? { ...record.notification } : currentNotificationContext(),
+          expiresAtMs: Number(now()) + 60_000,
+        }
+        pendingRetries.push(retryMetadata)
+        await retryDownload(record.sourceUrl)
+        record.retryRequested = true
+        try { record.item?.cancel?.() } catch {}
+        finishRecord(record, 'retried', Number(now()))
+        publish(record, 'control', { force: true })
+      }
+      return { ok: true, action: normalizedAction, download: publicRecord(record) }
+    } catch (error) {
+      if (normalizedAction === 'cancel' && record.state === 'cancelling') {
+        record.cancelRequestedByManager = false
+        record.state = stateBeforeAction
+        record.updatedAt = new Date(Number(now())).toISOString()
+        updateMetrics(record, record.item, record.state)
+        publish(record, 'control', { force: true })
+      }
+      if (normalizedAction === 'retry') {
+        const index = pendingRetries.findIndex(candidate => candidate.retryOf === record.id)
+        if (index >= 0) pendingRetries.splice(index, 1)
+      }
+      return {
+        ok: false,
+        code: 'DOWNLOAD_CONTROL_FAILED',
+        error: error?.message || String(error),
+        download: publicRecord(record),
+      }
+    }
+  }
+
+  return { control, getSnapshot, handleWillDownload, setNotificationContext, waitForDownloadChange }
+}
+
 function configureIsolatedSession(targetSession, {
   assertRequestAllowed,
   installNativeRequestGuard = false,
+  downloadDirectory,
+  onDownload = () => {},
+  downloadManager = null,
+  downloadNow = Date.now,
+  completedDownloadRetentionMs = DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
   logger = console,
 } = {}) {
   if (!targetSession) return false
@@ -113,10 +674,14 @@ function configureIsolatedSession(targetSession, {
 
   targetSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   targetSession.setPermissionCheckHandler(() => false)
-  targetSession.on('will-download', (event, item) => {
-    event.preventDefault()
-    try { item?.cancel() } catch {}
+  const manager = downloadManager || createBrowserDownloadManager({
+    downloadDirectory,
+    onDownload,
+    logger,
+    now: downloadNow,
+    completedRetentionMs: completedDownloadRetentionMs,
   })
+  targetSession.on('will-download', manager.handleWillDownload)
 
   let nativeRequestGuard = false
   if (
@@ -178,6 +743,10 @@ function createBrowserEmbedHost({
   onNavigation = () => {},
   assertNavigationAllowed = async url => normalizeWebUrl(url),
   nativeRequestGuard = false,
+  downloadDirectory,
+  onDownload = () => {},
+  downloadNow = Date.now,
+  completedDownloadRetentionMs = DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
   onDiagnosticInput = () => false,
   logger = console,
   platform = process.platform,
@@ -204,6 +773,24 @@ function createBrowserEmbedHost({
   let scrollbarDocumentRevision = 0
   let cardScrollbarCssKey = null
   let cardScrollbarInsert = null
+  const downloadManager = createBrowserDownloadManager({
+    downloadDirectory,
+    onDownload,
+    retryDownload: async url => {
+      const contents = browserView?.webContents
+      if (!contents || contents.isDestroyed() || typeof contents.downloadURL !== 'function') {
+        throw new Error('the managed browser page is unavailable for download retry')
+      }
+      contents.downloadURL(url)
+    },
+    resolveProxy: url => {
+      const targetSession = browserView?.webContents?.session
+      return typeof targetSession?.resolveProxy === 'function' ? targetSession.resolveProxy(url) : null
+    },
+    logger,
+    now: downloadNow,
+    completedRetentionMs: completedDownloadRetentionMs,
+  })
   const state = {
     available: true,
     attached: false,
@@ -371,6 +958,9 @@ function createBrowserEmbedHost({
     browserViewNativeRequestGuard = configureIsolatedSession(contents.session, {
       assertRequestAllowed: assertNavigationAllowed,
       installNativeRequestGuard: nativeRequestGuard,
+      downloadDirectory,
+      onDownload,
+      downloadManager,
       logger,
     })
 
@@ -968,14 +1558,22 @@ function createBrowserEmbedHost({
     destroyAll,
     getTarget,
     getWebContents,
+    getDownloads: downloadManager.getSnapshot,
+    waitForDownloadChange: downloadManager.waitForDownloadChange,
+    controlDownload: downloadManager.control,
+    setDownloadNotificationContext: downloadManager.setNotificationContext,
   }
 }
 
 module.exports = {
   BROWSER_EMBED_PARTITION,
+  DOWNLOAD_COMPLETION_CONTEXT_RETENTION_MS,
   configureIsolatedSession,
+  createBrowserDownloadManager,
   createBrowserEmbedHost,
   isAllowedWebUrl,
   isTrustedGoogleOauthPopupUrl,
   normalizeBounds,
+  resolveDownloadSavePath,
+  sanitizeDownloadFilename,
 }

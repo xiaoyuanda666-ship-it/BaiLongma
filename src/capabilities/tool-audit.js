@@ -48,6 +48,10 @@ export function summarizeToolExecution(name, args = {}) {
       return `browser_take_screenshot(${String(args.filename || '?').slice(0, 120)})`
     case 'browser_set_display_mode':
       return `browser_set_display_mode(${args.mode === 'window' ? 'window' : 'card'})`
+    case 'start_browser_download_task':
+      return `start_browser_download_task(${String(args.target || '?').slice(0, 100)})`
+    case 'browser_download_manage':
+      return `browser_download_manage(${String(args.action || '').slice(0, 16)}, ${String(args.download_id || '').slice(0, 80)})`
     case 'browser_clear_data':
       return `browser_clear_data(${(Array.isArray(args.data_types) ? args.data_types : []).join('+') || '?'}, ${args.time_range || '?'})`
     case 'system_browser_open':
@@ -153,12 +157,18 @@ export function writeToolAuditLog({ name, args, context, policy, status, result 
     summary: record.summary,
     duration_ms: record.durationMs,
     source: record.source,
+    ...(context?.browserDownloadJobId ? { job_id: context.browserDownloadJobId } : {}),
+    ...(context?.runtimeLane ? { runtime_lane: context.runtimeLane } : {}),
+    ...(context?.taskType ? { task_type: context.taskType } : {}),
   })
 }
 
 export function buildToolAuditRecord({ name, args, context, policy, status, result = '', error = '', startedAt }) {
   const durationMs = Date.now() - startedAt
   const detailParts = []
+  if (context?.browserDownloadJobId) detailParts.push(`job_id=${String(context.browserDownloadJobId).slice(0, 160)}`)
+  if (context?.runtimeLane) detailParts.push(`runtime_lane=${String(context.runtimeLane).slice(0, 40)}`)
+  if (context?.taskType) detailParts.push(`task_type=${String(context.taskType).slice(0, 80)}`)
   if (policy?.reason) detailParts.push(`policy=${policy.reason}`)
   const auditArgs = sanitizeToolAuditArgs(name, args)
   const argPreview = previewValue(auditArgs, 160)

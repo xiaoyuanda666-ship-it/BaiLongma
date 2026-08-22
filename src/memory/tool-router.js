@@ -26,7 +26,7 @@
 // 输出：去重后的 tools: string[]
 
 // 已迁能力的工具注入选择器由能力注册表提供（单向依赖：registry 不 import 本文件）。
-import { capabilityToolsFor } from '../capabilities/capability-registry.js'
+import { capabilityToolsFor, isBrowserDownloadTaskIntent } from '../capabilities/capability-registry.js'
 
 // ---- 工具分组 ----
 //
@@ -348,7 +348,7 @@ export function selectTools(ctx = {}) {
 
   const normalizedMessage = String(messageBody || '').toLowerCase()
   const knowledgeLibraryIntent = hits(normalizedMessage, KNOWLEDGE_TRIGGERS)
-  const explicitFilesystemIntent = !knowledgeLibraryIntent && (
+  const explicitFilesystemIntent = !knowledgeLibraryIntent && !isBrowserDownloadTaskIntent(messageBody) && (
     hits(normalizedMessage, FILESYSTEM_TRIGGERS)
     || LOCAL_FILE_ARTIFACT_RE.test(messageBody)
   )

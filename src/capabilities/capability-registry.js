@@ -65,7 +65,8 @@ export const BROWSER_TOOLS = [
   'browser_close',
 ]
 export const BROWSER_DISPLAY_TOOLS = ['browser_set_display_mode']
-export const BROWSER_CAPABILITY_TOOLS = [...BROWSER_TOOLS, ...BROWSER_DISPLAY_TOOLS]
+export const BROWSER_DOWNLOAD_TOOLS = ['start_browser_download_task', 'browser_download_manage']
+export const BROWSER_CAPABILITY_TOOLS = [...BROWSER_TOOLS, ...BROWSER_DISPLAY_TOOLS, ...BROWSER_DOWNLOAD_TOOLS]
 export const BROWSER_DATA_TOOLS = ['browser_clear_data']
 export const SYSTEM_BROWSER_TOOLS = ['system_browser_open']
 export const HOTSPOT_TOOLS = ['hotspot_mode']
@@ -97,6 +98,12 @@ const BROWSER_TRIGGERS = [
   '点一下按钮', '打开并点击', '打开并填写', 'browser action', 'browser automation', 'click website',
   'open website', 'open webpage', 'fill form', 'log in', 'login to', 'take screenshot', 'interact with page',
   'switch browser size', 'compact browser', 'large browser window',
+]
+const BROWSER_DOWNLOAD_TRIGGERS = [
+  '内置浏览器下载', '自带浏览器下载', '用浏览器下载', '点击下载', '下载文件', '下载附件',
+  '下载电脑版', '下载桌面版', '下载客户端', '下载安装包', '下载 Mac 版', '下载 Windows 版',
+  '暂停下载', '继续下载', '恢复下载', '取消下载', '重试下载', '重新下载',
+  'browser download', 'download installer', 'pause download', 'resume download', 'cancel download', 'retry download',
 ]
 const SYSTEM_BROWSER_TRIGGERS = [
   '用我电脑上的浏览器', '我电脑上的浏览器', '电脑上安装的浏览器', '电脑浏览器',
@@ -141,6 +148,11 @@ const CURRENT_PAGE_FIND_RE = /(?:(?:这个|当前|现在|本)(?:网页|页面)|(
 const EXPLICIT_NATURAL_BROWSER_COMMAND_RE = /(?:浏览器.{0,8}(?:关一下|关闭|刷新|重新加载)|(?:回|返回)(?:到)?(?:搜索)?结果(?:列表)?页|回列表页|(?:现在|当前)?(?:有|开着)?\s*(?:几个|多少个)\s*标签页|(?:缩回|收回).{0,8}(?:小卡片|卡片|小窗口)|重新打开\s*(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b))/i
 const RESULT_LIST_CORRECTION_RE = /^(?:(?:不是(?:详情页?|详情|原文页?|内容页?)[，,]\s*)?(?:我(?:要|要的是)|我要的是)?\s*(?:回(?:到|去)?(?:刚才的)?(?:搜索)?结果(?:列表)?页|回(?:到|去)?(?:搜索)?结果列表|回(?:到|去)?列表(?:页)?)|不对[，,]\s*(?:我(?:要|要的是)\s*)?(?:回(?:到|去)?(?:搜索)?结果(?:列表)?页?|回(?:到|去)?列表(?:页)?)|我说的是(?:搜索)?结果(?:列表)?页|我要的是(?:搜索)?结果(?:列表)?页|别进(?:详情页?|详情|原文页?|原文)[，,]\s*回(?:到|去)?(?:(?:搜索)?结果)?列表(?:页)?)[。.!！?？]*$/iu
 const CONTEXTUAL_TERSE_BROWSER_COMMAND_RE = /^(?:好的?[，,]?\s*|行[，,]?\s*|请\s*|帮我\s*|再\s*)*(?:刷新(?:一下)?|重新加载(?:一下)?|往下翻(?:一屏|一页|一下)?|往上翻(?:一屏|一页|一下)?|翻到(?:页面)?底部|返回(?:一下)?|上一页|再往前(?:一下)?|回到刚才点开的页面|放大(?:一点|一下)?|大一点)[。.!！?？]*$/i
+const BROWSER_DOWNLOAD_PRODUCT_RE = /(?:下载|获取).{0,24}(?:电脑版|桌面版|客户端|安装包|dmg|pkg|exe|msi|mac\s*(?:版|版本)?|windows\s*(?:版|版本)?)|(?:电脑版|桌面版|客户端|安装包|dmg|pkg|exe|msi|mac\s*(?:版|版本)?|windows\s*(?:版|版本)?).{0,16}(?:下载|获取)|(?:下载|获取).{0,12}(?:文件|附件)|(?:文件|附件).{0,12}(?:下载|获取)/i
+const EXPLICIT_BUILTIN_BROWSER_DOWNLOAD_RE = /(?:(?:内置|内在|自带|白龙马|agent|你的).{0,8}(?:浏览器|chrome)|(?:用|让).{0,12}(?:浏览器|chrome)).{0,28}(?:下载|获取)|(?:浏览器|chrome).{0,12}(?:像人一样|点击).{0,16}(?:下载|获取)/i
+const BROWSER_DOWNLOAD_CONTROL_RE = /(?:暂停|继续|恢复|续传|取消|停止|终止|重试|重新下载).{0,12}(?:下载|这个下载|它)|(?:下载|这个下载).{0,12}(?:暂停|继续|恢复|续传|取消|停止|终止|重试|重新)|(?:别|不要)(?:再)?下(?:载)?了|(?:pause|resume|continue|cancel|stop|retry).{0,10}download/i
+const BROWSER_DOWNLOAD_STATUS_RE = /(?:下载|这个下载).{0,16}(?:到哪|哪里|哪儿|进度|状态|好了吗|完了吗|完成了吗|成功了吗|还有多久)|(?:到哪|哪里|哪儿|进度|状态|还有多久).{0,12}(?:下载|这个下载)|where.{0,12}download|download.{0,12}(?:status|progress|where)/i
+const BROWSER_DOWNLOAD_TASK_RE = /^(?:(?:请|麻烦你|劳驾|帮我|给我|你来|现在|直接)\s*)*(?:(?:使用|用)\s*(?:(?:白龙马|你的|内置|自带)\s*)?(?:浏览器|chrome)\s*)?(?:帮我\s*)?(?:下载|获取)\s*(?!目录\b|文件夹\b)(.{1,240})$|^(?:(?:please|can you|could you)\s+)?download\s+(.{1,240})$/iu
 
 export function isStatefulBrowserIntent(text = '') {
   const value = String(text || '')
@@ -182,11 +194,29 @@ export function isNaturalBrowserCommandIntent(text = '', { recentBrowserContext 
     || (recentBrowserContext && CONTEXTUAL_TERSE_BROWSER_COMMAND_RE.test(value))
 }
 
+export function isBrowserDownloadIntent(text = '') {
+  const value = String(text || '').trim()
+  return BROWSER_DOWNLOAD_PRODUCT_RE.test(value)
+    || EXPLICIT_BUILTIN_BROWSER_DOWNLOAD_RE.test(value)
+    || BROWSER_DOWNLOAD_CONTROL_RE.test(value)
+    || isBrowserDownloadTaskIntent(value)
+}
+
+export function isBrowserDownloadTaskIntent(text = '') {
+  const value = String(text || '').trim()
+  if (!value || BROWSER_DOWNLOAD_CONTROL_RE.test(value) || BROWSER_DOWNLOAD_STATUS_RE.test(value)) return false
+  if (/^(?:怎么|如何|怎样|能否|可否)|[?？]\s*$/.test(value)) return false
+  return BROWSER_DOWNLOAD_TASK_RE.test(value) || EXPLICIT_BUILTIN_BROWSER_DOWNLOAD_RE.test(value)
+}
+
 const BROWSER_CONTEXT_BLOCK = `## Web Access — BaiLongma Built-in Chromium
 - There are three clearly distinct surfaces: (1) "你的浏览器" / "小窗口浏览器" is the live managed WebContentsView embedded in Brain UI. (2) "我的浏览器" / "大窗口浏览器" moves that exact same live WebContentsView into a draggable native window with standard window controls; URL, history, title and webContents id remain continuous. (3) "电脑浏览器" / "系统/默认浏览器" is the user-owned default browser, opened only through system_browser_open and never controlled afterwards.
 - Every browser_* action operates the single BaiLongma-managed WebContentsView through loopback Chrome DevTools MCP, never the user's normal Chrome profile. Card and window are two presentations of the same page, not a screenshot handoff and not separate browser targets.
 - Ordinary browser work defaults to the compact card presentation for the current turn, so do not waste a tool call selecting card before every action. Call browser_set_display_mode only when the user asks for a particular size/presentation or when login, OAuth, QR, MFA, CAPTCHA, video, or user takeover requires the large window.
 - The dedicated Chrome profile is isolated under BaiLongma application data. Never read, copy, import, attach to, or describe it as sharing cookies, passwords, extensions, history, or login state with the user's system/default browser.
+- Files downloaded by the managed browser are saved automatically in the operating system's user Downloads directory, not BaiLongma's sandbox. The automatically injected <browser-downloads> block is authoritative for the exact directory, save path, lifecycle state, byte counts, percentage, id, and available_actions; do not call a tool merely to query them. Never claim a progressing, paused, cancelling, or interrupted item completed, and never click the same download again while a matching active item exists. Completion/interruption/cancellation is also an active background APP_SIGNAL that wakes the Agent; completion remains injected for ten minutes and needs no filesystem verification.
+- A new natural-language request such as “下载 CapCut” or “帮我下载豆包” must call start_browser_download_task exactly once. It returns immediately after queuing an isolated background browser task. Reply only once with a short acknowledgement such as “好的，我去下载一下。” Do not use browser_navigate/browser_click in the main turn, wait for completion, or narrate ordinary progress. The independent runtime owns browser discovery and clicking; only completion, failure/interruption, login/CAPTCHA, or a required version/architecture/content decision wakes the main Agent later.
+- browser_download_manage controls only an already-recorded download id. Call it only when the CURRENT user explicitly requests that exact pause, resume, cancel, or retry action, and only when that action appears in available_actions. A background APP_SIGNAL, prior instruction, or autonomous turn never authorizes a management action. If more than one download could match a terse request, ask which one. Pause keeps the same attempt and save path; resume continues that attempt when Electron says it is resumable; cancel waits for the real terminal cancelled event; retry starts a new attempt linked by retry_of and may allocate a new collision-safe filename.
 - Chrome DevTools MCP uses only a 127.0.0.1 debugging endpoint. It has telemetry, update checks, and CrUX lookups disabled for privacy. Do not use web_search, web_read, fetch_url, browser_read, curl, wget, Invoke-WebRequest, or shell HTTP clients.
 - For X, Google OAuth, any account login, password, MFA, CAPTCHA, verification code, or consent page: ensure the dedicated Chrome window is visible, tell the user to complete or cancel the flow personally, then use browser_snapshot to verify the resulting real page state. Never type credentials, MFA/CAPTCHA responses, or consent actions; never claim login succeeded before a post-login snapshot verifies it.
 - web_search, web_read, fetch_url, browser_read, curl, wget, Invoke-WebRequest, and shell-based HTTP clients are unavailable for web access. Do not request, discover, or emulate them.
@@ -354,10 +384,12 @@ export const CAPABILITIES = [
     id: 'interactive-browser',
     label: '上网与浏览器',
     summary: '唯一网页通道：受版本锁定的 Chrome DevTools MCP 控制白龙马专用真实 Google Chrome；覆盖搜索、网页读取、导航、点击、填写、标签页、截图与关闭。',
-    triggers: [...WEB_TRIGGERS, ...BROWSER_TRIGGERS],
+    triggers: [...WEB_TRIGGERS, ...BROWSER_TRIGGERS, ...BROWSER_DOWNLOAD_TRIGGERS],
     tools: BROWSER_CAPABILITY_TOOLS,
     detect: (ctx) => !isSystemBrowserIntent(ctx.rawText) && (
       hits(ctx.text, BROWSER_TRIGGERS)
+      || hits(ctx.text, BROWSER_DOWNLOAD_TRIGGERS)
+      || isBrowserDownloadIntent(ctx.rawText)
       || isStatefulBrowserIntent(ctx.rawText)
       || isCurrentPageFindIntent(ctx.rawText)
       || isNaturalBrowserCommandIntent(ctx.rawText, { recentBrowserContext: ctx.recentBrowserContext })
@@ -367,6 +399,8 @@ export const CAPABILITIES = [
     ),
     toolWhen: (ctx) => !isSystemBrowserIntent(ctx.rawText) && (
       hits(ctx.text, BROWSER_TRIGGERS)
+      || hits(ctx.text, BROWSER_DOWNLOAD_TRIGGERS)
+      || isBrowserDownloadIntent(ctx.rawText)
       || isStatefulBrowserIntent(ctx.rawText)
       || isCurrentPageFindIntent(ctx.rawText)
       || isNaturalBrowserCommandIntent(ctx.rawText, { recentBrowserContext: ctx.recentBrowserContext })

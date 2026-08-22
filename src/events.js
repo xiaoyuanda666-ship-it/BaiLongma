@@ -30,6 +30,11 @@ const BRAIN_UI_HISTORY_TYPES = new Set([
 let activeBrainUiPath = null
 
 function persistBrainUiEvent(type, data, ts) {
+  // Independent background-task browser activity is visible live and is also
+  // persisted in the action audit log. It must not be attached to whichever
+  // L1/L2/L3 conversation happened to be active when the concurrent event
+  // arrived.
+  if (data?.runtime_lane === 'background') return
   if (type === 'message_received') {
     if (activeBrainUiPath === 'l2' || activeBrainUiPath === 'l3') {
       try {

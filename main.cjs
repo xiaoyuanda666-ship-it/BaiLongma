@@ -434,8 +434,16 @@ const browserEmbedHost = createBrowserEmbedHost({
   View,
   BrowserWindow,
   BaseWindow,
+  // Browser downloads belong in the operating system's user-visible Downloads
+  // folder. app.getPath also respects localized/redirected platform folders.
+  downloadDirectory: app.getPath('downloads'),
   isAppQuitting: () => app.isQuiting === true,
   onNavigation: entry => browserDataStore.recordVisit(entry),
+  onDownload: event => {
+    if (app.isQuiting === true) return
+    try { globalThis.bailongmaBrowserDownloadEventSink?.(event) }
+    catch (error) { console.warn('[browser-embed] download notification failed:', error?.message || error) }
+  },
   assertNavigationAllowed: assertEmbeddedBrowserNavigationAllowed,
   nativeRequestGuard: true,
 })
@@ -515,6 +523,10 @@ globalThis.bailongmaChromeBridge = Object.freeze({
   closePage: () => browserEmbedHost.closePage(),
   clearData: options => browserDataStore.clearData(options),
   getState: () => browserEmbedHost.getTarget(),
+  getDownloads: () => browserEmbedHost.getDownloads(),
+  waitForDownloadChange: options => browserEmbedHost.waitForDownloadChange(options),
+  controlDownload: (downloadId, action) => browserEmbedHost.controlDownload(downloadId, action),
+  setDownloadNotificationContext: context => browserEmbedHost.setDownloadNotificationContext(context),
 })
 global.bailongmaAppControl = {
   restart() {

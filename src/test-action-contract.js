@@ -79,6 +79,70 @@ try {
   assert.equal(classifyActionContract('你有多少执行命令工具？'), null, 'tool meta questions must not trigger execution')
   assert.equal(classifyActionContract('帮我安装一个 npm 插件'), null, 'plugin installation is not OS software installation')
   for (const phrase of [
+    '下载 CapCut',
+    '帮我下载豆包',
+    '帮我下载腾讯出的智能体马维斯',
+    '下载 CapCut 并保存到下载目录',
+    '用内置浏览器打开豆包官网并下载电脑版',
+  ]) {
+    const contract = classifyActionContract(phrase)
+    assert.equal(contract?.id, 'browser_download_task', phrase)
+    assert.deepEqual(contract.requiredTools, ['start_browser_download_task'], phrase)
+    assert.equal(contract.restrictTools, true, phrase)
+    assert.equal(contract.runtimeOwnedReply, true, phrase)
+    assert.equal(verifiedActionContractReply(contract), '好的，我去下载一下。', phrase)
+  }
+  assert.notEqual(classifyActionContract('下载 CapCut 并保存到下载目录')?.id, 'file_write',
+    'a browser/software download destination is not a local file-creation request')
+  assert.equal(classifyActionContract('下载到哪里了？'), null,
+    'a status question reads automatically injected task context instead of starting another job')
+  let downloadStartRounds = 0
+  const downloadStartCalls = []
+  const downloadStartResult = await callLLM({
+    systemPrompt: 'system',
+    message: '下载 CapCut',
+    tools: ['start_browser_download_task'],
+    mustReply: true,
+    localReply: true,
+    toolContext: {
+      currentTargetId: 'ID:download-user',
+      currentUserMessage: '下载 CapCut',
+      actionContract: classifyActionContract('下载 CapCut'),
+    },
+    _streamOnceForTest: async () => {
+      downloadStartRounds += 1
+      return {
+        content: '',
+        reasoningContent: '',
+        aborted: false,
+        toolCalls: [{
+          id: 'start-download-1',
+          name: 'start_browser_download_task',
+          arguments: JSON.stringify({ target: 'CapCut' }),
+        }],
+      }
+    },
+    _executeToolForTest: async (name, args) => {
+      downloadStartCalls.push({ name, args })
+      if (name === 'start_browser_download_task') {
+        return JSON.stringify({ ok: true, status: 'started', job_id: 'bg-download-1' })
+      }
+      if (name === 'send_message') {
+        return JSON.stringify({ ok: true, delivered: true, message_sent: true })
+      }
+      return JSON.stringify({ ok: false, error: 'unexpected tool' })
+    },
+  })
+  assert.equal(downloadStartRounds, 1,
+    'starting a background download does not keep the main model in a progress loop')
+  assert.deepEqual(downloadStartCalls.map(call => call.name), [
+    'start_browser_download_task',
+    'send_message',
+  ], 'the main turn starts one job and sends exactly one acknowledgement')
+  assert.equal(downloadStartCalls[1].args.content, '好的，我去下载一下。')
+  assert.equal(downloadStartResult.content, '好的，我去下载一下。')
+  assert.equal(downloadStartResult.delivered, true)
+  for (const phrase of [
     '只读验收，不要创建或修改任何文件',
     '不要删除任何文件',
     '别运行命令或启动程序',

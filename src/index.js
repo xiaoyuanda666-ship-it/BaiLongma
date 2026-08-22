@@ -69,6 +69,20 @@ import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
 import { createAwakeningManager } from './awakening.js'
 import { createTaskManager } from './task-manager.js'
+import { installBrowserDownloadEventSink, notifyBrowserDownloadJobImportantEvent } from './browser-download-events.js'
+import { getBackgroundJobManager } from './background-job-manager.js'
+import { BrowserDownloadTaskRunner } from './browser-download-task-runner.js'
+import { configureBrowserDownloadTaskStarter } from './capabilities/tools/browser-download-task.js'
+import { configureBrowserDownloadJobRecovery } from './capabilities/tools/browser-downloads.js'
+
+const backgroundJobManager = getBackgroundJobManager()
+installBrowserDownloadEventSink({ jobManager: backgroundJobManager })
+const browserDownloadTaskRunner = new BrowserDownloadTaskRunner({ jobManager: backgroundJobManager })
+configureBrowserDownloadTaskStarter((args, context) => browserDownloadTaskRunner.startTask(args, context))
+configureBrowserDownloadJobRecovery(jobId => browserDownloadTaskRunner.retryTask(jobId))
+for (const recoveredJob of backgroundJobManager.recoverInterruptedJobs()) {
+  notifyBrowserDownloadJobImportantEvent(recoveredJob, 'interrupted', { jobManager: backgroundJobManager })
+}
 
 function reportStartupProgress(id, status, detail, message) {
   try {
@@ -734,6 +748,7 @@ async function runTurn(input, label, msg = null) {
   let toolCallLog = []
   let voiceTurn = false
   let localReply = false
+  let toolContext = null
   let terminalEmitted = false
   const finishTurn = (content = '') => {
     if (isTick || silentSignal || terminalEmitted) return
@@ -1288,7 +1303,11 @@ async function runTurn(input, label, msg = null) {
     emitEvent('system_prompt', { content: combinePromptForPreview(systemPrompt, contextBlock), fastUserPath })
 
     // 3. Call Jarvis LLM (can be interrupted by a new message)
-    const toolContext = buildToolContextForProcess(msg, injection, sessionRef)
+    toolContext = buildToolContextForProcess(msg, injection, sessionRef)
+    toolContext.browserLeaseOwnerId = `turn:${sessionRef}`
+    toolContext.browserLeasePriority = priority
+    toolContext.browserLeaseScope = 'turn'
+    toolContext.runtimeLane = runtimeLane
     // Intent routing remains model-led.  The narrow action contract below is
     // not a general intent classifier: it is only an execution guard for a
     // high-confidence side-effect request.  It prevents a text-only promise
@@ -1554,6 +1573,11 @@ async function runTurn(input, label, msg = null) {
       return
     }
   } finally {
+    if (toolContext?.browserLeaseOwnedByTurn && toolContext.browserLease) {
+      toolContext.browserLease.release('main Agent turn finished')
+      toolContext.browserLease = null
+      toolContext.browserLeaseOwnedByTurn = false
+    }
     clearExecution(controller)
   }
 

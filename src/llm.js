@@ -17,6 +17,7 @@ import {
   markBrowserChallengeResult,
 } from './runtime/browser-challenge-guard.js'
 import { streamWriteFileArgumentPreview } from './write-file-preview.js'
+import { formatBrowserDownloadContext } from './browser-download-context.js'
 import {
   buildResponsesRequest,
   createResponsesEventAccumulator,
@@ -846,20 +847,20 @@ function isMediaCloser(content) {
   return s.length <= 16 && MEDIA_CLOSER_RE.test(s)     // 带歌名的短确认（"浮誇，在播了。"）
 }
 
-function getToolLoopStopReason(state, name, fingerprint) {
+function getToolLoopStopReason(state, name, fingerprint, limits = TOOL_LOOP_LIMITS) {
   const isReportChannel = REPORT_CHANNEL_TOOLS.has(name)
-  if (!isReportChannel && state.consecutiveFailures >= TOOL_LOOP_LIMITS.maxConsecutiveFailures) {
-    return `too many consecutive tool failures (${TOOL_LOOP_LIMITS.maxConsecutiveFailures})`
+  if (!isReportChannel && state.consecutiveFailures >= limits.maxConsecutiveFailures) {
+    return `too many consecutive tool failures (${limits.maxConsecutiveFailures})`
   }
   const sameFailures = state.sameFailureCounts.get(fingerprint) || 0
-  if (sameFailures >= TOOL_LOOP_LIMITS.maxSameFailures) {
+  if (sameFailures >= limits.maxSameFailures) {
     return `same failing action repeated ${sameFailures} times`
   }
-  const window = state.recentFingerprints.slice(-TOOL_LOOP_LIMITS.loopWindowSize)
-  if (!isReportChannel && window.length >= TOOL_LOOP_LIMITS.loopWindowSize) {
+  const window = state.recentFingerprints.slice(-limits.loopWindowSize)
+  if (!isReportChannel && window.length >= limits.loopWindowSize) {
     const unique = new Set(window).size
-    if (unique <= TOOL_LOOP_LIMITS.loopUniqueThreshold) {
-      return `stuck in a loop (only ${unique} unique action(s) in last ${TOOL_LOOP_LIMITS.loopWindowSize} calls)`
+    if (unique <= limits.loopUniqueThreshold) {
+      return `stuck in a loop (only ${unique} unique action(s) in last ${limits.loopWindowSize} calls)`
     }
   }
   return null
@@ -965,7 +966,7 @@ function isCloserPattern(content) {
 //   refresh agent 的上下文"，**不**期望模型回复用户。当 silentSignal=true 时，
 //   runtime 直接拦截 send_message 调用（不让它真投递），并在工具结果里告知
 //   "本轮是 silent 系统信号，不要 send_message"，让模型从这次拒绝里学到边界。
-export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, _streamOnceForTest = null, _executeToolForTest = null }) {
+export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
   const strictEvaluation = toolContext?.strictEvaluation || null
   const toolPromptHints = toolContext?.toolPromptHints || null
   const actionContract = toolContext?.actionContract || null
@@ -986,6 +987,13 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   // external intent from heartbeat prose or manufacture a fallback send.
   const allowPlainTextFallback = Boolean(mustReply && toolContext?.outputContract !== 'explicit_send_only')
   const runTool = _executeToolForTest || executeTool
+  const loopLimits = { ...TOOL_LOOP_LIMITS }
+  if (toolLoopLimits && typeof toolLoopLimits === 'object') {
+    for (const key of Object.keys(loopLimits)) {
+      const value = Number(toolLoopLimits[key])
+      if (Number.isFinite(value) && value > 0) loopLimits[key] = Math.max(1, Math.floor(value))
+    }
+  }
   const tickState = toolContext?.tickContext
     ? {
         id: String(toolContext.tickContext.id || 'tick'),
@@ -1002,6 +1010,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
       ]
+  const initialBrowserDownloadContext = formatBrowserDownloadContext()
+  let lastBrowserDownloadContext = messages.some(item => (
+    typeof item?.content === 'string' && item.content.includes(initialBrowserDownloadContext)
+  )) ? initialBrowserDownloadContext : ''
 
   if (shouldThrottle()) {
     console.log('[配额] 用量超过 95%，跳过本次调用')
@@ -1098,8 +1110,21 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let mediaEmojiSent = false   // 本 turn 已用表情代替过一次播放确认（一个 turn 只发一个表情）
 
   try {
-  for (let round = 0; round < TOOL_LOOP_LIMITS.maxRounds; round++) {
+  for (let round = 0; round < loopLimits.maxRounds; round++) {
     throwIfAborted(signal)
+
+    // DownloadItem events continue while the model/tool loop is running. Feed
+    // only changed snapshots into the next model round so progress is visible
+    // without spending a browser or filesystem tool call and without flooding
+    // the prompt with duplicate state.
+    const browserDownloadContext = formatBrowserDownloadContext()
+    if (browserDownloadContext && browserDownloadContext !== lastBrowserDownloadContext) {
+      messages.push({
+        role: 'user',
+        content: `[BAILONGMA AUTOMATIC RUNTIME CONTEXT UPDATE — not user-authored]\n${browserDownloadContext}`,
+      })
+      lastBrowserDownloadContext = browserDownloadContext
+    }
 
     if (tickState) {
       messages.push({ role: 'user', content: buildTickRoundContext(tickState, round) })
@@ -1374,7 +1399,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         normalizedArgs.replace = true
       }
       const fingerprint = buildToolFingerprint(tc.name, normalizedArgs)
-      const stopReason = getToolLoopStopReason(toolLoopState, tc.name, fingerprint)
+      const stopReason = getToolLoopStopReason(toolLoopState, tc.name, fingerprint, loopLimits)
       return { tc, normalizedArgs, fingerprint, stopReason, hadEmptyArguments }
     }
 
@@ -1747,7 +1772,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         continue
       }
       const canParallelize = isParallelSafeTool(firstPrepared.tc.name, firstPrepared.normalizedArgs)
-      const remainingBudget = TOOL_LOOP_LIMITS.maxTotalCalls - toolLoopState.totalCalls
+      const remainingBudget = loopLimits.maxTotalCalls - toolLoopState.totalCalls
 
       if (canParallelize && !firstPrepared.stopReason && remainingBudget > 1) {
         const preparedBatch = [firstPrepared]
@@ -1861,7 +1886,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
               queries: toolDiscoveryState.queries,
             }),
           })
-        } else if (toolLoopState.totalCalls >= TOOL_LOOP_LIMITS.uncertaintyCheckpointCalls && !uncertaintyNudgeUsed) {
+        } else if (toolLoopState.totalCalls >= loopLimits.uncertaintyCheckpointCalls && !uncertaintyNudgeUsed) {
           uncertaintyNudgeUsed = true
           console.log(`[不确定回退] 已执行 ${toolLoopState.totalCalls} 次工具仍未投递，注入重审检查点`)
           messages.push({

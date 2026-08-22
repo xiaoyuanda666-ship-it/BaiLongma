@@ -2,6 +2,24 @@
 // person_card_mode / focus_banner
 // （声明式 Scene 的 ui_set 在 schemas/scene.js）
 export const uiSchemas = {
+  start_browser_download_task: {
+    type: 'function',
+    function: {
+      name: 'start_browser_download_task',
+      description: 'Start an independent background task that uses BaiLongma\'s visible built-in browser to find an official software/file download and click the native download entry. This returns immediately with a job_id. Call it once for a new download request, then give only one short acknowledgement; do not wait, navigate, click, report progress, or call it again for the same request. Ordinary progress is shown by the background task UI. Completion/failure/user-decision events notify the Agent separately.',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            description: 'The exact software, product, publisher-qualified app, or downloadable content requested by the user, for example "CapCut" or "腾讯出的智能体马维斯".',
+          },
+        },
+        required: ['target'],
+      },
+    },
+  },
+
   browser_clear_data: {
     type: 'function',
     function: {
@@ -79,6 +97,29 @@ export const uiSchemas = {
           },
         },
         required: ['mode'],
+      },
+    },
+  },
+
+  browser_download_manage: {
+    type: 'function',
+    function: {
+      name: 'browser_download_manage',
+      description: 'Control an existing BaiLongma built-in-browser download by its automatically injected download id. Supported actions are pause, resume, cancel, and retry. Use only when the CURRENT user explicitly requests that exact action. Do not call this tool to query status or progress: the live <browser-downloads> context already supplies state, progress, exact save path, and available_actions without a tool call. Only choose an action listed in that download record. retry creates a new attempt and may use a new collision-safe filename.',
+      parameters: {
+        type: 'object',
+        properties: {
+          download_id: {
+            type: 'string',
+            description: 'Exact id from the automatically injected active or recently finished browser download record, for example download-1.',
+          },
+          action: {
+            type: 'string',
+            enum: ['pause', 'resume', 'cancel', 'retry'],
+            description: 'Lifecycle action explicitly requested by the current user and present in available_actions.',
+          },
+        },
+        required: ['download_id', 'action'],
       },
     },
   },

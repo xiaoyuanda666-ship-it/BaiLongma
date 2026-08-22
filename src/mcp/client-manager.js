@@ -8,6 +8,8 @@ import { config } from '../config.js'
 import { persistChatMediaBuffer } from '../chat-media.js'
 import { createMergedAbortSignal } from '../capabilities/abort-utils.js'
 import { assertWebUrlAllowed } from '../capabilities/tools/web/url-policy.js'
+import { formatBrowserDownloadSnapshot } from '../browser-download-context.js'
+import { browserLeaseManager } from '../runtime/browser-lease.js'
 import { getRuntimeMcpServers } from './config.js'
 import {
   BUILTIN_BROWSER_ALLOWED_TOOLS,
@@ -27,6 +29,9 @@ import {
 
 const MAX_TOOL_RESULT_CHARS = 100_000
 const MAX_TEXT_CONTENT_CHARS = 90_000
+const BROWSER_DOWNLOAD_CLICK_SETTLE_MS = 3_000
+const BROWSER_DOWNLOAD_GENERIC_CLICK_SETTLE_MS = 900
+const BROWSER_DOWNLOAD_CLICK_HINT_RE = /(?:\bdownloads?\b|下载|下載|另存|安装包|安裝包|安装器|安裝器|\.(?:dmg|pkg|exe|msi|apk|zip|rar|7z|tar|gz)\b)/i
 const BROWSER_PREVIEW_ACTIONS = new Set([
   'browser_navigate',
   'browser_navigate_back',
@@ -60,6 +65,24 @@ const toolsByAlias = new Map()
 const pendingConnections = new Map()
 let shuttingDown = false
 let builtInChromeQueue = Promise.resolve()
+
+function browserClickMayStartDownload(args = {}) {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return false
+  return BROWSER_DOWNLOAD_CLICK_HINT_RE.test(String(args.element || ''))
+}
+
+function browserDownloadClickSettleMs(args = {}, context = {}) {
+  if (browserClickMayStartDownload(args)) return BROWSER_DOWNLOAD_CLICK_SETTLE_MS
+  if (String(context.browserDownloadJobId || '').trim()) return BROWSER_DOWNLOAD_GENERIC_CLICK_SETTLE_MS
+  return 0
+}
+
+function browserDownloadIds(snapshot = {}) {
+  return [...(Array.isArray(snapshot?.active) ? snapshot.active : []),
+    ...(Array.isArray(snapshot?.recent) ? snapshot.recent : [])]
+    .map(download => String(download?.id || '').trim())
+    .filter(Boolean)
+}
 
 async function callToolWithScopedSignal(client, request, { timeout, signal } = {}) {
   // The MCP SDK may retain an abort listener until its complete timeout path
@@ -281,6 +304,32 @@ async function connectServer(server, { ClientClass = Client, TransportClass = St
 function chromeBridgeForDeps(deps = {}) {
   const bridge = deps.chromeBridge || globalThis.bailongmaChromeBridge
   return bridge && typeof bridge.ensureEndpoint === 'function' ? bridge : null
+}
+
+async function acquireBrowserLeaseForTool(context = {}) {
+  if (context.browserLease) {
+    context.browserLease.assertActive?.()
+    return { lease: context.browserLease, releaseAfterTool: false }
+  }
+  const ownerId = String(context.browserLeaseOwnerId || '').trim()
+    || `browser-tool-${crypto.randomBytes(5).toString('hex')}`
+  const runtimeLane = String(context.runtimeLane || '').toLowerCase()
+  const priority = Number.isFinite(Number(context.browserLeasePriority))
+    ? Number(context.browserLeasePriority)
+    : (runtimeLane === 'background' ? 10 : 100)
+  const lease = await browserLeaseManager.acquire({
+    ownerId,
+    priority,
+    preemptible: context.browserLeasePreemptible === true,
+    signal: context.signal,
+    onYield: context.onBrowserLeaseYield,
+  })
+  if (context.browserLeaseScope === 'turn') {
+    context.browserLease = lease
+    context.browserLeaseOwnedByTurn = true
+    return { lease, releaseAfterTool: false }
+  }
+  return { lease, releaseAfterTool: true }
 }
 
 // Built-in Chrome is intentionally lazy: merely opening a tool catalog must
@@ -957,10 +1006,21 @@ async function activePageRequiresUser(connection) {
   return resultContainsProtectedLogin(result)
 }
 
-export async function executeBuiltInChromeTool(remoteName, args = {}, context = {}) {
-  const name = String(remoteName || '')
-  if (!isBuiltInBrowserToolAllowed(name)) {
-    return JSON.stringify({ ok: false, source: 'mcp', server_id: BUILTIN_CHROME_DEVTOOLS_ID, remote_tool: name, error: `Chrome browser tool "${name}" is not allowed` }, null, 2)
+async function executeBuiltInChromeToolWithLease(name, args = {}, context = {}) {
+  if (name === 'browser_click'
+      && context.browserDownloadJobId
+      && typeof context.hasNativeDownloadStarted === 'function'
+      && context.hasNativeDownloadStarted()) {
+    return JSON.stringify({
+      ok: true,
+      source: 'mcp',
+      server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+      remote_tool: name,
+      stopped: true,
+      code: 'NATIVE_DOWNLOAD_ALREADY_STARTED',
+      job_id: context.browserDownloadJobId,
+      message: 'A native download is already bound to this background job; the duplicate click was skipped.',
+    }, null, 2)
   }
   if (BROWSER_DISPLAY_MODE_REQUIRED_ACTIONS.has(name) && !browserDisplayModeForContext(context)) {
     return browserDisplayModeRequiredResult(name)
@@ -1013,6 +1073,27 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
       let finalResult = { content: [] }
       let browserFindResult = null
       const bridge = chromeBridgeForDeps(context.mcpDeps || {})
+      const downloadSettleMs = name === 'browser_click'
+        ? browserDownloadClickSettleMs(safeArgs, context)
+        : 0
+      const expectsDownload = downloadSettleMs > 0
+      let knownDownloadIds = []
+      if (expectsDownload && typeof bridge?.getDownloads === 'function') {
+        try { knownDownloadIds = browserDownloadIds(await bridge.getDownloads()) } catch {}
+      }
+      if (context.currentTargetId && typeof bridge?.setDownloadNotificationContext === 'function') {
+        try {
+          await bridge.setDownloadNotificationContext({
+            targetId: context.currentTargetId,
+            channel: context.currentChannel || 'AUTO',
+            externalPartyId: context.currentExternalPartyId || null,
+            voiceReply: context.voiceReply === true,
+            jobId: context.browserDownloadJobId || null,
+            runtimeLane: context.runtimeLane || null,
+            taskType: context.taskType || null,
+          })
+        } catch {}
+      }
       const tracksPageChange = ['browser_click', 'browser_navigate_back', 'browser_navigate_forward'].includes(name)
       const beforeActionTarget = tracksPageChange && typeof bridge?.getTarget === 'function'
         ? await bridge.getTarget()
@@ -1178,6 +1259,33 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
         combined.__bailongmaScreenshot = persistChromeScreenshot(combined)
         if (!combined.__bailongmaScreenshot?.image_path) combined.isError = true
       }
+      if (expectsDownload && typeof bridge?.waitForDownloadChange === 'function') {
+        try {
+          await bridge.waitForDownloadChange({
+            knownIds: knownDownloadIds,
+            timeoutMs: downloadSettleMs,
+          })
+        } catch {}
+      }
+      if (typeof bridge?.getDownloads === 'function') {
+        try {
+          const downloadSnapshot = await bridge.getDownloads()
+          const hasDownloadState = (
+            (Array.isArray(downloadSnapshot?.active) && downloadSnapshot.active.length > 0)
+            || (Array.isArray(downloadSnapshot?.recent) && downloadSnapshot.recent.length > 0)
+          )
+          if (hasDownloadState) {
+            combined.structuredContent = {
+              ...(combined.structuredContent || {}),
+              browser_downloads: downloadSnapshot,
+            }
+            combined.content.push({
+              type: 'text',
+              text: `## Automatic download state\n${formatBrowserDownloadSnapshot(downloadSnapshot)}`,
+            })
+          }
+        } catch {}
+      }
       if (combined.__bailongmaClosurePerformed === true) {
         const bridge = chromeBridgeForDeps(context.mcpDeps || {})
         await bridge?.closePage?.()
@@ -1219,6 +1327,29 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
     })
   } catch (error) {
     return failureResult(error)
+  }
+}
+
+export async function executeBuiltInChromeTool(remoteName, args = {}, context = {}) {
+  const name = String(remoteName || '')
+  if (!isBuiltInBrowserToolAllowed(name)) {
+    return JSON.stringify({ ok: false, source: 'mcp', server_id: BUILTIN_CHROME_DEVTOOLS_ID, remote_tool: name, error: `Chrome browser tool "${name}" is not allowed` }, null, 2)
+  }
+  let leaseState = null
+  try {
+    leaseState = await acquireBrowserLeaseForTool(context)
+    return await executeBuiltInChromeToolWithLease(name, args, context)
+  } catch (error) {
+    return JSON.stringify({
+      ok: false,
+      source: 'mcp',
+      server_id: BUILTIN_CHROME_DEVTOOLS_ID,
+      remote_tool: name,
+      code: error?.name === 'AbortError' ? 'BROWSER_LEASE_ABORTED' : 'BROWSER_LEASE_FAILED',
+      error: error?.message || String(error),
+    }, null, 2)
+  } finally {
+    if (leaseState?.releaseAfterTool) leaseState.lease.release('browser tool completed')
   }
 }
 
@@ -1296,5 +1427,8 @@ export const __internal = {
   validateBuiltInChromeArgs,
   browserDisplayModeForContext,
   browserDisplayModeRequiredResult,
+  browserClickMayStartDownload,
+  browserDownloadClickSettleMs,
+  browserDownloadIds,
   BROWSER_DISPLAY_MODE_REQUIRED_ACTIONS,
 }

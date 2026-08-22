@@ -11,6 +11,7 @@ import {
 } from '../mcp/browser-display.js'
 import { explicitlyKeepsBrowserOpen } from './browser-intent-guards.js'
 import { filterStrictEvaluationTools } from './strict-evaluation.js'
+import { isBrowserDownloadTaskIntent } from '../capabilities/capability-registry.js'
 
 const META_QUESTION_RE = /(?:你(?:有|会|能).{0,18}(?:工具|能力)|(?:多少|哪些|什么).{0,12}(?:工具|命令|能力)|工具.{0,12}(?:多少|哪些|什么)|怎么(?:调用|使用).{0,12}(?:工具|命令))/i
 const BROWSER_NAVIGATION_URL_RE = /(?:https?:\/\/|www\.|(?:[\w-]+\.)+(?:com|cn|org|net|io)\b)/i
@@ -664,6 +665,18 @@ const CONTRACTS = [
     match: isSystemBrowserRequest,
   },
   {
+    id: 'browser_download_task',
+    label: '启动后台浏览器下载任务',
+    tools: ['start_browser_download_task'],
+    match: text => isBrowserDownloadTaskIntent(text),
+    resolve: () => ({
+      directBrowserAction: true,
+      restrictTools: true,
+      runtimeOwnedReply: true,
+      fixedReply: '好的，我去下载一下。',
+    }),
+  },
+  {
     id: 'browser_open_in_display_mode',
     label: '使用指定的白龙马浏览器打开网页',
     // Navigation already runs through the display mode selected
@@ -1120,6 +1133,7 @@ export function actionContractCompletionIssue(contract, text = '', options = {})
 }
 
 export function verifiedActionContractReply(contract, evidence = {}, options = {}) {
+  if (contract?.id === 'browser_download_task') return String(contract.fixedReply || '好的，我去下载一下。')
   if (contract?.id === 'browser_close') return String(contract?.fixedReply || '')
   if (contract?.id === 'browser_screenshot') return '截图已经生成，但图片还没有成功发送。'
   if (contract?.id === 'browser_page_find') {

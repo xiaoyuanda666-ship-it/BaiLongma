@@ -26,6 +26,7 @@ import { PRIMARY_USER_ID, formatPresenceForPrompt } from '../identity.js'
 import { formatTerminalStreamContext } from '../terminal-stream.js'
 import { sceneStore } from '../scene/scene-store.js'
 import { getAIVideoPanelState } from '../capabilities/tools/media.js'
+import { formatBrowserDownloadContext } from '../browser-download-context.js'
 import {
   formatPrefetchedItems,
   formatSceneManifest,
@@ -89,6 +90,7 @@ export function buildSupplementalInformationContext({
     presence: formatPresenceForPrompt(userId),
     runtime: runtimeInformation.contextText || '',
     terminal: formatTerminalStreamContext(),
+    browserDownloads: formatBrowserDownloadContext(),
     prefetch: formatPrefetchedItems(information.prefetchedItems || []),
     uiSignals: information.uiSignalSummary || '',
     subscriptions: information.informationContextText || information.subscribedInformation?.contextText || '',

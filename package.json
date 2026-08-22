@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.124",
+  "version": "2.2.129",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -85,7 +85,8 @@
     "test:linux-build": "node ./scripts/test-linux-build.mjs",
     "test:update-publish": "node ./scripts/test-macos-updater-config.mjs && node ./scripts/test-publish-updates.mjs",
     "test:native-deps": "node ./scripts/test-native-dependency-versions.mjs",
-    "test:browser-core": "node ./src/test-web-url-policy.js && node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs && node ./src/test-browser-display.js && node ./src/test-browser-agent-integration.js && node ./src/test-browser-challenge-guard.js && node ./src/test-web-read.js && node ./src/test-web-search.js",
+    "test:browser-core": "node ./src/test-web-url-policy.js && node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs && node ./electron/test-browser-embed-host.cjs && node ./src/test-background-job-manager.js && node ./src/test-browser-lease.js && node ./src/test-browser-download-task-runner.js && node ./src/test-browser-download-context.js && node ./src/test-browser-download-events.js && node ./src/test-browser-display.js && node ./src/test-browser-agent-integration.js && node ./src/test-browser-challenge-guard.js && node ./src/test-web-read.js && node ./src/test-web-search.js",
+    "test:background-browser-download": "node ./src/test-background-job-manager.js && node ./src/test-browser-lease.js && node ./src/test-browser-download-task-runner.js && node ./src/test-browser-download-context.js && node ./src/test-browser-download-events.js && node ./src/test-action-contract.js && node ./src/test-browser-agent-integration.js",
     "test:network-audit": "node ./electron/test-network-audit-utils.cjs && node ./electron/test-network-diagnostics.cjs && node ./scripts/test-compare-network-captures.mjs",
     "test:network-audit:real": "electron ./electron/test-network-diagnostics-real.cjs",
     "network-audit:compare": "node ./scripts/compare-network-captures.mjs",

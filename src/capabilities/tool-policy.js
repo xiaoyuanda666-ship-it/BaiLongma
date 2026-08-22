@@ -2,6 +2,7 @@ import { config } from '../config.js'
 import { getMcpToolMetadata, isMcpTool } from '../mcp/client-manager.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
 import { isSystemBrowserRequest } from '../mcp/browser-display.js'
+import { isBrowserDownloadTaskIntent } from './capability-registry.js'
 import {
   explicitlyKeepsBrowserOpen,
   isLocalFileToolCallBlocked,
@@ -81,6 +82,8 @@ const TOOL_RISK = {
   browser_close: 'medium',
   browser_clear_data: 'high',
   browser_set_display_mode: 'low',
+  start_browser_download_task: 'medium',
+  browser_download_manage: 'high',
   system_browser_open: 'medium',
   system_music: 'medium',
   speak: 'high',
@@ -121,6 +124,26 @@ const STARTUP_SELF_CHECK_BROWSER_TOOLS = new Set([
   'browser_close',
 ])
 const SYSTEM_MUSIC_ACTION_INTENT_RE = /(?:apple\s*music|music\.app|系统音乐|音乐播放器|当前歌曲|这首歌|播放|暂停|继续|恢复|停止|上一首|下一首|切歌|换一首|play|pause|resume|stop|next|previous)/i
+const DOWNLOAD_CONTROL_INTENT = Object.freeze({
+  pause: /(?:暂停|先停一?下|停一停).{0,10}(?:下载|这个下载)|(?:下载|这个下载).{0,10}(?:暂停|先停一?下|停一停)|(?:pause).{0,10}(?:download)|^(?:暂停|pause)$/i,
+  resume: /(?:继续|恢复|续传).{0,10}(?:下载|这个下载)|(?:下载|这个下载).{0,10}(?:继续|恢复|续传)|(?:resume|continue).{0,10}(?:download)|^(?:继续|恢复|续传|resume|continue)$/i,
+  cancel: /(?:取消|停止|终止).{0,10}(?:下载|这个下载)|(?:下载|这个下载).{0,10}(?:取消|停止|终止)|(?:别|不要)(?:再)?下(?:载)?了|不要(?:再)?下载|不用下了|(?:cancel|stop).{0,10}(?:download)|^(?:取消|停止|cancel|stop)$/i,
+  retry: /(?:重试|再下(?:载)?一?次).{0,10}(?:下载|这个下载)|重新下载|(?:下载|这个下载).{0,10}(?:重试|重新|再来一次)|(?:retry).{0,10}(?:download)|(?:download).{0,10}(?:again)|^(?:重试|重新下载|retry)$/i,
+})
+const DOWNLOAD_CONTROL_NEGATION = Object.freeze({
+  pause: /(?:不要|别|无需|不必).{0,6}(?:暂停|停一停)|(?:don't|do not).{0,8}pause/i,
+  resume: /(?:不要|别|无需|不必).{0,6}(?:继续|恢复|续传)|(?:don't|do not).{0,8}(?:resume|continue)/i,
+  cancel: /(?:不要|别|无需|不必).{0,6}(?:取消|停止|终止)(?:下载)?|(?:don't|do not).{0,8}(?:cancel|stop)/i,
+  retry: /(?:不要|别|无需|不必).{0,6}(?:重试|重新下载|再下)|(?:don't|do not).{0,8}(?:retry|download again)/i,
+})
+
+export function isExplicitBrowserDownloadControlRequest(action, text = '') {
+  const normalizedAction = String(action || '').trim().toLowerCase()
+  const value = String(text || '').trim()
+  const intent = DOWNLOAD_CONTROL_INTENT[normalizedAction]
+  if (!intent || !value || DOWNLOAD_CONTROL_NEGATION[normalizedAction]?.test(value)) return false
+  return intent.test(value)
+}
 
 // Audit risk and autonomous authority are related but not identical. Several
 // read-only or reversible capabilities (for example web reads and speech) are
@@ -153,6 +176,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'system_browser_open',
   'system_music',
   'browser_clear_data',
+  'browser_download_manage',
   ...BROWSER_MUTATING_TOOLS,
 ])
 export function classifyTool(name) {
@@ -230,6 +254,26 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
       allowed: false,
       risk,
       reason: 'clearing persistent browser data requires an explicit current user request naming Bailongma/Agent built-in browser data',
+    }
+  }
+  if (
+    name === 'start_browser_download_task'
+    && !isBrowserDownloadTaskIntent(currentUserMessage)
+  ) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'starting a background browser download requires an explicit new download request in the current user message',
+    }
+  }
+  if (
+    name === 'browser_download_manage'
+    && !isExplicitBrowserDownloadControlRequest(args.action, currentUserMessage)
+  ) {
+    return {
+      allowed: false,
+      risk,
+      reason: 'pausing, resuming, cancelling, or retrying a browser download requires that exact action in the current user request',
     }
   }
   const startupBrowserCheck = context.autonomous
