@@ -81,6 +81,8 @@ export function releaseExpiredInformationLeases(now = new Date().toISOString(), 
 }
 
 export function listInformationDeliveries({
+  eventId = '',
+  routeId = '',
   subscriberType = '',
   subscriberId = '',
   state = '',
@@ -88,6 +90,8 @@ export function listInformationDeliveries({
 } = {}, { db = getDB() } = {}) {
   const clauses = []
   const args = []
+  if (eventId) clauses.push('event_id = ?'), args.push(String(eventId))
+  if (routeId) clauses.push('route_id = ?'), args.push(String(routeId))
   if (subscriberType) clauses.push('subscriber_type = ?'), args.push(String(subscriberType))
   if (subscriberId) clauses.push('subscriber_id = ?'), args.push(String(subscriberId))
   if (state) clauses.push('state = ?'), args.push(String(state))

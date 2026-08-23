@@ -265,7 +265,7 @@ function attachSceneProtocol() {
       .replace(/[^a-z0-9_-]+/g, '_')
       .replace(/^_+|_+$/g, '') || 'unknown'
     const passiveUiObservation = SCENE_PASSIVE_INTENTS.has(name)
-    shadowPublishInformationEvent({
+    const shadowInformation = shadowPublishInformationEvent({
       topic: `ui.${passiveUiObservation ? 'observation' : 'intent'}.${shadowTopicSuffix}`,
       source: { id: 'ui:scene-protocol', kind: 'event' },
       subject: { surface },
@@ -282,6 +282,9 @@ function attachSceneProtocol() {
       correlationId: String(surface),
       metadata: { legacyUiSignalId: id },
     })
+    const shadowMeta = shadowInformation.event?.id
+      ? { informationEventId: shadowInformation.event.id }
+      : {}
 
     if (name === 'select' && surface.startsWith('security-confirm-')) {
       const pending = sceneStore.get(surface)?.data?.pending || {}
@@ -297,21 +300,36 @@ function attachSceneProtocol() {
           'SYSTEM',
           `[security settings updated] User confirmed changes: ${desc}. changed_at=${result.updatedAt || 'not recorded'}\n(Internal context refresh only. Do NOT call send_message.)`,
           'APP_SIGNAL',
-          { queue: 'background', persist: false, silent: true },
+          {
+            queue: 'background',
+            persist: false,
+            silent: true,
+            ...shadowMeta,
+          },
         )
       } else {
         pushMessage(
           'SYSTEM',
           '[security settings change] User cancelled - settings unchanged\n(Internal context refresh only. Do NOT call send_message.)',
           'APP_SIGNAL',
-          { queue: 'background', persist: false, silent: true },
+          {
+            queue: 'background',
+            persist: false,
+            silent: true,
+            ...shadowMeta,
+          },
         )
       }
       return
     }
 
     if (!SCENE_PASSIVE_INTENTS.has(name)) {
-      pushMessage(`UI:${surface}`, `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`, 'APP_SIGNAL')
+      pushMessage(
+        `UI:${surface}`,
+        `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`,
+        'APP_SIGNAL',
+        shadowMeta,
+      )
     }
   })
 

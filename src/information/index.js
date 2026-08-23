@@ -16,6 +16,12 @@ export {
 } from './subscription-matcher.js'
 export { InformationSourceRegistry, informationSourceRegistry } from './source-registry.js'
 export { publishInformationEvent } from './hub.js'
+export { compileInformationContextFrame } from './context-frame.js'
+export {
+  hydrateInformationDeliveryCandidates,
+  loadInformationDeliveryCandidates,
+} from './context-candidates.js'
+export { observeInformationContextShadow } from './context-shadow.js'
 export {
   isInformationShadowEnabled,
   shadowPublishInformationEvent,

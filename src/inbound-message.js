@@ -66,7 +66,8 @@ export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta 
   // Information Core is additive and disabled by default. In shadow mode this
   // records a typed event after the legacy conversation write, but it does not
   // enqueue, wake, inject, consume, or acknowledge anything in the live path.
-  shadowPublishInboundEntry(entry)
+  const shadowInformation = shadowPublishInboundEntry(entry)
+  if (shadowInformation.event?.id) entry.informationEventId = shadowInformation.event.id
 
   return entry
 }

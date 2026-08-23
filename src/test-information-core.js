@@ -28,6 +28,8 @@ try {
   } = await import('./information/subscription-matcher.js')
   const { InformationSourceRegistry } = await import('./information/source-registry.js')
   const { publishInformationEvent } = await import('./information/hub.js')
+  const { loadInformationDeliveryCandidates } = await import('./information/context-candidates.js')
+  const { observeInformationContextShadow } = await import('./information/context-shadow.js')
   const { pushMessage } = await import('./inbound-message.js')
   const { popMessage } = await import('./queue.js')
 
@@ -214,13 +216,19 @@ try {
     clientMessageId: 'shadow-off-message-0001',
   })
   assert.equal(popMessage(), legacyOff)
+  assert.equal(legacyOff.informationEventId, undefined)
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM information_events`).get().count, eventCountBeforeDisabledShadow)
+  assert.deepEqual(observeInformationContextShadow({ triggerEventId: 'not-created' }), {
+    enabled: false,
+    observed: false,
+  })
 
   process.env.BAILONGMA_INFORMATION_SHADOW = '1'
   const legacyOn = pushMessage('ID:shadow-on', 'shadow records but does not drive the turn', 'TUI', {
     clientMessageId: 'shadow-on-message-0001',
   })
   assert.equal(popMessage(), legacyOn)
+  assert.ok(legacyOn.informationEventId, 'shadow event id is attached to the legacy queue entry for correlation')
   const shadowEvent = db.prepare(`
     SELECT * FROM information_events
     WHERE source_id = 'channel:tui' AND dedupe_key = 'client:shadow-on-message-0001'
@@ -235,6 +243,21 @@ try {
   assert.equal(shadowDelivery.state, 'pending')
   assert.equal(shadowDelivery.priority, 100)
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM conversations WHERE from_id = 'ID:shadow-on'`).get().count, 1)
+  const shadowCandidates = loadInformationDeliveryCandidates({
+    eventId: shadowEvent.id,
+    subscriberId: 'agent:primary',
+  }, { db })
+  assert.equal(shadowCandidates.length, 1)
+  const contextObservation = observeInformationContextShadow({
+    triggerEventId: shadowEvent.id,
+    legacyComponents: { runtime: 'legacy runtime context' },
+    now: new Date(),
+  }, { db })
+  assert.equal(contextObservation.observed, true)
+  assert.equal(contextObservation.frame.userInputs.current.event.id, shadowEvent.id)
+  assert.equal(contextObservation.frame.contextText, '')
+  assert.equal(contextObservation.audit.legacyCharsByComponent.runtime, 22)
+  assert.equal(db.prepare(`SELECT state FROM information_deliveries WHERE id = ?`).get(shadowDelivery.id).state, 'pending')
 
   console.log('information core tests passed')
 } finally {

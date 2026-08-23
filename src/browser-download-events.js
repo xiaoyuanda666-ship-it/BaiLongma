@@ -120,7 +120,7 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
 
   const routing = routeFor(event, job)
   try {
-    pushMessageFn('SYSTEM', makeAgentSignal(event, job, normalizedType), 'APP_SIGNAL', {
+    const queued = pushMessageFn('SYSTEM', makeAgentSignal(event, job, normalizedType), 'APP_SIGNAL', {
       queue: 'background',
       priority: 40,
       persist: false,
@@ -133,7 +133,7 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
       backgroundJobId: job.jobId,
       backgroundJobEvent: normalizedType,
     })
-    shadowPublishInformationEvent({
+    const shadowInformation = shadowPublishInformationEvent({
       topic: 'job.state_changed',
       source: { id: 'job:browser-download', kind: 'event' },
       subject: { userId: routing.targetId, jobId: job.jobId, downloadId: String(event.id || job.downloadId || '') },
@@ -156,6 +156,7 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
       correlationId: job.jobId,
       metadata: { legacyAppSignal: true },
     })
+    if (queued && shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
     return true
   } catch (error) {
     jobManager.releaseImportantNotification?.(job.jobId, eventKey)
@@ -198,7 +199,7 @@ export function createBrowserDownloadEventHandler({
     if (signalled.has(key)) return true
 
     const routing = routeFor(event)
-    pushMessageFn('SYSTEM', makeAgentSignal(event, null, importantType), 'APP_SIGNAL', {
+    const queued = pushMessageFn('SYSTEM', makeAgentSignal(event, null, importantType), 'APP_SIGNAL', {
       queue: 'background',
       priority: 40,
       persist: false,
@@ -209,7 +210,7 @@ export function createBrowserDownloadEventHandler({
       browserDownloadId: String(event.id),
       browserDownloadState: String(event.state || 'unknown'),
     })
-    shadowPublishInformationEvent({
+    const shadowInformation = shadowPublishInformationEvent({
       topic: 'job.state_changed',
       source: { id: 'job:browser-download', kind: 'event' },
       subject: { userId: routing.targetId, downloadId: String(event.id) },
@@ -231,6 +232,7 @@ export function createBrowserDownloadEventHandler({
       correlationId: String(event.id),
       metadata: { legacyAppSignal: true },
     })
+    if (queued && shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
     signalled.set(key, nowMs)
     return true
   }

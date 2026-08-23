@@ -384,6 +384,7 @@ src/information/
 ### Phase 1：Information Core，shadow 模式
 
 - shadow publisher 由 `BAILONGMA_INFORMATION_SHADOW=1` 显式开启，默认关闭；开启后也只写入新事件、路由和投递表，不驱动 turn 或 prompt。
+- ContextFrame 先以 measure-only 方式编译：只关联当前 legacy queue entry 与对应 delivery，通过 `information_context_shadow` 和 turn trace metadata 输出不含正文的审计；不 lease、不 ACK，也不送入模型。
 - 新增 envelope、source registry、events/routes/deliveries repositories、matcher 和 delivery lifecycle。
 - 新增 schema migration，不改变现有 prompt 和 scheduler 行为。
 - inbound message、UI、reminder、background job 在执行旧路径的同时 shadow publish；shadow delivery 不驱动 turn。

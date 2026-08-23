@@ -81,6 +81,18 @@ function snapshotMessage(m) {
 
 function sanitizeMeta(meta = {}) {
   const pick = (v, n = 200) => (v == null ? null : String(v).slice(0, n))
+  const count = (value, max = 10_000_000) => {
+    const number = Number(value)
+    return Number.isFinite(number) ? Math.max(0, Math.min(max, number)) : 0
+  }
+  const shadow = meta.informationContextShadow && typeof meta.informationContextShadow === 'object'
+    ? meta.informationContextShadow
+    : null
+  const numericMap = value => Object.fromEntries(
+    Object.entries(value && typeof value === 'object' ? value : {})
+      .slice(0, 30)
+      .map(([key, valueCount]) => [pick(key, 80), count(valueCount)]),
+  )
   return {
     label: pick(meta.label, 60) || 'turn',
     channel: pick(meta.channel, 40),
@@ -91,6 +103,25 @@ function sanitizeMeta(meta = {}) {
     localReply: !!meta.localReply,
     mustReply: !!meta.mustReply,
     outputContract: pick(meta.outputContract, 40),
+    informationContextShadow: shadow
+      ? {
+          frameId: pick(shadow.frameId, 80),
+          triggerEventId: pick(shadow.triggerEventId, 128),
+          subscriberType: pick(shadow.subscriberType, 40),
+          subscriberId: pick(shadow.subscriberId, 160),
+          candidateCount: count(shadow.candidateCount),
+          selectedUserInputCount: count(shadow.selectedUserInputCount),
+          selectedContextCount: count(shadow.selectedContextCount),
+          droppedCount: count(shadow.droppedCount),
+          contextChars: count(shadow.contextChars),
+          maxContextChars: count(shadow.maxContextChars),
+          contextHash: pick(shadow.contextHash, 80),
+          selectedBySemanticKind: numericMap(shadow.selectedBySemanticKind),
+          legacyComponentCount: count(shadow.legacyComponentCount),
+          legacyContextChars: count(shadow.legacyContextChars),
+          legacyCharsByComponent: numericMap(shadow.legacyCharsByComponent),
+        }
+      : null,
     tools: Array.isArray(meta.tools) ? meta.tools.slice(0, 80) : [],
   }
 }

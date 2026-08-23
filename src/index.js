@@ -22,6 +22,7 @@ import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, inse
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
 import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
+import { observeInformationContextShadow } from './information/context-shadow.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -551,7 +552,7 @@ function enqueueDueReminders() {
 
   const runnable = claimRunnableReminderRuns(now, 20)
   for (const run of runnable) {
-    pushMessage('SYSTEM', run.task, 'REMINDER', {
+    const queued = pushMessage('SYSTEM', run.task, 'REMINDER', {
       queue: 'background',
       persist: false,
       runtimeLane: 'l3',
@@ -564,7 +565,7 @@ function enqueueDueReminders() {
       reminderAttempt: run.attempts,
       deliveryPolicy: 'notify',
     })
-    shadowPublishInformationEvent({
+    const shadowInformation = shadowPublishInformationEvent({
       topic: 'schedule.due',
       source: { id: 'scheduler:reminders', kind: 'event' },
       subject: { userId: run.user_id, reminderId: run.reminder_id, runId: run.id },
@@ -587,6 +588,7 @@ function enqueueDueReminders() {
       correlationId: `reminder:${run.reminder_id}`,
       metadata: { runtimeLane: 'l3' },
     })
+    if (shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
   }
 }
 
@@ -1150,6 +1152,16 @@ async function runTurn(input, label, msg = null) {
       runtimeInformation: runtimeInjection,
       userId: PRIMARY_USER_ID,
     })
+    const contextShadow = observeInformationContextShadow({
+      triggerEventId: msg?.informationEventId || '',
+      legacyComponents: supplementalInformation.components,
+      now: new Date(),
+    })
+    if (contextShadow.observed) {
+      // Measure-only: no delivery is leased/ACKed and frame.contextText is not
+      // passed to the model until a later, separately gated migration phase.
+      emitEvent('information_context_shadow', contextShadow.audit)
+    }
     const extraContextJoined = supplementalInformation.contextText
     const skillSelection = selectSkillsForMessage(semanticInput || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
@@ -1332,6 +1344,7 @@ async function runTurn(input, label, msg = null) {
     toolContext.browserLeasePriority = priority
     toolContext.browserLeaseScope = 'turn'
     toolContext.runtimeLane = runtimeLane
+    toolContext.informationContextShadow = contextShadow.observed ? contextShadow.audit : null
     // Intent routing remains model-led.  The narrow action contract below is
     // not a general intent classifier: it is only an execution guard for a
     // high-confidence side-effect request.  It prevents a text-only promise

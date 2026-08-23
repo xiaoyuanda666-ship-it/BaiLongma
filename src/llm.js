@@ -1032,6 +1032,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     localReply,
     mustReply,
     outputContract: toolContext?.outputContract || (mustReply ? 'user_reply' : 'internal'),
+    informationContextShadow: toolContext?.informationContextShadow || null,
     tools,
   })
 
