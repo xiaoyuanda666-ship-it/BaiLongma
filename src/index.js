@@ -21,6 +21,7 @@ import { runKnowledgeInjector } from './knowledge/injector.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
+import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -562,6 +563,29 @@ function enqueueDueReminders() {
       reminderDueAt: run.due_at,
       reminderAttempt: run.attempts,
       deliveryPolicy: 'notify',
+    })
+    shadowPublishInformationEvent({
+      topic: 'schedule.due',
+      source: { id: 'scheduler:reminders', kind: 'event' },
+      subject: { userId: run.user_id, reminderId: run.reminder_id, runId: run.id },
+      authorship: 'system',
+      semanticKind: 'runtime_event',
+      payload: {
+        reminderId: run.reminder_id,
+        runId: run.id,
+        dueAt: run.due_at,
+        attempt: run.attempts,
+        deliveryPolicy: 'notify',
+      },
+      payloadRef: { table: 'reminder_runs', id: run.id },
+      occurredAt: run.due_at || now,
+      priority: 70,
+      sensitivity: 'private',
+      trust: 'authoritative',
+      orderingKey: `reminder:${run.reminder_id}`,
+      dedupeKey: `reminder-run:${run.id}`,
+      correlationId: `reminder:${run.reminder_id}`,
+      metadata: { runtimeLane: 'l3' },
     })
   }
 }

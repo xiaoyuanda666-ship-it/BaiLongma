@@ -7,6 +7,7 @@ import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-serv
 import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
 import { getConfig, insertUISignal } from './db.js'
+import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
 import { emitEvent, setStickyEvent } from './events.js'
 import { getLanAccessToken, getNetworkConfig, getSecurity, getVoiceRuntimeConfig, setSecurity } from './config.js'
 import { ensureLanTlsCertificates } from './lan-access.js'
@@ -258,6 +259,29 @@ function attachSceneProtocol() {
     const data = msg.data || {}
     const id = insertUISignal({ type: `scene.intent.${name}`, target: msg.surface || null, payload: data, ts: msg.ts || Date.now() })
     emitEvent('ui_signal', { id, type: name, target: msg.surface, payload: data })
+    const shadowTopicSuffix = String(name || 'unknown')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'unknown'
+    const passiveUiObservation = SCENE_PASSIVE_INTENTS.has(name)
+    shadowPublishInformationEvent({
+      topic: `ui.${passiveUiObservation ? 'observation' : 'intent'}.${shadowTopicSuffix}`,
+      source: { id: 'ui:scene-protocol', kind: 'event' },
+      subject: { surface },
+      authorship: passiveUiObservation ? 'system' : 'user',
+      semanticKind: 'ui_signal',
+      payload: { name, data },
+      occurredAt: msg.ts || Date.now(),
+      expiresAt: new Date(Date.now() + (passiveUiObservation ? 5 * 60_000 : 24 * 60 * 60_000)),
+      priority: passiveUiObservation ? 30 : 60,
+      sensitivity: 'private',
+      trust: 'observed',
+      orderingKey: `ui:${surface}`,
+      dedupeKey: `ui-signal:${id}`,
+      correlationId: String(surface),
+      metadata: { legacyUiSignalId: id },
+    })
 
     if (name === 'select' && surface.startsWith('security-confirm-')) {
       const pending = sceneStore.get(surface)?.data?.pending || {}

@@ -383,6 +383,7 @@ src/information/
 
 ### Phase 1：Information Core，shadow 模式
 
+- shadow publisher 由 `BAILONGMA_INFORMATION_SHADOW=1` 显式开启，默认关闭；开启后也只写入新事件、路由和投递表，不驱动 turn 或 prompt。
 - 新增 envelope、source registry、events/routes/deliveries repositories、matcher 和 delivery lifecycle。
 - 新增 schema migration，不改变现有 prompt 和 scheduler 行为。
 - inbound message、UI、reminder、background job 在执行旧路径的同时 shadow publish；shadow delivery 不驱动 turn。

@@ -2,6 +2,7 @@ import { nowTimestamp } from './time.js'
 import { normalizeConversationPartyId, upsertEntity, insertConversation } from './db.js'
 import { resolveCanonicalUserId } from './identity.js'
 import { enqueueMessage } from './queue.js'
+import { shadowPublishInboundEntry } from './information/shadow-publisher.js'
 
 const PRIORITY = {
   user: 100,
@@ -61,6 +62,11 @@ export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta 
     queueName,
     ...meta,
   }
+
+  // Information Core is additive and disabled by default. In shadow mode this
+  // records a typed event after the legacy conversation write, but it does not
+  // enqueue, wake, inject, consume, or acknowledge anything in the live path.
+  shadowPublishInboundEntry(entry)
 
   return entry
 }

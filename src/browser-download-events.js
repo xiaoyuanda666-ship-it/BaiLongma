@@ -1,4 +1,5 @@
 import { pushMessage } from './inbound-message.js'
+import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
 import { emitEvent } from './events.js'
 import { PRIMARY_USER_ID, isVoiceChannel } from './identity.js'
 import { getBackgroundJobManager } from './background-job-manager.js'
@@ -132,6 +133,29 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
       backgroundJobId: job.jobId,
       backgroundJobEvent: normalizedType,
     })
+    shadowPublishInformationEvent({
+      topic: 'job.state_changed',
+      source: { id: 'job:browser-download', kind: 'event' },
+      subject: { userId: routing.targetId, jobId: job.jobId, downloadId: String(event.id || job.downloadId || '') },
+      authorship: 'system',
+      semanticKind: 'runtime_event',
+      payload: {
+        jobId: job.jobId,
+        downloadId: String(event.id || job.downloadId || ''),
+        state: String(event.state || job.state || 'unknown'),
+        importantType: normalizedType,
+        channel: routing.channel,
+      },
+      occurredAt: event.timestamp || Date.now(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+      priority: 40,
+      sensitivity: 'private',
+      trust: 'verified',
+      orderingKey: `job:${job.jobId}`,
+      dedupeKey: `job-event:${job.jobId}:${eventKey}`,
+      correlationId: job.jobId,
+      metadata: { legacyAppSignal: true },
+    })
     return true
   } catch (error) {
     jobManager.releaseImportantNotification?.(job.jobId, eventKey)
@@ -184,6 +208,28 @@ export function createBrowserDownloadEventHandler({
       notificationVoiceReply: routing.voiceReply || isVoiceChannel(routing.channel),
       browserDownloadId: String(event.id),
       browserDownloadState: String(event.state || 'unknown'),
+    })
+    shadowPublishInformationEvent({
+      topic: 'job.state_changed',
+      source: { id: 'job:browser-download', kind: 'event' },
+      subject: { userId: routing.targetId, downloadId: String(event.id) },
+      authorship: 'system',
+      semanticKind: 'runtime_event',
+      payload: {
+        downloadId: String(event.id),
+        state: String(event.state || 'unknown'),
+        importantType,
+        channel: routing.channel,
+      },
+      occurredAt: event.timestamp || Date.now(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+      priority: 40,
+      sensitivity: 'private',
+      trust: 'verified',
+      orderingKey: `download:${event.id}`,
+      dedupeKey: `download-event:${key}`,
+      correlationId: String(event.id),
+      metadata: { legacyAppSignal: true },
     })
     signalled.set(key, nowMs)
     return true

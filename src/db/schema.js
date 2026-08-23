@@ -398,6 +398,95 @@ export function initializeSchema(db) {
   `)
   try { db.exec(`ALTER TABLE information_subscriptions ADD COLUMN instruction TEXT NOT NULL DEFAULT ''`) } catch {}
 
+  // Unified Information Core (v2) is additive and initially runs in shadow
+  // mode. The legacy information_subscriptions table above remains untouched
+  // until routing and prompt parity have been proven in production.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS information_events (
+      id                  TEXT PRIMARY KEY,
+      topic               TEXT NOT NULL,
+      schema_version      INTEGER NOT NULL DEFAULT 1,
+      source_id           TEXT NOT NULL,
+      source_kind         TEXT NOT NULL,
+      subject_json        TEXT NOT NULL DEFAULT '{}',
+      authorship          TEXT NOT NULL,
+      semantic_kind       TEXT NOT NULL,
+      payload_json        TEXT NOT NULL DEFAULT '{}',
+      payload_ref_json    TEXT NOT NULL DEFAULT '{}',
+      occurred_at         TEXT NOT NULL,
+      observed_at         TEXT NOT NULL,
+      expires_at          TEXT,
+      priority            INTEGER NOT NULL DEFAULT 50,
+      sensitivity         TEXT NOT NULL DEFAULT 'normal',
+      trust               TEXT NOT NULL DEFAULT 'observed',
+      ordering_key        TEXT NOT NULL DEFAULT '',
+      dedupe_key          TEXT NOT NULL DEFAULT '',
+      correlation_id      TEXT NOT NULL DEFAULT '',
+      causation_id        TEXT NOT NULL DEFAULT '',
+      trace_id            TEXT NOT NULL DEFAULT '',
+      metadata_json       TEXT NOT NULL DEFAULT '{}',
+      created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_information_events_dedupe
+      ON information_events(source_id, dedupe_key)
+      WHERE dedupe_key <> '';
+    CREATE INDEX IF NOT EXISTS idx_information_events_topic_time
+      ON information_events(topic, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_information_events_ordering_time
+      ON information_events(ordering_key, occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_information_events_expiry
+      ON information_events(expires_at);
+
+    CREATE TABLE IF NOT EXISTS information_routes (
+      id                  TEXT PRIMARY KEY,
+      subscriber_type     TEXT NOT NULL CHECK(subscriber_type IN ('agent', 'user', 'service')),
+      subscriber_id       TEXT NOT NULL,
+      topic_pattern       TEXT NOT NULL,
+      scope_json          TEXT NOT NULL DEFAULT '{}',
+      filter_json         TEXT NOT NULL DEFAULT '{}',
+      activation_json     TEXT NOT NULL DEFAULT '{}',
+      sampling_json       TEXT NOT NULL DEFAULT '{}',
+      wake_json           TEXT NOT NULL DEFAULT '{}',
+      delivery_json       TEXT NOT NULL DEFAULT '{}',
+      context_json        TEXT NOT NULL DEFAULT '{}',
+      reason              TEXT NOT NULL DEFAULT '',
+      created_by_json     TEXT NOT NULL DEFAULT '{}',
+      enabled             INTEGER NOT NULL DEFAULT 1,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_information_routes_subscriber
+      ON information_routes(enabled, subscriber_type, subscriber_id);
+    CREATE INDEX IF NOT EXISTS idx_information_routes_topic
+      ON information_routes(enabled, topic_pattern);
+
+    CREATE TABLE IF NOT EXISTS information_deliveries (
+      id                  TEXT PRIMARY KEY,
+      event_id            TEXT NOT NULL,
+      route_id            TEXT NOT NULL,
+      subscriber_type     TEXT NOT NULL,
+      subscriber_id       TEXT NOT NULL,
+      state               TEXT NOT NULL DEFAULT 'pending'
+                            CHECK(state IN ('pending', 'leased', 'acked', 'dead_letter')),
+      priority            INTEGER NOT NULL DEFAULT 50,
+      available_at        TEXT NOT NULL,
+      lease_id            TEXT,
+      lease_expires_at    TEXT,
+      attempts            INTEGER NOT NULL DEFAULT 0,
+      last_error          TEXT NOT NULL DEFAULT '',
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      acked_at            TEXT,
+      UNIQUE(event_id, route_id, subscriber_type, subscriber_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_information_deliveries_pending
+      ON information_deliveries(state, available_at, priority DESC, created_at);
+    CREATE INDEX IF NOT EXISTS idx_information_deliveries_subscriber
+      ON information_deliveries(subscriber_type, subscriber_id, state, available_at);
+    CREATE INDEX IF NOT EXISTS idx_information_deliveries_lease
+      ON information_deliveries(lease_id, state);
+  `)
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS media_history (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
