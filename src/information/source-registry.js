@@ -13,13 +13,18 @@ function normalizeSource(source = {}) {
   if (kind !== 'event' && typeof source.collect !== 'function') {
     throw new Error(`information source "${id}" must define collect(request)`)
   }
+  const rankValue = Number(source.rank)
   return Object.freeze({
     id,
     kind,
     topics,
+    domain: String(source.domain || 'general').trim().toLowerCase(),
+    description: String(source.description || '').trim(),
     sensitivity: String(source.sensitivity || 'normal').trim(),
     timeoutMs: Math.max(50, Math.min(30_000, Number(source.timeoutMs) || 2_000)),
     maxItems: Math.max(1, Math.min(100, Number(source.maxItems) || 20)),
+    maxChars: Math.max(128, Math.min(100_000, Number(source.maxChars) || 4_000)),
+    rank: Number.isFinite(rankValue) ? Math.max(0, Math.min(100, Math.round(rankValue))) : 50,
     match: typeof source.match === 'function' ? source.match : () => true,
     collect: typeof source.collect === 'function' ? source.collect : null,
     normalize: typeof source.normalize === 'function' ? source.normalize : null,
@@ -59,11 +64,25 @@ export class InformationSourceRegistry {
     if (source.kind === 'event') throw new Error(`event source "${id}" cannot be collected`)
 
     let timer
+    let abortHandler = null
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error(`information source "${id}" timed out`)), source.timeoutMs)
     })
+    const abort = request.signal
+      ? new Promise((_, reject) => {
+          abortHandler = () => {
+            const error = new Error(String(request.signal.reason || 'information source collection aborted'))
+            error.name = 'AbortError'
+            reject(error)
+          }
+          if (request.signal.aborted) abortHandler()
+          else request.signal.addEventListener('abort', abortHandler, { once: true })
+        })
+      : null
     try {
-      const raw = await Promise.race([Promise.resolve(source.collect(request)), timeout])
+      const pending = [Promise.resolve().then(() => source.collect(request)), timeout]
+      if (abort) pending.push(abort)
+      const raw = await Promise.race(pending)
       const values = Array.isArray(raw) ? raw : (raw == null ? [] : [raw])
       return values.slice(0, source.maxItems).map((value, index) => {
         const normalized = source.normalize ? source.normalize(value, request) : value
@@ -88,6 +107,7 @@ export class InformationSourceRegistry {
       })
     } finally {
       clearTimeout(timer)
+      if (abortHandler) request.signal?.removeEventListener('abort', abortHandler)
     }
   }
 }

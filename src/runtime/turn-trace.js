@@ -123,6 +123,12 @@ function sanitizeMeta(meta = {}) {
           legacyComponentCount: count(informationContext.legacyComponentCount),
           legacyContextChars: count(informationContext.legacyContextChars),
           legacyCharsByComponent: numericMap(informationContext.legacyCharsByComponent),
+          sourceCount: count(informationContext.sourceCount),
+          succeededSourceCount: count(informationContext.succeededSourceCount),
+          failedSourceCount: count(informationContext.failedSourceCount),
+          itemCount: count(informationContext.itemCount),
+          sourceItemsById: numericMap(informationContext.sourceItemsById),
+          sourceLatencyMsById: numericMap(informationContext.sourceLatencyMsById),
         }
       : null,
     tools: Array.isArray(meta.tools) ? meta.tools.slice(0, 80) : [],

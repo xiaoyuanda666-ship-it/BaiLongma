@@ -17,11 +17,13 @@ import { startConsolidationLoop } from './memory/consolidation-loop.js'
 import { recordSelfEvolutionFromMemories } from './memory/self-evolution.js'
 import { runRuntimeInjector } from './context/runtime-injector.js'
 import { selectContextSections } from './context/section-gate.js'
+import { buildSystemEnvironmentContext } from './context/system-environment-context.js'
 import { runKnowledgeInjector } from './knowledge/injector.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
 import { observeInformationContextShadow, buildInformationContextAudit } from './information/context-shadow.js'
+import { observeInformationSourceShadow } from './information/source-shadow.js'
 import {
   compileInformationActivationFrame,
   leaseAccumulatedInformationContext,
@@ -49,12 +51,11 @@ import { startMcpClients } from './mcp/client-manager.js'
 import { resumePendingVideoJobs } from './capabilities/tools/media.js'
 import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
-import { getFeishuStatusBlock } from './social/feishu-ws.js'
-import { collectSystemInfo, getSystemInfoBlock, getBatteryBlock, getDesktopPath } from './system-info.js'
-import { collectDesktopInfo, getDesktopBlock } from './desktop-scanner.js'
-import { collectInstalledSoftware, getInstalledSoftwareBlock } from './installed-software-scanner.js'
+import { collectSystemInfo, getBatteryBlock, getDesktopPath } from './system-info.js'
+import { collectDesktopInfo } from './desktop-scanner.js'
+import { collectInstalledSoftware } from './installed-software-scanner.js'
 import { collectLocalResources } from './local-resources-scanner.js'
-import { collectGeoWeather, getCountryCode, getGeoWeatherBlock } from './geo-weather.js'
+import { collectGeoWeather, getCountryCode } from './geo-weather.js'
 import { collectTrending } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationDiscoveryContext } from './agents/registry.js'
 import { refreshSkills, selectSkillsForMessage, formatSkillsForContext } from './skills/registry.js'
@@ -75,7 +76,6 @@ import { buildStrictEvaluationContext, resolveStrictEvaluationMode } from './run
 import { filterMemoriesForActionContract, resolveActionContractForTurn } from './runtime/action-contract.js'
 import { withStartupTimeout } from './runtime/startup-timeout.js'
 import { refreshUserProfile } from './profile/infer.js'
-import { isSoftwareInstallRequest } from './software-install-intent.js'
 import { getWeatherCardProps, isWeatherQuery } from './weather.js'
 import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
@@ -707,26 +707,6 @@ function detectChannelSwitch(msg, conversationWindow) {
   return false
 }
 
-// Build systemEnv on demand: inject each block based on keywords in the message
-function buildSystemEnv(msg) {
-  const text = (typeof msg === 'string' ? msg : msg?.content || '').toLowerCase()
-  const blocks = []
-  // 英文缩写用 \b 避免误匹配子串（os→close, ip→script, ram→program）
-  if (/系统信息|操作系统|电脑|主机名|内存|运行内存|hostname|时区|用户名|\bos\b|\bcpu\b|\bram\b|\bip\b|\bip地址\b|locale/.test(text))
-    blocks.push(getSystemInfoBlock())
-  if (/桌面|快捷方式|桌面文件|桌面应用|已安装|浏览器|启动程序/.test(text))
-    blocks.push(getDesktopBlock())
-  if (isSoftwareInstallRequest(text) || /软件|应用|程序|客户端|工具|装了什么|用了什么|代理|科学上网|翻墙|\bvpn\b|\bproxy\b|clash|mihomo|v2ray|xray|sing-?box|shadowrocket|shadowsocks|wireguard|tailscale|zerotier|openvpn/.test(text))
-    blocks.push(getInstalledSoftwareBlock())
-  if (/位置|在哪个城市/.test(text))
-    blocks.push(getGeoWeatherBlock())
-  // 飞书：注入实时连接状态，避免 Agent 在「是不是连上了」上瞎猜、误报未连接。
-  if (/飞书|feishu|lark/.test(text))
-    blocks.push(getFeishuStatusBlock())
-  // 热点不再按关键词预喂热搜数据：是否取数/开面板交由 Agent 调 hotspot_mode 自决（见 prompt Hotspot Panel 规则）。
-  return blocks.filter(Boolean).join('\n\n')
-}
-
 function weatherSurfaceId(city = '') {
   const slug = String(city || '')
     .trim()
@@ -818,6 +798,7 @@ async function runTurn(input, label, msg = null) {
   let localReply = false
   let toolContext = null
   let informationAttachment = null
+  let informationSourceShadow = null
   let terminalEmitted = false
   const finishTurn = (content = '') => {
     if (isTick || isInformationTurn || silentSignal || terminalEmitted) return
@@ -1318,6 +1299,13 @@ async function runTurn(input, label, msg = null) {
       recentActionsSummary: recentToolActions.map(a => a?.summary || '').join(' | '),
     })
 
+    const currentTime = nowTimestamp()
+    const existenceDesc = describeExistence(birthTime)
+    const systemEnvironmentContext = buildSystemEnvironmentContext(msg)
+    const security = getSecurity()
+    const channelSwitched = isUserTurn
+      ? detectChannelSwitch(msg, injection.conversationWindow || [])
+      : false
     const baseContextArgs = {
       memories: memoriesText,
       activePolicies: activePoliciesText,
@@ -1337,17 +1325,55 @@ async function runTurn(input, label, msg = null) {
       threadView: buildThreadView(state),
       agentSkills: agentSkillsText,
       // Runtime info：从 system 迁来的每轮变化字段，集中放 <context><runtime>
-      currentTime: nowTimestamp(),
-      existenceDesc: describeExistence(birthTime),
-      systemEnv: buildSystemEnv(msg),
-      security: getSecurity(),
+      currentTime,
+      existenceDesc,
+      systemEnv: systemEnvironmentContext,
+      security,
       currentChannel: contextChannel,
-      channelSwitched: isUserTurn ? detectChannelSwitch(msg, injection.conversationWindow || []) : false,
+      channelSwitched,
       focusTickCounter: state.tickCounter || 0,
       selfPerception: injection.selfPerception || null,
       selfSnapshot: injection.selfSnapshot || null,
       selfEvolution: injection.selfEvolution || '',
     }
+
+    informationSourceShadow = await observeInformationSourceShadow({
+      request: {
+        message: semanticInput,
+        userId: msg?.fromId || PRIMARY_USER_ID,
+        currentTime,
+        currentChannel: contextChannel,
+        channelSwitched,
+        systemEnvironmentContext,
+        runtimeComponents: supplementalInformation.components,
+        memoryProjection: {
+          memories: turnMemories,
+          recallMemories: injection.recallMemories || [],
+          activePolicies: turnActivePolicies,
+        },
+        knowledgeProjection: {
+          evidence: knowledgeInjection.evidence || [],
+        },
+        taskProjection: {
+          task: state.task || '',
+          steps: state.taskSteps || [],
+        },
+        signal: controller.signal,
+        now: new Date(),
+      },
+      legacyComponents: {
+        ...legacyComponentsForAudit,
+        currentTime: `Current time: ${currentTime}`,
+        existence: existenceDesc,
+        systemEnvironment: systemEnvironmentContext,
+        channel: contextChannel,
+      },
+      domains: ['runtime', 'environment', 'memory', 'knowledge', 'task'],
+    })
+    if (informationSourceShadow.observed) {
+      emitEvent('information_source_shadow', informationSourceShadow.audit)
+    }
+    throwIfAborted(controller.signal)
 
     // ① 统一相关度门（动态上下文记忆池 / 少即是强：排除导向的精细化管理）。
     // 在 buildContextBlock 渲染之前，对"几乎常驻但常无关"的 section 做相关度门控 + 全段埋点。
@@ -1461,7 +1487,9 @@ async function runTurn(input, label, msg = null) {
     toolContext.browserLeasePriority = priority
     toolContext.browserLeaseScope = 'turn'
     toolContext.runtimeLane = runtimeLane
-    toolContext.informationContextAudit = contextShadow.observed ? contextShadow.audit : null
+    toolContext.informationContextAudit = contextShadow.observed
+      ? contextShadow.audit
+      : (informationSourceShadow?.observed ? informationSourceShadow.audit : null)
     // Intent routing remains model-led.  The narrow action contract below is
     // not a general intent classifier: it is only an execution guard for a
     // high-confidence side-effect request.  It prevents a text-only promise

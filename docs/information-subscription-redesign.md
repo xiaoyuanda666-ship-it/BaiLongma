@@ -410,10 +410,15 @@ src/information/
 - 移除 UI intent 的“双写 signal + 伪消息”行为。
 - L1/L2/L3 改为由 trigger item 的语义决定，不再依赖 `msg/null` 和字符串 `TICK` 推断。
 
-### Phase 3：ContextFrame 编译器
+### Phase 3：ContextFrame 编译器（当前已开始）
 
-- 给 memory、knowledge、runtime、task state、scene、prefetch、constraints、capability prefeed 增加 source adapter。
-- injector 暂时仍返回兼容字段，但内部以 `InformationItem[]` 为真值。
+- pull source shadow 由 `BAILONGMA_INFORMATION_SOURCE_SHADOW=runtime,environment,memory,knowledge,task`（或 `all`）独立开启，默认关闭；它不写 event journal、不创建 delivery、不进入 prompt，只构造瞬时 ContextFrame 和无正文审计。
+- `InformationSourceRegistry` 现在声明 source domain、字符预算和 rank；`source-collector` 按 domain/source id 并发收集 snapshot/query，逐来源超时、失败隔离，并从结构上拒绝 pull source 产生 `user_input`。
+- 已注册 runtime clock、incoming channel、on-demand host environment 和 legacy runtime components 四类快照来源。旧 `buildSystemEnv` 已提取为共享兼容实现，因此 legacy prompt 与新 environment source 使用同一匹配逻辑，不会在 shadow 期漂移。
+- memory relevant/recall、active policy、Knowledge Cortex evidence 和 current task state 已有 projection source。projection 复用本轮 legacy 检索结果，不重复查询；记忆、policy、带 citation 的 knowledge 与 task_state 进入各自语义通道，且都不能冒充当前用户发言。
+- source frame 审计记录 source/item 数量、逐来源耗时、失败数、统一预算结果和 legacy component 字符基线；turn trace 只保留这些计数与哈希，不持久化 source payload 正文。
+- 下一批继续给 scene、prefetch、constraints、capability prefeed、person/profile 和 self state 增加 source adapter。
+- injector 暂时仍返回兼容字段；待 shadow 对照稳定后，再逐类把 `InformationItem[]` 提升为真值并切换 renderer。
 - 把去重、优先级、字符预算、超时、敏感度和 provenance 集中到 Context Compiler。
 - renderer 保证只有 `user_input` 进入当前 `role=user`；其余信息按语义 section 渲染。
 

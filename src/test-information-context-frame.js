@@ -155,6 +155,12 @@ try {
       contextHash: frame.audit.contextHash,
       selectedBySemanticKind: { policy: 1, runtime_event: 2 },
       legacyCharsByComponent: { runtime: 22 },
+      sourceCount: 4,
+      succeededSourceCount: 3,
+      failedSourceCount: 1,
+      itemCount: 7,
+      sourceItemsById: { 'runtime:clock': 1, 'runtime:legacy-components': 6 },
+      sourceLatencyMsById: { 'runtime:clock': 2, 'runtime:legacy-components': 4 },
       rawPayload: 'must not be persisted',
     },
   })
@@ -162,6 +168,9 @@ try {
   const traced = getTrace(getTraces(1)[0].id)
   assert.equal(traced.meta.informationContext.frameId, frame.id)
   assert.equal(traced.meta.informationContext.selectedBySemanticKind.policy, 1)
+  assert.equal(traced.meta.informationContext.sourceCount, 4)
+  assert.equal(traced.meta.informationContext.failedSourceCount, 1)
+  assert.equal(traced.meta.informationContext.sourceItemsById['runtime:clock'], 1)
   assert.equal(Object.hasOwn(traced.meta.informationContext, 'rawPayload'), false)
   clearTraces()
 } finally {

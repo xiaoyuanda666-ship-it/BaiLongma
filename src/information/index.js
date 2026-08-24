@@ -15,6 +15,10 @@ export {
   informationRouteMatches,
 } from './subscription-matcher.js'
 export { InformationSourceRegistry, informationSourceRegistry } from './source-registry.js'
+export { collectInformationSources, compileInformationSourceFrame } from './source-collector.js'
+export { ensureBuiltinRuntimeInformationSources } from './runtime-sources.js'
+export { ensureBuiltinProjectionInformationSources } from './projection-sources.js'
+export { isInformationSourceShadowEnabled, observeInformationSourceShadow } from './source-shadow.js'
 export { publishInformationEvent } from './hub.js'
 export { compileInformationContextFrame } from './context-frame.js'
 export {
