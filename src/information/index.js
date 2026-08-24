@@ -19,6 +19,7 @@ export { collectInformationSources, compileInformationSourceFrame } from './sour
 export { ensureBuiltinRuntimeInformationSources } from './runtime-sources.js'
 export { ensureBuiltinProjectionInformationSources } from './projection-sources.js'
 export { isInformationSourceShadowEnabled, observeInformationSourceShadow } from './source-shadow.js'
+export { evaluateInformationSourceParity } from './source-parity.js'
 export {
   listInformationSourceRenderableDomains,
   isInformationSourceRenderEnabled,

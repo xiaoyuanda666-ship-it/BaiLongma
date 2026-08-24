@@ -164,6 +164,12 @@ try {
       legacyCoverageByComponent: { runtime: 1 },
       renderDomainCount: 2,
       suppressedLegacyComponentCount: 1,
+      parityDomainCount: 2,
+      parityPassedDomainCount: 1,
+      parityFailedDomainCount: 1,
+      parityByDomain: { scene: 1, constraints: 0 },
+      parityExpectedRecordsByDomain: { scene: 2, constraints: 1 },
+      parityActualRecordsByDomain: { scene: 2, constraints: 2 },
       sourceCount: 4,
       succeededSourceCount: 3,
       failedSourceCount: 1,
@@ -190,6 +196,12 @@ try {
   assert.equal(traced.meta.informationContext.legacyCoverageByComponent.runtime, 1)
   assert.equal(traced.meta.informationContext.renderDomainCount, 2)
   assert.equal(traced.meta.informationContext.suppressedLegacyComponentCount, 1)
+  assert.equal(traced.meta.informationContext.parityDomainCount, 2)
+  assert.equal(traced.meta.informationContext.parityPassedDomainCount, 1)
+  assert.equal(traced.meta.informationContext.parityFailedDomainCount, 1)
+  assert.equal(traced.meta.informationContext.parityByDomain.constraints, 0)
+  assert.equal(traced.meta.informationContext.parityExpectedRecordsByDomain.scene, 2)
+  assert.equal(traced.meta.informationContext.parityActualRecordsByDomain.constraints, 2)
   assert.equal(traced.meta.informationContext.sourceItemsByDomain.runtime, 7)
   assert.equal(traced.meta.informationContext.selectedSourceItemsByDomain.runtime, 3)
   assert.equal(traced.meta.informationContext.sourceItemsById['runtime:clock'], 1)

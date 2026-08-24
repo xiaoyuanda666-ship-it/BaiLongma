@@ -1434,16 +1434,17 @@ async function runTurn(input, label, msg = null) {
     informationSourceRender = await renderInformationSourceContext({
       request: informationSourceRequest,
       legacyComponents: informationSourceLegacyComponents,
-      domains: ['scene', 'prefetch'],
+      domains: ['scene', 'prefetch', 'constraints'],
     })
     if (informationSourceRender.rendered) {
       const renderedContext = applyInformationSourceRender({
         components: supplementalInformation.components,
+        contextArgs: baseContextArgs,
         informationContextText,
       }, informationSourceRender)
       supplementalInformation.components = renderedContext.components
       supplementalInformation.contextText = renderedContext.legacyContextText
-      baseContextArgs.extraContext = renderedContext.legacyContextText
+      Object.assign(baseContextArgs, renderedContext.contextArgs)
       informationContextText = renderedContext.informationContextText
       emitEvent('information_source_rendered', informationSourceRender.audit)
     }

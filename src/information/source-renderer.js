@@ -8,8 +8,9 @@ import {
   buildInformationSourceCoverageAudit,
   fullySelectedInformationSourceIds,
 } from './source-audit.js'
+import { evaluateInformationSourceParity } from './source-parity.js'
 
-const RENDERABLE_DOMAINS = Object.freeze(['scene', 'prefetch'])
+const RENDERABLE_DOMAINS = Object.freeze(['scene', 'prefetch', 'constraints'])
 const RENDERABLE_DOMAIN_SET = new Set(RENDERABLE_DOMAINS)
 
 function enabledDomains(env = process.env) {
@@ -33,17 +34,23 @@ export function isInformationSourceRenderEnabled(domain, env = process.env) {
 
 export function applyInformationSourceRender({
   components = {},
+  contextArgs = {},
   informationContextText = '',
 } = {}, renderResult = {}) {
   const nextComponents = { ...(components || {}) }
+  const nextContextArgs = { ...(contextArgs || {}) }
   if (renderResult.rendered) {
     for (const component of renderResult.legacyComponentsToSuppress || []) {
       if (Object.hasOwn(nextComponents, component)) nextComponents[component] = ''
+      if (component === 'constraints') nextContextArgs.constraints = []
     }
   }
+  const legacyContextText = Object.values(nextComponents).filter(Boolean).join('\n\n')
+  if (Object.hasOwn(nextContextArgs, 'extraContext')) nextContextArgs.extraContext = legacyContextText
   return {
     components: nextComponents,
-    legacyContextText: Object.values(nextComponents).filter(Boolean).join('\n\n'),
+    contextArgs: nextContextArgs,
+    legacyContextText,
     informationContextText: [
       informationContextText,
       renderResult.rendered ? renderResult.contextText : '',
@@ -82,10 +89,27 @@ export async function renderInformationSourceContext({
       maxContextChars,
     })
     const fullySelectedSourceIds = fullySelectedInformationSourceIds(candidateFrame, collection)
+    const completenessFrame = compileInformationSourceFrame({
+      ...collection,
+      candidates: collection.candidates.filter(candidate => (
+        fullySelectedSourceIds.has(candidate.source.id)
+      )),
+    }, {
+      now: request.now || new Date(),
+      maxContextChars,
+    })
+    const parity = evaluateInformationSourceParity({
+      domains: activeDomains,
+      request,
+      frame: completenessFrame,
+      collection,
+    })
+    const parityPassedDomains = new Set(parity.passedDomains)
     const frame = compileInformationSourceFrame({
       ...collection,
       candidates: collection.candidates.filter(candidate => (
         fullySelectedSourceIds.has(candidate.source.id)
+        && parityPassedDomains.has(candidate.source.domain)
       )),
     }, {
       now: request.now || new Date(),
@@ -108,10 +132,12 @@ export async function renderInformationSourceContext({
       contextText: frame.contextText,
       collection,
       frame,
+      parity,
       audit: {
         ...baseAudit,
         ...collection.audit,
         ...coverageAudit,
+        ...parity.audit,
         renderDomainCount: activeDomains.length,
         suppressedLegacyComponentCount: legacyComponentsToSuppress.length,
       },

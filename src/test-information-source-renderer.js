@@ -4,6 +4,7 @@ delete process.env.BAILONGMA_INFORMATION_SOURCE_RENDER
 
 const { InformationSourceRegistry } = await import('./information/source-registry.js')
 const { buildLLMMessages } = await import('./runtime/messages.js')
+const { buildContextBlock } = await import('./prompt.js')
 const {
   listInformationSourceRenderableDomains,
   isInformationSourceRenderEnabled,
@@ -13,7 +14,7 @@ const {
 
 const now = new Date('2026-08-24T12:00:00.000Z')
 
-assert.deepEqual(listInformationSourceRenderableDomains(), ['scene', 'prefetch'])
+assert.deepEqual(listInformationSourceRenderableDomains(), ['scene', 'prefetch', 'constraints'])
 assert.equal(isInformationSourceRenderEnabled('scene', {}), false)
 assert.equal(
   isInformationSourceRenderEnabled('memory', { BAILONGMA_INFORMATION_SOURCE_RENDER: 'all' }),
@@ -65,6 +66,10 @@ assert.equal(rendered.audit.itemCount, 2)
 assert.equal(rendered.audit.legacyCoveredComponentCount, 2)
 assert.equal(rendered.audit.legacyUncoveredComponentCount, 1)
 assert.equal(rendered.audit.suppressedLegacyComponentCount, 2)
+assert.equal(rendered.audit.parityDomainCount, 2)
+assert.equal(rendered.audit.parityPassedDomainCount, 2)
+assert.equal(rendered.audit.parityFailedDomainCount, 0)
+assert.deepEqual(rendered.audit.parityByDomain, { scene: 1, prefetch: 1 })
 assert.match(rendered.contextText, /topic="ui\.scene_manifest"/)
 assert.match(rendered.contextText, /topic="knowledge\.prefetched"/)
 assert.equal(Object.hasOwn(rendered.audit, 'contextText'), false)
@@ -103,6 +108,80 @@ const unapplied = applyInformationSourceRender({
 }, { rendered: false })
 assert.deepEqual(unapplied.components, legacyComponents)
 assert.equal(unapplied.informationContextText, 'existing activation')
+
+const constraint = {
+  id: 71,
+  mem_id: 'C:71',
+  content: '发布前必须先运行验证',
+  detail: '验证失败时不能宣称完成',
+  tags: JSON.stringify(['dimension:release-safety', 'kind:constraint']),
+  timestamp: '2026-08-24T11:00:00.000Z',
+}
+const constraintsRendered = await renderInformationSourceContext({
+  request: { now, constraintsProjection: [constraint] },
+  legacyComponents: { constraints: `- ${constraint.content}` },
+  domains: ['constraints'],
+}, {
+  env: { BAILONGMA_INFORMATION_SOURCE_RENDER: 'constraints' },
+  registry: new InformationSourceRegistry(),
+})
+assert.equal(constraintsRendered.rendered, true)
+assert.deepEqual(constraintsRendered.legacyComponentsToSuppress, ['constraints'])
+assert.equal(constraintsRendered.audit.parityByDomain.constraints, 1)
+assert.equal(constraintsRendered.audit.parityExpectedRecordsByDomain.constraints, 1)
+assert.equal(constraintsRendered.audit.parityActualRecordsByDomain.constraints, 1)
+assert.match(constraintsRendered.contextText, /semantic_kind="policy"/)
+assert.match(constraintsRendered.contextText, /发布前必须先运行验证/)
+
+const constraintsApplied = applyInformationSourceRender({
+  components: { runtime: 'runtime stays' },
+  contextArgs: { constraints: [constraint], extraContext: 'runtime stays' },
+  informationContextText: '',
+}, constraintsRendered)
+assert.deepEqual(constraintsApplied.contextArgs.constraints, [])
+assert.equal(constraintsApplied.contextArgs.extraContext, 'runtime stays')
+const contextWithoutLegacyConstraint = buildContextBlock(constraintsApplied.contextArgs)
+assert.doesNotMatch(contextWithoutLegacyConstraint, /<constraints>/)
+
+const mismatchRegistry = new InformationSourceRegistry()
+mismatchRegistry.register({
+  id: 'constraints:test-mismatch',
+  kind: 'query',
+  domain: 'constraints',
+  topics: ['policy.behavioral_constraint'],
+  legacyComponents: ['constraints'],
+  rank: 99,
+  collect: request => ({
+    id: 'info_constraints_mismatch_0001',
+    topic: 'policy.behavioral_constraint',
+    subject: { constraintId: 'C:wrong' },
+    authorship: 'system',
+    semanticKind: 'policy',
+    payload: {
+      content: '不相等的约束',
+      detail: '',
+      dimension: 'wrong',
+      tags: [],
+    },
+    occurredAt: request.now,
+    observedAt: request.now,
+    trust: 'authoritative',
+  }),
+})
+const mismatch = await renderInformationSourceContext({
+  request: { now, constraintsProjection: [constraint] },
+  legacyComponents: { constraints: `- ${constraint.content}` },
+  domains: ['constraints'],
+}, {
+  env: { BAILONGMA_INFORMATION_SOURCE_RENDER: 'constraints' },
+  registry: mismatchRegistry,
+})
+assert.equal(mismatch.rendered, false)
+assert.equal(mismatch.contextText, '')
+assert.deepEqual(mismatch.legacyComponentsToSuppress, [])
+assert.equal(mismatch.audit.parityByDomain.constraints, 0)
+assert.equal(mismatch.audit.parityFailedDomainCount, 1)
+assert.equal(mismatch.parity.byDomain.constraints.reason, 'semantic_mismatch')
 
 const partialRegistry = new InformationSourceRegistry()
 partialRegistry.register({
@@ -202,4 +281,4 @@ assert.deepEqual(failed.legacyComponentsToSuppress, [])
 assert.equal(failed.audit.failedSourceCount, 1)
 assert.match(failed.audit.sourceErrorsById['scene:test-failure'], /source unavailable/)
 
-console.log('PASS source renderer canary switches scene/prefetch without duplicate legacy context and fails open')
+console.log('PASS source renderer parity-gates scene/prefetch/constraints without duplicate legacy context and fails open')

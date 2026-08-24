@@ -418,9 +418,10 @@ src/information/
 - memory relevant/recall、active policy、Knowledge Cortex evidence、current task state、behavioral constraints、prefetch cache、scene manifest、person/profile、self state 和 capability prefeed 均已有 projection source。projection 复用本轮 legacy 结果，不重复查询；信息进入 policy、task_state、system_fact、knowledge、memory、ui_signal 各自语义通道，且都不能冒充当前用户发言。
 - source frame 审计记录 source/item 数量、逐来源耗时、失败数、统一预算结果、逐 domain 的收集/入选数量，以及 legacy component 的覆盖字符数、未覆盖字符数和千分比；turn trace 只保留这些计数与哈希，不持久化 source payload 正文。
 - 每个 source 声明自己替代的 legacy component；只有该 source 本轮产出的全部 item 都进入最终 ContextFrame 才计为覆盖，因预算被部分或全部丢弃的 source 不会被误报为已覆盖。
-- 首个 renderer canary 由 `BAILONGMA_INFORMATION_SOURCE_RENDER=scene,prefetch` 显式开启，默认关闭；当前 allowlist 只接受 scene 与 prefetch，即使配置 `all` 也不会越过 allowlist 切换其他 domain。
-- canary 成功时把 source frame 作为独立 `role=system` 的 `<context-information>` 注入，并只抑制已被完整覆盖的对应 legacy component；source 初始化/采集/编译失败、`maxItems` 截断或预算只选中部分 item 时均 fail-open，保留旧上下文。
-- injector 暂时仍返回兼容字段；除 scene/prefetch 的显式 canary 外，其他 domain 继续只做 shadow，对照稳定后再逐类把 `InformationItem[]` 提升为真值并扩大 renderer allowlist。
+- renderer canary 由 `BAILONGMA_INFORMATION_SOURCE_RENDER=scene,prefetch,constraints` 显式开启，默认关闭；当前 allowlist 只接受这三个 domain，即使配置 `all` 也不会越过 allowlist 切换其他 domain。
+- canary 在完整性门之后还要通过 domain parity gate：scene 对照 surface manifest，prefetch 对照缓存记录，constraints 对照正文、detail、dimension、tags 以及 authorship/semantic kind/trust；审计只记录计数和通过状态，不记录正文。
+- canary 成功时把 source frame 作为独立 `role=system` 的 `<context-information>` 注入，并只抑制已被完整覆盖且语义等价的对应 legacy component；source 初始化/采集/编译失败、`maxItems` 截断、预算只选中部分 item 或 parity 不一致时均 fail-open，保留旧上下文。
+- injector 暂时仍返回兼容字段；除 scene/prefetch/constraints 的显式 canary 外，其他 domain 继续只做 shadow，对照稳定后再逐类把 `InformationItem[]` 提升为真值并扩大 renderer allowlist。
 - 把去重、优先级、字符预算、超时、敏感度和 provenance 集中到 Context Compiler。
 - renderer 保证只有 `user_input` 进入当前 `role=user`；其余信息按语义 section 渲染。
 
