@@ -318,7 +318,7 @@ function computeExpiredFollowupSet(rows, currentTopic) {
   return expired
 }
 
-export function buildLLMMessages({ systemPrompt, contextBlock = '', conversationWindow = [], input, msg = null, recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', currentTopic = '', isTick = false, runtimeLane = '' }) {
+export function buildLLMMessages({ systemPrompt, contextBlock = '', informationContextBlock = '', conversationWindow = [], input, msg = null, recentActions = [], actionLog = [], lastToolResult = null, taskSteps = [], batteryBlock = '', currentTopic = '', isTick = false, runtimeLane = '' }) {
   const lane = runtimeLane || (isTick ? 'l2' : 'l1')
   const isScheduledTask = lane === 'l3'
   const isInformationActivation = lane === 'information'
@@ -330,6 +330,9 @@ export function buildLLMMessages({ systemPrompt, contextBlock = '', conversation
           ? buildScheduledTaskSystemPrompt(systemPrompt, msg, input)
           : (isInformationActivation ? buildInformationActivationSystemPrompt(systemPrompt) : systemPrompt)),
   }]
+  if (String(informationContextBlock || '').trim()) {
+    messages.push({ role: 'system', content: String(informationContextBlock) })
+  }
 
   const sourceRows = Array.isArray(conversationWindow) ? conversationWindow : []
   // L3 receives its current task through the leading system prompt. Historical

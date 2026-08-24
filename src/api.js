@@ -285,10 +285,10 @@ function attachSceneProtocol() {
       metadata: { legacyUiSignalId: id },
     }
     const securityConfirmationIntent = name === 'select' && surface.startsWith('security-confirm-')
-    const staysOnLegacyUiContext = securityConfirmationIntent || passiveUiObservation
-    // Security confirmation keeps its purpose-built refresh path. Passive UI
-    // observations also stay on the legacy next-turn context until ordinary
-    // user turns can lease accumulated Information Core context directly.
+    const staysOnLegacyUiContext = securityConfirmationIntent
+    // Security confirmation keeps its purpose-built refresh path. Every other
+    // UI event can use the gated bridge: passive observations create only an
+    // accumulated wake=never delivery, while active intents also wake a turn.
     const informationResult = staysOnLegacyUiContext
       ? shadowPublishInformationEvent(informationInput)
       : publishInformationEventForMigration(informationInput, {

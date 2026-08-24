@@ -394,8 +394,9 @@ src/information/
 
 - 领域切换由 `BAILONGMA_INFORMATION_ACTIVATION=ui,job,schedule`（或 `all`）显式开启，默认关闭；当前只允许 `ui`、`job` 和 `schedule`，不能意外提前切换 user message。
 - 普通 UI intent 与 browser download job 已具备 activation bridge：publish → route → lease → `information` runtime lane → ContextFrame → 首次 model accept ACK；接受前失败按原重试次数处理后进入 dead-letter，接受后不再重复投递。
-- activation bridge 支持在主动事件唤醒时把同一用户、同一领域内累积的被动 delivery 合并进一个 ContextFrame；被动 UI observation 暂时仍由 legacy next-turn context 承载，等普通用户 turn 接入租约后再切换。租约到期时间也进入 scheduler，因此关闭 L2 心跳后仍能恢复未确认投递。
-- 主动 UI intent 被新桥接管后，只退休对应的单条 `ui_signals` 兼容记录；同一时段尚未迁移的被动 UI 记录继续走旧 context，避免整段清空造成信息丢失。
+- 被动 UI observation 现在发布为 `wake=never` delivery：它本身不唤醒 Agent，可随下一次主动 UI intent 合并，也可由下一条真实 L1 用户消息租约并附加；模型接受前失败会 NACK 回 pending。
+- 非安全确认 UI event 被新桥接管后，只退休对应的单条 `ui_signals` 兼容记录；若新桥发布失败则不退休，旧 next-turn context 自动兜底。
+- 附加到 L1 的 ContextFrame 使用独立 `role=system` 消息，真实当前用户消息仍是最后一条干净的 `role=user`；不会把 UI observation 伪装成用户发言。
 - `information` lane 是非用户系统轮：没有 current user message，纯 assistant text 不投递，只有显式工具行为或 `send_message` 才产生外部效果。
 - reminder due event 已接入同一 delivery inbox，但继续使用现有 L3 task payload、`reminder_runs` 和验证通知契约；只有目标消息验证发送成功后才 `after_turn` ACK，失败或中断时 reminder run 与 delivery 使用同一个重试时间。
 - activation 使用独立 dedupe namespace，避免启用开关时误复用先前 shadow event；dead-letter 会明确放行 legacy fallback，避免吞掉提醒重试。

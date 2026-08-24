@@ -68,6 +68,11 @@ function activationDomainFromEvent(event = {}) {
   return String(event.metadata?.activationDomain || '').trim().toLowerCase()
 }
 
+function hasInformationLease(entry = {}) {
+  return (entry.informationActivation === true || entry.informationContextAttachment === true)
+    && !!entry.informationLeaseId
+}
+
 function wakeCandidates(candidates = []) {
   return candidates.filter(candidate => (
     candidate.delivery?.state === 'pending'
@@ -316,16 +321,92 @@ export function compileInformationActivationFrame(entry = {}, {
   })
 }
 
-export function ackInformationActivation(entry = {}, { db = getDB() } = {}) {
-  if (!entry.informationActivation || !entry.informationLeaseId) return 0
+export function leaseAccumulatedInformationContext({
+  env = process.env,
+  db = null,
+  userId = '',
+  domains = [],
+  now = new Date(),
+  limit = 50,
+} = {}) {
+  const requestedDomains = new Set(
+    (Array.isArray(domains) && domains.length > 0 ? domains : [...ACTIVATION_DOMAINS])
+      .map(domain => String(domain || '').trim().toLowerCase())
+      .filter(domain => isInformationActivationEnabled(domain, env)),
+  )
+  if (requestedDomains.size === 0) return null
+  const targetDb = db || getDB()
+  const normalizedUserId = String(userId || '').trim()
+  const safeLimit = Math.max(1, Math.min(100, Math.round(Number(limit) || 50)))
+  const candidates = loadInformationDeliveryCandidates({
+    subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
+    subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
+    state: 'pending',
+    limit: 1_000,
+  }, { db: targetDb }).filter(candidate => {
+    const candidateUserId = String(candidate.event?.subject?.userId || '').trim()
+    return candidate.event?.metadata?.activation === true
+      && requestedDomains.has(activationDomainFromEvent(candidate.event))
+      && candidate.route?.activation?.type === 'event'
+      && candidate.route?.wake?.policy === 'never'
+      && (!normalizedUserId || !candidateUserId || candidateUserId === normalizedUserId)
+  }).slice(0, safeLimit)
+  if (candidates.length === 0) return null
+
+  const lease = leaseInformationDeliveries({
+    deliveryIds: candidates.map(candidate => candidate.delivery.id),
+    subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
+    subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
+    limit: candidates.length,
+    now,
+  }, { db: targetDb })
+  if (lease.deliveries.length === 0) return null
+  const leasedCandidates = loadInformationDeliveryCandidates({
+    deliveryIds: lease.deliveries.map(delivery => delivery.id),
+    subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
+    subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
+  }, { db: targetDb })
+  const entry = {
+    informationContextAttachment: true,
+    informationLeaseId: lease.leaseId,
+    informationDeliveryIds: lease.deliveries.map(delivery => delivery.id),
+    informationEventIds: leasedCandidates.map(candidate => candidate.event.id),
+  }
+  let frame
+  try {
+    frame = compileInformationContextFrame({ candidates: leasedCandidates, now })
+  } catch (error) {
+    nackInformationDeliveries({
+      leaseId: lease.leaseId,
+      deliveryIds: entry.informationDeliveryIds,
+      error: `context attachment compilation failed: ${error?.message || error}`,
+      retryAt: now,
+      maxAttempts: 100,
+    }, { db: targetDb })
+    throw error
+  }
+  if (frame.contextItems.length === 0 && !frame.userInputs.current && frame.userInputs.additional.length === 0) {
+    ackInformationDeliveries({
+      leaseId: lease.leaseId,
+      deliveryIds: entry.informationDeliveryIds,
+    }, { db: targetDb })
+    return null
+  }
+  return { entry, frame, candidates: leasedCandidates }
+}
+
+export function ackInformationLease(entry = {}, { db = getDB() } = {}) {
+  if (!hasInformationLease(entry)) return 0
   return ackInformationDeliveries({
     leaseId: entry.informationLeaseId,
     deliveryIds: entry.informationDeliveryIds || [],
   }, { db })
 }
 
+export const ackInformationActivation = ackInformationLease
+
 export function deadLetterInformationActivation(entry = {}, error = '', { db = getDB() } = {}) {
-  if (!entry.informationActivation || !entry.informationLeaseId) return { pending: 0, deadLetter: 0, total: 0 }
+  if (!hasInformationLease(entry)) return { pending: 0, deadLetter: 0, total: 0 }
   return nackInformationDeliveries({
     leaseId: entry.informationLeaseId,
     deliveryIds: entry.informationDeliveryIds || [],
@@ -334,12 +415,12 @@ export function deadLetterInformationActivation(entry = {}, error = '', { db = g
   }, { db })
 }
 
-export function nackInformationActivation(entry = {}, error = '', {
+export function nackInformationLease(entry = {}, error = '', {
   db = getDB(),
   retryAt = new Date(),
   maxAttempts = 5,
 } = {}) {
-  if (!entry.informationActivation || !entry.informationLeaseId) {
+  if (!hasInformationLease(entry)) {
     return { pending: 0, deadLetter: 0, total: 0 }
   }
   return nackInformationDeliveries({
@@ -350,6 +431,8 @@ export function nackInformationActivation(entry = {}, error = '', {
     maxAttempts,
   }, { db })
 }
+
+export const nackInformationActivation = nackInformationLease
 
 export function resumePendingInformationActivations({
   env = process.env,

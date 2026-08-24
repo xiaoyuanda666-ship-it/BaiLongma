@@ -24,8 +24,9 @@ import { pushMessage } from './inbound-message.js'
 import { observeInformationContextShadow, buildInformationContextAudit } from './information/context-shadow.js'
 import {
   compileInformationActivationFrame,
-  ackInformationActivation,
-  nackInformationActivation,
+  leaseAccumulatedInformationContext,
+  ackInformationLease,
+  nackInformationLease,
   deadLetterInformationActivation,
   resumePendingInformationActivations,
   getNextInformationActivation,
@@ -616,7 +617,7 @@ function scheduleReminderRunRetry(msg, error, { immediate = false } = {}) {
   const availableAt = new Date(Date.now() + delayMs).toISOString()
   retryReminderRun(msg.reminderRunId, error, availableAt)
   if (msg.informationActivation) {
-    const nacked = nackInformationActivation(msg, error, {
+    const nacked = nackInformationLease(msg, error, {
       retryAt: availableAt,
       // reminder_runs is the retry authority; this high guard merely prevents
       // an orphaned delivery from retrying forever if the two stores diverge.
@@ -811,6 +812,7 @@ async function runTurn(input, label, msg = null) {
   let voiceTurn = false
   let localReply = false
   let toolContext = null
+  let informationAttachment = null
   let terminalEmitted = false
   const finishTurn = (content = '') => {
     if (isTick || isInformationTurn || silentSignal || terminalEmitted) return
@@ -1201,24 +1203,32 @@ async function runTurn(input, label, msg = null) {
       userId: PRIMARY_USER_ID,
     })
     const legacyComponentsForAudit = { ...supplementalInformation.components }
-    const activationFrame = hasInformationActivation
-      ? compileInformationActivationFrame(msg, { now: new Date() })
+    informationAttachment = isUserTurn && !hasInformationActivation
+      ? leaseAccumulatedInformationContext({
+          userId: msg?.fromId || PRIMARY_USER_ID,
+          domains: ['ui'],
+          now: new Date(),
+        })
       : null
-    if (hasInformationActivation && !activationFrame) {
+    const informationFrame = hasInformationActivation
+      ? compileInformationActivationFrame(msg, { now: new Date() })
+      : informationAttachment?.frame || null
+    if (hasInformationActivation && !informationFrame) {
       throw new Error('information activation is missing its leased ContextFrame')
     }
     if (isInformationTurn && msg.informationActivationDomain === 'job') {
       supplementalInformation.components.browserDownloads = ''
     }
     supplementalInformation.contextText = Object.values(supplementalInformation.components).filter(Boolean).join('\n\n')
-    const contextShadow = hasInformationActivation
+    const hasLeasedInformationContext = hasInformationActivation || !!informationAttachment
+    const contextShadow = hasLeasedInformationContext
       ? {
           enabled: true,
           observed: true,
-          frame: activationFrame,
-          audit: buildInformationContextAudit(activationFrame, {
+          frame: informationFrame,
+          audit: buildInformationContextAudit(informationFrame, {
             legacyComponents: legacyComponentsForAudit,
-            mode: 'activation',
+            mode: hasInformationActivation ? 'activation' : 'attachment',
           }),
         }
       : observeInformationContextShadow({
@@ -1227,12 +1237,14 @@ async function runTurn(input, label, msg = null) {
           now: new Date(),
         })
     if (contextShadow.observed) {
-      emitEvent(hasInformationActivation ? 'information_context_activated' : 'information_context_shadow', contextShadow.audit)
+      emitEvent(
+        hasInformationActivation
+          ? 'information_context_activated'
+          : (informationAttachment ? 'information_context_attached' : 'information_context_shadow'),
+        contextShadow.audit,
+      )
     }
-    const extraContextJoined = [
-      supplementalInformation.contextText,
-      activationFrame?.contextText || '',
-    ].filter(Boolean).join('\n\n')
+    const extraContextJoined = supplementalInformation.contextText
     const skillSelection = selectSkillsForMessage(semanticInput || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
     if (skillSelection.active.length > 0 || skillSelection.catalogRequested) {
@@ -1348,6 +1360,7 @@ async function runTurn(input, label, msg = null) {
     const buildMessagesWithContext = (ctxBlock) => buildLLMMessages({
       systemPrompt,
       contextBlock: ctxBlock,
+      informationContextBlock: informationFrame?.contextText || '',
       conversationWindow: injection.conversationWindow || [],
       input: semanticInput,
       msg,
@@ -1406,7 +1419,13 @@ async function runTurn(input, label, msg = null) {
     }
 
     // Emit full prompt preview event (system + context, joined for human display)
-    emitEvent('system_prompt', { content: combinePromptForPreview(systemPrompt, contextBlock), fastUserPath })
+    emitEvent('system_prompt', {
+      content: combinePromptForPreview(
+        systemPrompt,
+        [contextBlock, informationFrame?.contextText || ''].filter(Boolean).join('\n\n'),
+      ),
+      fastUserPath,
+    })
 
     // 3. Call Jarvis LLM (can be interrupted by a new message)
     toolContext = buildToolContextForProcess(msg, injection, sessionRef)
@@ -1589,24 +1608,32 @@ async function runTurn(input, label, msg = null) {
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
       },
-      onModelAccept: isInformationTurn
+      onModelAccept: (isInformationTurn || informationAttachment)
         ? () => {
-            const requested = msg.informationDeliveryIds?.length || 0
-            const acked = ackInformationActivation(msg)
+            const leasedEntry = isInformationTurn ? msg : informationAttachment.entry
+            const requested = leasedEntry.informationDeliveryIds?.length || 0
+            const acked = ackInformationLease(leasedEntry)
             if (acked !== requested) {
               throw new Error(`information delivery ACK mismatch: requested=${requested} acked=${acked}`)
             }
-            msg.informationAccepted = true
-            try {
-              commitInformationConsumption(injection.categories?.information || injection)
-            } catch (error) {
-              console.warn('[information] compatibility consumption failed after ACK:', error?.message || error)
+            if (isInformationTurn) {
+              msg.informationAccepted = true
+              try {
+                commitInformationConsumption(injection.categories?.information || injection)
+              } catch (error) {
+                console.warn('[information] compatibility consumption failed after ACK:', error?.message || error)
+              }
+            } else {
+              informationAttachment.accepted = true
             }
             emitEvent('information_delivery_acked', {
-              event_id: msg.informationEventId,
-              lease_id: msg.informationLeaseId,
+              event_id: isInformationTurn ? msg.informationEventId : '',
+              event_ids: isInformationTurn ? undefined : leasedEntry.informationEventIds,
+              lease_id: leasedEntry.informationLeaseId,
               requested,
               acked,
+              policy: 'after_model_accept',
+              mode: isInformationTurn ? 'activation' : 'attachment',
             })
           }
         : null,
@@ -1699,6 +1726,20 @@ async function runTurn(input, label, msg = null) {
       return
     }
   } finally {
+    if (informationAttachment && !informationAttachment.accepted) {
+      const nacked = nackInformationLease(
+        informationAttachment.entry,
+        'host turn ended before model accept',
+        { retryAt: new Date(), maxAttempts: 100 },
+      )
+      emitEvent('information_delivery_nacked', {
+        event_ids: informationAttachment.entry.informationEventIds,
+        lease_id: informationAttachment.entry.informationLeaseId,
+        pending: nacked.pending,
+        dead_lettered: nacked.deadLetter,
+        mode: 'attachment',
+      })
+    }
     if (toolContext?.browserLeaseOwnedByTurn && toolContext.browserLease) {
       toolContext.browserLease.release('main Agent turn finished')
       toolContext.browserLease = null
@@ -1735,7 +1776,7 @@ async function runTurn(input, label, msg = null) {
     if (verifiedDelivery) {
       completeReminderRun(msg.reminderRunId)
       if (msg.informationActivation) {
-        const acked = ackInformationActivation(msg)
+        const acked = ackInformationLease(msg)
         emitEvent('information_delivery_acked', {
           event_id: msg.informationEventId,
           lease_id: msg.informationLeaseId,

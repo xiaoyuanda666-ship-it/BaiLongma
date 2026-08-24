@@ -17,6 +17,7 @@ try {
     isInformationActivationEnabled,
     publishInformationEventForMigration,
     compileInformationActivationFrame,
+    leaseAccumulatedInformationContext,
     ackInformationActivation,
     nackInformationActivation,
     resumePendingInformationActivations,
@@ -117,7 +118,7 @@ try {
 
   const messages = buildLLMMessages({
     systemPrompt: 'stable system prompt',
-    contextBlock: frame.contextText,
+    informationContextBlock: frame.contextText,
     conversationWindow: [],
     input: entry.content,
     msg: entry,
@@ -130,7 +131,7 @@ try {
 
   const messagesWithHistory = buildLLMMessages({
     systemPrompt: 'stable system prompt',
-    contextBlock: frame.contextText,
+    informationContextBlock: frame.contextText,
     conversationWindow: [
       { role: 'user', from_id: 'ID:ui-user', content: 'an older user message', timestamp: '2026-08-20T00:00:00.000Z' },
       { role: 'jarvis', from_id: 'jarvis', content: 'an older assistant reply', timestamp: '2026-08-20T00:00:01.000Z' },
@@ -160,6 +161,99 @@ try {
   assert.equal(duplicate.activated, false)
   assert.equal(duplicate.reason, 'acked')
   assert.equal(queued.length, 1)
+
+  const attachmentWakeups = []
+  const attachmentPassive = publishInformationEventForMigration({
+    ...uiInput,
+    id: 'info_activation_ui_attachment',
+    topic: 'ui.observation.dwell',
+    subject: { surface: 'attachment', userId: 'ID:attachment-user' },
+    authorship: 'system',
+    payload: { name: 'dwell', data: { durationMs: 2400 } },
+    priority: 30,
+    dedupeKey: 'activation-ui-attachment',
+  }, {
+    domain: 'ui',
+    env: uiEnv,
+    db,
+    enqueue: item => attachmentWakeups.push(item),
+  })
+  publishInformationEventForMigration({
+    ...uiInput,
+    id: 'info_activation_ui_attachment_other',
+    topic: 'ui.observation.dwell',
+    subject: { surface: 'other', userId: 'ID:other-user' },
+    authorship: 'system',
+    payload: { name: 'dwell', data: { durationMs: 3600 } },
+    priority: 30,
+    dedupeKey: 'activation-ui-attachment-other',
+  }, {
+    domain: 'ui',
+    env: uiEnv,
+    db,
+    enqueue: item => attachmentWakeups.push(item),
+  })
+  assert.equal(attachmentPassive.handled, true)
+  assert.equal(attachmentPassive.activated, false)
+  assert.equal(attachmentWakeups.length, 0)
+  const attachment = leaseAccumulatedInformationContext({
+    env: uiEnv,
+    db,
+    userId: 'ID:attachment-user',
+    domains: ['ui'],
+  })
+  assert.equal(attachment.frame.contextItems.length, 1)
+  assert.equal(attachment.frame.contextItems[0].event.subject.userId, 'ID:attachment-user')
+  assert.equal(attachment.frame.triggerEventId, null)
+  const currentUserEntry = {
+    fromId: 'ID:attachment-user',
+    content: '这个页面现在是什么状态？',
+    timestamp: '2026-08-24T12:00:00.000Z',
+    channel: 'TUI',
+  }
+  const attachmentMessages = buildLLMMessages({
+    systemPrompt: 'stable system prompt',
+    informationContextBlock: attachment.frame.contextText,
+    conversationWindow: [{
+      role: 'user',
+      from_id: currentUserEntry.fromId,
+      content: currentUserEntry.content,
+      timestamp: currentUserEntry.timestamp,
+      channel: currentUserEntry.channel,
+    }],
+    input: currentUserEntry.content,
+    msg: currentUserEntry,
+    runtimeLane: 'l1',
+  })
+  const attachedSystemMessage = attachmentMessages.find(message => message.content.includes('<context-information>'))
+  assert.equal(attachedSystemMessage.role, 'system')
+  assert.deepEqual(attachmentMessages.at(-1), { role: 'user', content: currentUserEntry.content })
+  assert.equal(leaseAccumulatedInformationContext({
+    env: uiEnv,
+    db,
+    userId: 'ID:attachment-user',
+    domains: ['ui'],
+  }), null)
+  assert.equal(nackInformationActivation(attachment.entry, 'host turn aborted', {
+    db,
+    retryAt: new Date(0),
+    maxAttempts: 100,
+  }).pending, 1)
+  const retriedAttachment = leaseAccumulatedInformationContext({
+    env: uiEnv,
+    db,
+    userId: 'ID:attachment-user',
+    domains: ['ui'],
+  })
+  assert.equal(ackInformationActivation(retriedAttachment.entry, { db }), 1)
+  const otherAttachment = leaseAccumulatedInformationContext({
+    env: uiEnv,
+    db,
+    userId: 'ID:other-user',
+    domains: ['ui'],
+  })
+  assert.equal(otherAttachment.frame.contextItems[0].event.subject.userId, 'ID:other-user')
+  assert.equal(ackInformationActivation(otherAttachment.entry, { db }), 1)
 
   const eventCountBeforeDisabled = db.prepare(`SELECT COUNT(*) AS count FROM information_events`).get().count
   const disabled = publishInformationEventForMigration({
@@ -288,7 +382,7 @@ try {
   assert.equal(scheduleFrame.contextItems[0].event.payload.task, '提醒用户喝水')
   const scheduleMessages = buildLLMMessages({
     systemPrompt: 'stable system prompt',
-    contextBlock: scheduleFrame.contextText,
+    informationContextBlock: scheduleFrame.contextText,
     conversationWindow: [],
     input: scheduleQueue[0].content,
     msg: scheduleQueue[0],
