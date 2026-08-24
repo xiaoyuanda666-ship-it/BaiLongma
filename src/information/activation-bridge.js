@@ -14,7 +14,7 @@ import {
 } from './repositories/deliveries.js'
 import { shadowPublishInformationEvent } from './shadow-publisher.js'
 
-const ACTIVATION_DOMAINS = new Set(['ui', 'job'])
+const ACTIVATION_DOMAINS = new Set(['ui', 'job', 'schedule'])
 const QUEUE_METADATA_FIELDS = Object.freeze([
   'notificationTargetId',
   'notificationChannel',
@@ -25,6 +25,14 @@ const QUEUE_METADATA_FIELDS = Object.freeze([
   'backgroundJobId',
   'backgroundJobEvent',
   'surface',
+  'scheduledEventType',
+  'reminderRunId',
+  'reminderId',
+  'reminderTargetId',
+  'reminderTask',
+  'reminderDueAt',
+  'reminderAttempt',
+  'deliveryPolicy',
 ])
 
 function activationDomains(env = process.env) {
@@ -106,6 +114,7 @@ function loadPendingActivationFrameCandidates(event, { db }) {
     limit: 1_000,
   }, { db }).filter(candidate => (
     candidate.route?.activation?.type === 'event'
+    && candidate.route?.wake?.policy === 'never'
     && sameActivationScope(event, candidate.event)
   ))
 }
@@ -117,7 +126,8 @@ function createActivationEntry({ event, lease, candidates, queueMetadata = {} })
   )))]
   const hint = activationHint(event)
   const priority = lease.deliveries.reduce((max, delivery) => Math.max(max, Number(delivery.priority) || 0), 0)
-  return {
+  const metadata = safeQueueMetadata(queueMetadata)
+  const base = {
     raw: `[SYSTEM] ${event.observedAt || new Date().toISOString()} [INFORMATION] ${hint}`,
     fromId: 'SYSTEM',
     content: hint,
@@ -133,7 +143,23 @@ function createActivationEntry({ event, lease, candidates, queueMetadata = {} })
     informationLeaseId: lease.leaseId,
     informationDeliveryIds: lease.deliveries.map(delivery => delivery.id),
     informationAckPolicies: policies,
-    ...safeQueueMetadata(queueMetadata),
+    ...metadata,
+  }
+  if (activationDomainFromEvent(event) !== 'schedule') return base
+
+  const deliveryAttempt = lease.deliveries.reduce(
+    (max, delivery) => Math.max(max, Number(delivery.attempts) || 0),
+    0,
+  )
+  const reminderTask = String(metadata.reminderTask || event.payload?.task || '')
+  return {
+    ...base,
+    raw: `[SYSTEM] ${event.observedAt || new Date().toISOString()} [REMINDER] ${reminderTask}`,
+    content: reminderTask,
+    channel: 'REMINDER',
+    runtimeLane: 'l3',
+    scheduledEventType: metadata.scheduledEventType || 'reminder',
+    reminderAttempt: Math.max(Number(metadata.reminderAttempt) || 0, deliveryAttempt),
   }
 }
 
@@ -150,10 +176,13 @@ function activatePersistedEvent({
   }
   const pending = wakeCandidates(candidates)
   if (pending.length === 0) {
+    const reason = existingWakeState(candidates)
     return {
-      handled: true,
+      // A dead delivery no longer has a recoverable new-core path. Let the
+      // source use its legacy fallback instead of silently swallowing a retry.
+      handled: reason !== 'dead_letter',
       activated: false,
-      reason: existingWakeState(candidates),
+      reason,
       event,
       entry: null,
     }
@@ -223,11 +252,15 @@ export function publishInformationEventForMigration(input, {
     ensureBuiltinInformationRoutes({ db: targetDb })
     const persisted = publishInformationEvent({
       ...input,
+      dedupeKey: input?.dedupeKey
+        ? `activation:${normalizedDomain}:${input.dedupeKey}`
+        : input?.dedupeKey,
       metadata: {
         ...(input?.metadata || {}),
         activation: true,
         activationDomain: normalizedDomain,
         activationQueue: safeQueueMetadata(queueMetadata),
+        ...(input?.dedupeKey ? { originalDedupeKey: String(input.dedupeKey) } : {}),
       },
     }, { db: targetDb })
     event = persisted.event
@@ -298,6 +331,23 @@ export function deadLetterInformationActivation(entry = {}, error = '', { db = g
     deliveryIds: entry.informationDeliveryIds || [],
     error: error || 'information activation failed',
     maxAttempts: 1,
+  }, { db })
+}
+
+export function nackInformationActivation(entry = {}, error = '', {
+  db = getDB(),
+  retryAt = new Date(),
+  maxAttempts = 5,
+} = {}) {
+  if (!entry.informationActivation || !entry.informationLeaseId) {
+    return { pending: 0, deadLetter: 0, total: 0 }
+  }
+  return nackInformationDeliveries({
+    leaseId: entry.informationLeaseId,
+    deliveryIds: entry.informationDeliveryIds || [],
+    error: error || 'information activation NACK',
+    retryAt,
+    maxAttempts,
   }, { db })
 }
 

@@ -27,10 +27,12 @@ export {
   publishInformationEventForMigration,
   compileInformationActivationFrame,
   ackInformationActivation,
+  nackInformationActivation,
   deadLetterInformationActivation,
   resumePendingInformationActivations,
   getNextInformationActivation,
 } from './activation-bridge.js'
+export { enqueueReminderRunForMigration } from './reminder-activation.js'
 export {
   isInformationShadowEnabled,
   shadowPublishInformationEvent,

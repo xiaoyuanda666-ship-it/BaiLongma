@@ -21,15 +21,16 @@ import { runKnowledgeInjector } from './knowledge/injector.js'
 import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, insertConversation, insertMemory, getRecentConversationPartners, getDueReminders, materializeReminderRun, recoverInterruptedReminderRuns, claimRunnableReminderRuns, completeReminderRun, retryReminderRun, failReminderRun, getNextPendingReminder, getNextPendingReminderRun, getMemoryCount, getRecentConversationTimeline, loadFocusStack, loadThreadState, saveThreadState, setCurrentFocusTopic, setCurrentThreadId, updateUserMessageFocusTopic, reassignConversationsThread, insertActionLog } from './db.js'
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
-import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
 import { observeInformationContextShadow, buildInformationContextAudit } from './information/context-shadow.js'
 import {
   compileInformationActivationFrame,
   ackInformationActivation,
+  nackInformationActivation,
   deadLetterInformationActivation,
   resumePendingInformationActivations,
   getNextInformationActivation,
 } from './information/activation-bridge.js'
+import { enqueueReminderRunForMigration } from './information/reminder-activation.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -572,43 +573,7 @@ function enqueueDueReminders() {
 
   const runnable = claimRunnableReminderRuns(now, 20)
   for (const run of runnable) {
-    const queued = pushMessage('SYSTEM', run.task, 'REMINDER', {
-      queue: 'background',
-      persist: false,
-      runtimeLane: 'l3',
-      scheduledEventType: 'reminder',
-      reminderRunId: run.id,
-      reminderId: run.reminder_id,
-      reminderTargetId: run.user_id,
-      reminderTask: run.task,
-      reminderDueAt: run.due_at,
-      reminderAttempt: run.attempts,
-      deliveryPolicy: 'notify',
-    })
-    const shadowInformation = shadowPublishInformationEvent({
-      topic: 'schedule.due',
-      source: { id: 'scheduler:reminders', kind: 'event' },
-      subject: { userId: run.user_id, reminderId: run.reminder_id, runId: run.id },
-      authorship: 'system',
-      semanticKind: 'runtime_event',
-      payload: {
-        reminderId: run.reminder_id,
-        runId: run.id,
-        dueAt: run.due_at,
-        attempt: run.attempts,
-        deliveryPolicy: 'notify',
-      },
-      payloadRef: { table: 'reminder_runs', id: run.id },
-      occurredAt: run.due_at || now,
-      priority: 70,
-      sensitivity: 'private',
-      trust: 'authoritative',
-      orderingKey: `reminder:${run.reminder_id}`,
-      dedupeKey: `reminder-run:${run.id}`,
-      correlationId: `reminder:${run.reminder_id}`,
-      metadata: { runtimeLane: 'l3' },
-    })
-    if (shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
+    enqueueReminderRunForMigration(run)
   }
 }
 
@@ -629,6 +594,15 @@ function scheduleReminderRunRetry(msg, error, { immediate = false } = {}) {
   const attempt = Math.max(1, Number(msg.reminderAttempt || 1))
   if (attempt >= MAX_REMINDER_RUN_ATTEMPTS) {
     failReminderRun(msg.reminderRunId, error)
+    if (msg.informationActivation) {
+      const failed = deadLetterInformationActivation(msg, error)
+      emitEvent('information_delivery_dead_lettered', {
+        event_id: msg.informationEventId,
+        lease_id: msg.informationLeaseId,
+        dead_lettered: failed.deadLetter,
+        error: String(error || '').slice(0, 500),
+      })
+    }
     emitEvent('scheduled_task_failed', {
       run_id: msg.reminderRunId,
       reminder_id: msg.reminderId,
@@ -641,6 +615,22 @@ function scheduleReminderRunRetry(msg, error, { immediate = false } = {}) {
   const delayMs = immediate ? 0 : Math.min(60_000, 5_000 * (2 ** (attempt - 1)))
   const availableAt = new Date(Date.now() + delayMs).toISOString()
   retryReminderRun(msg.reminderRunId, error, availableAt)
+  if (msg.informationActivation) {
+    const nacked = nackInformationActivation(msg, error, {
+      retryAt: availableAt,
+      // reminder_runs is the retry authority; this high guard merely prevents
+      // an orphaned delivery from retrying forever if the two stores diverge.
+      maxAttempts: 100,
+    })
+    emitEvent('information_delivery_nacked', {
+      event_id: msg.informationEventId,
+      lease_id: msg.informationLeaseId,
+      pending: nacked.pending,
+      dead_lettered: nacked.deadLetter,
+      available_at: availableAt,
+      error: String(error || '').slice(0, 500),
+    })
+  }
   emitEvent('scheduled_task_retry', {
     run_id: msg.reminderRunId,
     reminder_id: msg.reminderId,
@@ -797,6 +787,7 @@ async function runTurn(input, label, msg = null) {
   const isTick = runtimeLane === 'l2'
   const isScheduledTask = runtimeLane === 'l3'
   const isInformationTurn = runtimeLane === 'information'
+  const hasInformationActivation = msg?.informationActivation === true
   const isUserTurn = runtimeLane === 'l1'
   const semanticInput = isScheduledTask
     ? (msg?.reminderTask || msg?.content || '')
@@ -1210,17 +1201,17 @@ async function runTurn(input, label, msg = null) {
       userId: PRIMARY_USER_ID,
     })
     const legacyComponentsForAudit = { ...supplementalInformation.components }
-    const activationFrame = isInformationTurn
+    const activationFrame = hasInformationActivation
       ? compileInformationActivationFrame(msg, { now: new Date() })
       : null
-    if (isInformationTurn && !activationFrame) {
+    if (hasInformationActivation && !activationFrame) {
       throw new Error('information activation is missing its leased ContextFrame')
     }
     if (isInformationTurn && msg.informationActivationDomain === 'job') {
       supplementalInformation.components.browserDownloads = ''
     }
     supplementalInformation.contextText = Object.values(supplementalInformation.components).filter(Boolean).join('\n\n')
-    const contextShadow = isInformationTurn
+    const contextShadow = hasInformationActivation
       ? {
           enabled: true,
           observed: true,
@@ -1236,7 +1227,7 @@ async function runTurn(input, label, msg = null) {
           now: new Date(),
         })
     if (contextShadow.observed) {
-      emitEvent(isInformationTurn ? 'information_context_activated' : 'information_context_shadow', contextShadow.audit)
+      emitEvent(hasInformationActivation ? 'information_context_activated' : 'information_context_shadow', contextShadow.audit)
     }
     const extraContextJoined = [
       supplementalInformation.contextText,
@@ -1743,6 +1734,16 @@ async function runTurn(input, label, msg = null) {
       && hasVerifiedScheduledDelivery(toolCallLog, msg.reminderTargetId)
     if (verifiedDelivery) {
       completeReminderRun(msg.reminderRunId)
+      if (msg.informationActivation) {
+        const acked = ackInformationActivation(msg)
+        emitEvent('information_delivery_acked', {
+          event_id: msg.informationEventId,
+          lease_id: msg.informationLeaseId,
+          requested: msg.informationDeliveryIds?.length || 0,
+          acked,
+          policy: 'after_turn',
+        })
+      }
       emitEvent('scheduled_task_completed', {
         run_id: msg.reminderRunId,
         reminder_id: msg.reminderId,

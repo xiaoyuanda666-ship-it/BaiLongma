@@ -18,6 +18,7 @@ try {
     publishInformationEventForMigration,
     compileInformationActivationFrame,
     ackInformationActivation,
+    nackInformationActivation,
     resumePendingInformationActivations,
     getNextInformationActivation,
   } = await import('./information/activation-bridge.js')
@@ -25,6 +26,7 @@ try {
   const { publishInformationEvent } = await import('./information/hub.js')
   const { buildLLMMessages } = await import('./runtime/messages.js')
   const { createBrowserDownloadEventHandler } = await import('./browser-download-events.js')
+  const { enqueueReminderRunForMigration } = await import('./information/reminder-activation.js')
   const { popMessage } = await import('./queue.js')
 
   const db = getDB()
@@ -32,8 +34,10 @@ try {
   const allEnv = { BAILONGMA_INFORMATION_ACTIVATION: 'all' }
   assert.equal(isInformationActivationEnabled('ui', uiEnv), true)
   assert.equal(isInformationActivationEnabled('job', uiEnv), false)
+  assert.equal(isInformationActivationEnabled('schedule', uiEnv), false)
   assert.equal(isInformationActivationEnabled('job', allEnv), true)
-  assert.equal(isInformationActivationEnabled('schedule', allEnv), false)
+  assert.equal(isInformationActivationEnabled('schedule', allEnv), true)
+  assert.equal(isInformationActivationEnabled('user', allEnv), false)
 
   const queued = []
   const passive = publishInformationEventForMigration({
@@ -192,6 +196,19 @@ try {
   assert.equal(failed.handled, false)
   assert.match(failed.error, /queue unavailable/)
   assert.equal(listInformationDeliveries({ eventId: failed.event.id }, { db })[0].state, 'dead_letter')
+  const failedRetry = publishInformationEventForMigration({
+    ...uiInput,
+    id: 'info_activation_enqueue_fail_retry',
+    dedupeKey: 'activation-enqueue-fail',
+  }, {
+    domain: 'ui',
+    env: uiEnv,
+    db,
+    enqueue: item => queued.push(item),
+  })
+  assert.equal(failedRetry.created, false)
+  assert.equal(failedRetry.handled, false, 'a dead delivery gives the source permission to use its legacy fallback')
+  assert.equal(failedRetry.reason, 'dead_letter')
 
   const jobQueued = []
   const jobActivation = publishInformationEventForMigration({
@@ -222,6 +239,207 @@ try {
   assert.equal(jobQueued[0].notificationTargetId, 'ID:test')
   assert.equal(jobQueued[0].backgroundJobId, 'job-1')
   assert.equal(ackInformationActivation(jobQueued[0], { db }), 1)
+
+  const scheduleQueue = []
+  const scheduleInput = {
+    id: 'info_activation_schedule_0001',
+    topic: 'schedule.due',
+    source: { id: 'scheduler:test', kind: 'event' },
+    subject: { userId: 'ID:schedule-user', reminderId: 7, runId: 11 },
+    authorship: 'system',
+    semanticKind: 'runtime_event',
+    payload: {
+      reminderId: 7,
+      runId: 11,
+      dueAt: '2026-08-24T08:00:00.000Z',
+      attempt: 1,
+      deliveryPolicy: 'notify',
+      task: '提醒用户喝水',
+    },
+    occurredAt: '2026-08-24T08:00:00.000Z',
+    priority: 70,
+    sensitivity: 'private',
+    trust: 'authoritative',
+    dedupeKey: 'reminder-run:11',
+  }
+  const scheduleActivation = publishInformationEventForMigration(scheduleInput, {
+    domain: 'schedule',
+    env: { BAILONGMA_INFORMATION_ACTIVATION: 'schedule' },
+    db,
+    queueMetadata: {
+      scheduledEventType: 'reminder',
+      reminderRunId: 11,
+      reminderId: 7,
+      reminderTargetId: 'ID:schedule-user',
+      reminderTask: '提醒用户喝水',
+      reminderDueAt: '2026-08-24T08:00:00.000Z',
+      reminderAttempt: 1,
+      deliveryPolicy: 'notify',
+    },
+    enqueue: item => scheduleQueue.push(item),
+  })
+  assert.equal(scheduleActivation.activated, true)
+  assert.equal(scheduleQueue[0].runtimeLane, 'l3')
+  assert.equal(scheduleQueue[0].channel, 'REMINDER')
+  assert.equal(scheduleQueue[0].content, '提醒用户喝水')
+  assert.equal(scheduleQueue[0].reminderTargetId, 'ID:schedule-user')
+  assert.equal(scheduleQueue[0].reminderAttempt, 1)
+  const scheduleFrame = compileInformationActivationFrame(scheduleQueue[0], { db })
+  assert.equal(scheduleFrame.contextItems[0].event.payload.task, '提醒用户喝水')
+  const scheduleMessages = buildLLMMessages({
+    systemPrompt: 'stable system prompt',
+    contextBlock: scheduleFrame.contextText,
+    conversationWindow: [],
+    input: scheduleQueue[0].content,
+    msg: scheduleQueue[0],
+    runtimeLane: 'l3',
+  })
+  assert.ok(scheduleMessages.every(message => message.role === 'system'))
+  assert.match(scheduleMessages[0].content, /L3 scheduled task/i)
+  assert.equal(scheduleMessages.some(message => message.content.includes('<context-information>')), true)
+  const scheduleNack = nackInformationActivation(scheduleQueue[0], 'provider unavailable', {
+    db,
+    retryAt: new Date(0),
+    maxAttempts: 100,
+  })
+  assert.equal(scheduleNack.pending, 1)
+
+  const scheduleRetryQueue = []
+  const scheduleRetry = publishInformationEventForMigration({
+    ...scheduleInput,
+    id: 'info_activation_schedule_retry',
+    payload: { ...scheduleInput.payload, attempt: 2 },
+  }, {
+    domain: 'schedule',
+    env: { BAILONGMA_INFORMATION_ACTIVATION: 'schedule' },
+    db,
+    queueMetadata: {
+      scheduledEventType: 'reminder',
+      reminderRunId: 11,
+      reminderId: 7,
+      reminderTargetId: 'ID:schedule-user',
+      reminderTask: '提醒用户喝水',
+      reminderDueAt: '2026-08-24T08:00:00.000Z',
+      reminderAttempt: 2,
+      deliveryPolicy: 'notify',
+    },
+    enqueue: item => scheduleRetryQueue.push(item),
+  })
+  assert.equal(scheduleRetry.created, false)
+  assert.equal(scheduleRetry.activated, true)
+  assert.equal(scheduleRetryQueue[0].reminderAttempt, 2)
+  assert.equal(ackInformationActivation(scheduleRetryQueue[0], { db }), 1)
+
+  const shadowCollision = publishInformationEvent({
+    ...scheduleInput,
+    id: 'info_activation_schedule_shadow',
+    subject: { userId: 'ID:schedule-user', reminderId: 8, runId: 12 },
+    payload: { ...scheduleInput.payload, reminderId: 8, runId: 12 },
+    dedupeKey: 'reminder-run:12',
+    metadata: { runtimeLane: 'l3' },
+  }, { db })
+  const promotedQueue = []
+  const promoted = publishInformationEventForMigration({
+    ...scheduleInput,
+    id: 'info_activation_schedule_promoted',
+    subject: { userId: 'ID:schedule-user', reminderId: 8, runId: 12 },
+    payload: { ...scheduleInput.payload, reminderId: 8, runId: 12 },
+    dedupeKey: 'reminder-run:12',
+  }, {
+    domain: 'schedule',
+    env: { BAILONGMA_INFORMATION_ACTIVATION: 'schedule' },
+    db,
+    queueMetadata: {
+      reminderRunId: 12,
+      reminderId: 8,
+      reminderTargetId: 'ID:schedule-user',
+      reminderTask: '提醒用户喝水',
+      reminderDueAt: '2026-08-24T08:00:00.000Z',
+      reminderAttempt: 1,
+      deliveryPolicy: 'notify',
+    },
+    enqueue: item => promotedQueue.push(item),
+  })
+  assert.equal(shadowCollision.created, true)
+  assert.equal(promoted.created, true, 'activation dedupe namespace does not reuse an old shadow event')
+  assert.notEqual(promoted.event.id, shadowCollision.event.id)
+  assert.equal(ackInformationActivation(promotedQueue[0], { db }), 1)
+
+  const legacyReminderCalls = []
+  const legacyReminder = enqueueReminderRunForMigration({
+    id: 13,
+    reminder_id: 9,
+    user_id: 'ID:schedule-user',
+    task: '旧链路提醒',
+    due_at: '2026-08-24T09:00:00.000Z',
+    attempts: 1,
+  }, {
+    env: {},
+    db,
+    pushMessageFn: (...args) => {
+      legacyReminderCalls.push(args)
+      return { fromId: args[0], content: args[1], channel: args[2], ...args[3] }
+    },
+  })
+  assert.equal(legacyReminder.informationResult.handled, false)
+  assert.equal(legacyReminderCalls.length, 1)
+  assert.equal(legacyReminderCalls[0][2], 'REMINDER')
+  assert.equal(legacyReminder.queued.runtimeLane, 'l3')
+
+  const activatedReminderQueue = []
+  const activatedReminderLegacyCalls = []
+  const activatedReminder = enqueueReminderRunForMigration({
+    id: 14,
+    reminder_id: 10,
+    user_id: 'ID:schedule-user',
+    task: '新链路提醒',
+    due_at: '2026-08-24T10:00:00.000Z',
+    attempts: 1,
+  }, {
+    env: { BAILONGMA_INFORMATION_ACTIVATION: 'schedule' },
+    db,
+    enqueue: item => activatedReminderQueue.push(item),
+    pushMessageFn: (...args) => activatedReminderLegacyCalls.push(args),
+  })
+  assert.equal(activatedReminder.informationResult.handled, true)
+  assert.equal(activatedReminderLegacyCalls.length, 0)
+  assert.equal(activatedReminderQueue[0].runtimeLane, 'l3')
+  assert.equal(activatedReminderQueue[0].reminderRunId, 14)
+  assert.equal(ackInformationActivation(activatedReminderQueue[0], { db }), 1)
+
+  for (const runId of [20, 21]) {
+    publishInformationEvent({
+      ...scheduleInput,
+      id: `info_activation_schedule_recovery_${runId}`,
+      subject: { userId: 'ID:schedule-user', reminderId: runId, runId },
+      payload: { ...scheduleInput.payload, reminderId: runId, runId, task: `提醒 ${runId}` },
+      dedupeKey: `activation:schedule:reminder-run:${runId}`,
+      metadata: {
+        activation: true,
+        activationDomain: 'schedule',
+        activationQueue: {
+          scheduledEventType: 'reminder',
+          reminderRunId: runId,
+          reminderId: runId,
+          reminderTargetId: 'ID:schedule-user',
+          reminderTask: `提醒 ${runId}`,
+          reminderDueAt: '2026-08-24T11:00:00.000Z',
+          reminderAttempt: 1,
+          deliveryPolicy: 'notify',
+        },
+      },
+    }, { db })
+  }
+  const recoveredScheduleQueue = []
+  resumePendingInformationActivations({
+    env: { BAILONGMA_INFORMATION_ACTIVATION: 'schedule' },
+    db,
+    enqueue: item => recoveredScheduleQueue.push(item),
+  })
+  assert.equal(recoveredScheduleQueue.length, 2, 'independent due reminders recover as independent L3 turns')
+  assert.deepEqual(recoveredScheduleQueue.map(item => item.reminderRunId).sort(), [20, 21])
+  assert.equal(recoveredScheduleQueue.every(item => item.informationDeliveryIds.length === 1), true)
+  for (const item of recoveredScheduleQueue) assert.equal(ackInformationActivation(item, { db }), 1)
 
   const legacyJobSignals = []
   process.env.BAILONGMA_INFORMATION_ACTIVATION = 'job'
