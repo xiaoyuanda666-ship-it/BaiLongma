@@ -81,6 +81,7 @@ export function releaseExpiredInformationLeases(now = new Date().toISOString(), 
 }
 
 export function listInformationDeliveries({
+  deliveryIds = [],
   eventId = '',
   routeId = '',
   subscriberType = '',
@@ -90,6 +91,11 @@ export function listInformationDeliveries({
 } = {}, { db = getDB() } = {}) {
   const clauses = []
   const args = []
+  const deliveryFilter = idFilter(deliveryIds)
+  if (deliveryFilter.unique.length > 0) {
+    clauses.push(`id IN (${deliveryFilter.unique.map(() => '?').join(',')})`)
+    args.push(...deliveryFilter.unique)
+  }
   if (eventId) clauses.push('event_id = ?'), args.push(String(eventId))
   if (routeId) clauses.push('route_id = ?'), args.push(String(routeId))
   if (subscriberType) clauses.push('subscriber_type = ?'), args.push(String(subscriberType))
@@ -105,6 +111,7 @@ export function listInformationDeliveries({
 }
 
 export function leaseInformationDeliveries({
+  deliveryIds = [],
   subscriberType = 'agent',
   subscriberId,
   limit = 20,
@@ -118,6 +125,7 @@ export function leaseInformationDeliveries({
   const leaseExpiresAt = new Date(new Date(nowIso).getTime() + safeLeaseMs).toISOString()
   const safeLimit = Math.max(1, Math.min(100, Math.round(Number(limit) || 20)))
   const leaseId = `lease_${crypto.randomUUID()}`
+  const deliveryFilter = idFilter(deliveryIds)
 
   const lease = db.transaction(() => {
     releaseExpiredInformationLeases(nowIso, { db })
@@ -125,17 +133,18 @@ export function leaseInformationDeliveries({
       SELECT * FROM information_deliveries
       WHERE state = 'pending' AND available_at <= ?
         AND subscriber_type = ? AND subscriber_id = ?
+        ${deliveryFilter.sql}
       ORDER BY priority DESC, available_at ASC, created_at ASC
       LIMIT ?
-    `).all(nowIso, String(subscriberType || 'agent'), normalizedSubscriberId, safeLimit)
+    `).all(nowIso, String(subscriberType || 'agent'), normalizedSubscriberId, ...deliveryFilter.unique, safeLimit)
     if (rows.length === 0) return []
-    const ids = rows.map(row => row.id)
+    const selectedIds = rows.map(row => row.id)
     db.prepare(`
       UPDATE information_deliveries
       SET state = 'leased', lease_id = ?, lease_expires_at = ?,
           attempts = attempts + 1, updated_at = datetime('now')
-      WHERE state = 'pending' AND id IN (${ids.map(() => '?').join(',')})
-    `).run(leaseId, leaseExpiresAt, ...ids)
+      WHERE state = 'pending' AND id IN (${selectedIds.map(() => '?').join(',')})
+    `).run(leaseId, leaseExpiresAt, ...selectedIds)
     return db.prepare(`
       SELECT * FROM information_deliveries WHERE lease_id = ? ORDER BY priority DESC, created_at ASC
     `).all(leaseId).map(mapDeliveryRow)

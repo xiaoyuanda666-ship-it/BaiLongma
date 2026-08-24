@@ -20,6 +20,7 @@ const functionItem = {
 
 const executions = []
 let rounds = 0
+let modelAccepts = 0
 const result = await callLLM({
   systemPrompt: 'Read the file and answer.',
   message: 'What does report.txt say?',
@@ -27,6 +28,7 @@ const result = await callLLM({
   mustReply: true,
   localReply: true,
   toolContext: { currentTargetId: 'ID:test' },
+  onModelAccept: () => { modelAccepts += 1 },
   _executeToolForTest: async (name, args) => {
     executions.push({ name, args })
     if (name === 'read_file') return JSON.stringify({ ok: true, content: 'hello' })
@@ -74,6 +76,7 @@ const result = await callLLM({
 })
 
 assert.equal(rounds, 2)
+assert.equal(modelAccepts, 1, 'the model-accept boundary fires once for a multi-round tool loop')
 assert.deepEqual(executions.map(entry => entry.name), ['read_file', 'send_message'])
 assert.equal(result.content, 'The file says hello.')
 assert.equal(result.delivered, true)

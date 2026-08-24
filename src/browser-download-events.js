@@ -1,5 +1,5 @@
 import { pushMessage } from './inbound-message.js'
-import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
+import { publishInformationEventForMigration } from './information/activation-bridge.js'
 import { emitEvent } from './events.js'
 import { PRIMARY_USER_ID, isVoiceChannel } from './identity.js'
 import { getBackgroundJobManager } from './background-job-manager.js'
@@ -120,7 +120,7 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
 
   const routing = routeFor(event, job)
   try {
-    const queued = pushMessageFn('SYSTEM', makeAgentSignal(event, job, normalizedType), 'APP_SIGNAL', {
+    const queueMetadata = {
       queue: 'background',
       priority: 40,
       persist: false,
@@ -132,8 +132,8 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
       browserDownloadState: String(event.state || job.state || 'unknown'),
       backgroundJobId: job.jobId,
       backgroundJobEvent: normalizedType,
-    })
-    const shadowInformation = shadowPublishInformationEvent({
+    }
+    const informationResult = publishInformationEventForMigration({
       topic: 'job.state_changed',
       source: { id: 'job:browser-download', kind: 'event' },
       subject: { userId: routing.targetId, jobId: job.jobId, downloadId: String(event.id || job.downloadId || '') },
@@ -155,8 +155,14 @@ export function notifyBrowserDownloadJobImportantEvent(job, importantType, {
       dedupeKey: `job-event:${job.jobId}:${eventKey}`,
       correlationId: job.jobId,
       metadata: { legacyAppSignal: true },
+    }, {
+      domain: 'job',
+      queueMetadata,
     })
-    if (queued && shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
+    const queued = informationResult.handled
+      ? null
+      : pushMessageFn('SYSTEM', makeAgentSignal(event, job, normalizedType), 'APP_SIGNAL', queueMetadata)
+    if (queued && informationResult.event?.id) queued.informationEventId = informationResult.event.id
     return true
   } catch (error) {
     jobManager.releaseImportantNotification?.(job.jobId, eventKey)
@@ -199,7 +205,7 @@ export function createBrowserDownloadEventHandler({
     if (signalled.has(key)) return true
 
     const routing = routeFor(event)
-    const queued = pushMessageFn('SYSTEM', makeAgentSignal(event, null, importantType), 'APP_SIGNAL', {
+    const queueMetadata = {
       queue: 'background',
       priority: 40,
       persist: false,
@@ -209,8 +215,8 @@ export function createBrowserDownloadEventHandler({
       notificationVoiceReply: routing.voiceReply || isVoiceChannel(routing.channel),
       browserDownloadId: String(event.id),
       browserDownloadState: String(event.state || 'unknown'),
-    })
-    const shadowInformation = shadowPublishInformationEvent({
+    }
+    const informationResult = publishInformationEventForMigration({
       topic: 'job.state_changed',
       source: { id: 'job:browser-download', kind: 'event' },
       subject: { userId: routing.targetId, downloadId: String(event.id) },
@@ -231,8 +237,14 @@ export function createBrowserDownloadEventHandler({
       dedupeKey: `download-event:${key}`,
       correlationId: String(event.id),
       metadata: { legacyAppSignal: true },
+    }, {
+      domain: 'job',
+      queueMetadata,
     })
-    if (queued && shadowInformation.event?.id) queued.informationEventId = shadowInformation.event.id
+    const queued = informationResult.handled
+      ? null
+      : pushMessageFn('SYSTEM', makeAgentSignal(event, null, importantType), 'APP_SIGNAL', queueMetadata)
+    if (queued && informationResult.event?.id) queued.informationEventId = informationResult.event.id
     signalled.set(key, nowMs)
     return true
   }

@@ -12,6 +12,26 @@ function componentCharCounts(components = {}) {
   )
 }
 
+export function buildInformationContextAudit(frame, {
+  legacyComponents = {},
+  subscriberType = 'agent',
+  subscriberId = 'agent:primary',
+  mode = 'shadow',
+} = {}) {
+  const legacyCharsByComponent = componentCharCounts(legacyComponents)
+  return {
+    frameId: frame.id,
+    mode,
+    triggerEventId: frame.triggerEventId || '',
+    subscriberType,
+    subscriberId,
+    ...frame.audit,
+    legacyComponentCount: Object.keys(legacyCharsByComponent).length,
+    legacyContextChars: Object.values(legacyCharsByComponent).reduce((sum, chars) => sum + chars, 0),
+    legacyCharsByComponent,
+  }
+}
+
 export function observeInformationContextShadow({
   triggerEventId = '',
   legacyComponents = {},
@@ -37,21 +57,11 @@ export function observeInformationContextShadow({
       triggerEventId: normalizedTriggerId,
       now,
     })
-    const legacyCharsByComponent = componentCharCounts(legacyComponents)
     return {
       enabled: true,
       observed: true,
       frame,
-      audit: {
-        frameId: frame.id,
-        triggerEventId: normalizedTriggerId,
-        subscriberType,
-        subscriberId,
-        ...frame.audit,
-        legacyComponentCount: Object.keys(legacyCharsByComponent).length,
-        legacyContextChars: Object.values(legacyCharsByComponent).reduce((sum, chars) => sum + chars, 0),
-        legacyCharsByComponent,
-      },
+      audit: buildInformationContextAudit(frame, { legacyComponents, subscriberType, subscriberId }),
     }
   } catch (error) {
     logWarn(error, {

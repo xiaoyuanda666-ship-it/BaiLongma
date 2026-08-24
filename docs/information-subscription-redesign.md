@@ -392,6 +392,11 @@ src/information/
 
 ### Phase 2：统一事件输入和唤醒
 
+- 领域切换由 `BAILONGMA_INFORMATION_ACTIVATION=ui,job`（或 `all`）显式开启，默认关闭；当前只允许 `ui` 和 `job`，不能意外提前切换 schedule/user message。
+- 普通 UI intent 与 browser download job 已具备 activation bridge：publish → route → lease → `information` runtime lane → ContextFrame → 首次 model accept ACK；接受前失败按原重试次数处理后进入 dead-letter，接受后不再重复投递。
+- activation bridge 支持在主动事件唤醒时把同一用户、同一领域内累积的被动 delivery 合并进一个 ContextFrame；被动 UI observation 暂时仍由 legacy next-turn context 承载，等普通用户 turn 接入租约后再切换。租约到期时间也进入 scheduler，因此关闭 L2 心跳后仍能恢复未确认投递。
+- 主动 UI intent 被新桥接管后，只退休对应的单条 `ui_signals` 兼容记录；同一时段尚未迁移的被动 UI 记录继续走旧 context，避免整段清空造成信息丢失。
+- `information` lane 是非用户系统轮：没有 current user message，纯 assistant text 不投递，只有显式工具行为或 `send_message` 才产生外部效果。
 - scheduler 改为从 delivery inbox 选择 turn trigger；保留 legacy queue bridge 作为回滚开关。
 - 先迁 UI 和 background job，再迁 reminder，最后迁 user message。
 - 移除 UI intent 的“双写 signal + 伪消息”行为。

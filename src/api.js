@@ -6,9 +6,11 @@ import { WebSocketServer } from 'ws'
 import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-server.js'
 import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
-import { getConfig, insertUISignal } from './db.js'
+import { getConfig, insertUISignal, markUISignalsConsumed } from './db.js'
 import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
+import { publishInformationEventForMigration } from './information/activation-bridge.js'
 import { emitEvent, setStickyEvent } from './events.js'
+import { PRIMARY_USER_ID } from './identity.js'
 import { getLanAccessToken, getNetworkConfig, getSecurity, getVoiceRuntimeConfig, setSecurity } from './config.js'
 import { ensureLanTlsCertificates } from './lan-access.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
@@ -265,10 +267,10 @@ function attachSceneProtocol() {
       .replace(/[^a-z0-9_-]+/g, '_')
       .replace(/^_+|_+$/g, '') || 'unknown'
     const passiveUiObservation = SCENE_PASSIVE_INTENTS.has(name)
-    const shadowInformation = shadowPublishInformationEvent({
+    const informationInput = {
       topic: `ui.${passiveUiObservation ? 'observation' : 'intent'}.${shadowTopicSuffix}`,
       source: { id: 'ui:scene-protocol', kind: 'event' },
-      subject: { surface },
+      subject: { surface, userId: PRIMARY_USER_ID },
       authorship: passiveUiObservation ? 'system' : 'user',
       semanticKind: 'ui_signal',
       payload: { name, data },
@@ -281,12 +283,37 @@ function attachSceneProtocol() {
       dedupeKey: `ui-signal:${id}`,
       correlationId: String(surface),
       metadata: { legacyUiSignalId: id },
-    })
-    const shadowMeta = shadowInformation.event?.id
-      ? { informationEventId: shadowInformation.event.id }
+    }
+    const securityConfirmationIntent = name === 'select' && surface.startsWith('security-confirm-')
+    const staysOnLegacyUiContext = securityConfirmationIntent || passiveUiObservation
+    // Security confirmation keeps its purpose-built refresh path. Passive UI
+    // observations also stay on the legacy next-turn context until ordinary
+    // user turns can lease accumulated Information Core context directly.
+    const informationResult = staysOnLegacyUiContext
+      ? shadowPublishInformationEvent(informationInput)
+      : publishInformationEventForMigration(informationInput, {
+          domain: 'ui',
+          queueMetadata: {
+            surface,
+            notificationTargetId: PRIMARY_USER_ID,
+            notificationChannel: 'TUI',
+          },
+        })
+    const shadowMeta = informationResult.event?.id
+      ? { informationEventId: informationResult.event.id }
       : {}
+    if (!staysOnLegacyUiContext && informationResult.handled) {
+      // The durable Information Core delivery now owns this active intent.
+      // Remove only its compatibility row; passive UI rows remain available
+      // through the legacy next-turn context until that path is migrated too.
+      try {
+        markUISignalsConsumed([id])
+      } catch (error) {
+        console.warn('[information] failed to retire migrated UI compatibility row:', error?.message || error)
+      }
+    }
 
-    if (name === 'select' && surface.startsWith('security-confirm-')) {
+    if (securityConfirmationIntent) {
       const pending = sceneStore.get(surface)?.data?.pending || {}
       sceneStore.set(surface, null)
       if (data.value === 'confirm') {
@@ -323,7 +350,7 @@ function attachSceneProtocol() {
       return
     }
 
-    if (!SCENE_PASSIVE_INTENTS.has(name)) {
+    if (!SCENE_PASSIVE_INTENTS.has(name) && !informationResult.handled) {
       pushMessage(
         `UI:${surface}`,
         `[UI intent surface=${surface} name=${name}]\n${JSON.stringify(data, null, 2)}`,

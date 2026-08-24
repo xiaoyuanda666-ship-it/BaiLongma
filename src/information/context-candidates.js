@@ -24,6 +24,7 @@ export function hydrateInformationDeliveryCandidates(deliveries = [], { db = get
 }
 
 export function loadInformationDeliveryCandidates({
+  deliveryIds = [],
   eventId = '',
   subscriberType = '',
   subscriberId = '',
@@ -31,6 +32,7 @@ export function loadInformationDeliveryCandidates({
   limit = 100,
 } = {}, { db = getDB() } = {}) {
   const deliveries = listInformationDeliveries({
+    deliveryIds,
     eventId,
     subscriberType,
     subscriberId,

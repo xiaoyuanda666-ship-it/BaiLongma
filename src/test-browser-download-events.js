@@ -5,6 +5,9 @@ import {
 } from './browser-download-events.js'
 import { BackgroundJobManager } from './background-job-manager.js'
 
+delete process.env.BAILONGMA_INFORMATION_ACTIVATION
+delete process.env.BAILONGMA_INFORMATION_SHADOW
+
 const messages = []
 const events = []
 let clock = Date.parse('2026-08-22T02:00:00.000Z')

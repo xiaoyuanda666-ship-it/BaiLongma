@@ -966,7 +966,7 @@ function isCloserPattern(content) {
 //   refresh agent 的上下文"，**不**期望模型回复用户。当 silentSignal=true 时，
 //   runtime 直接拦截 send_message 调用（不让它真投递），并在工具结果里告知
 //   "本轮是 silent 系统信号，不要 send_message"，让模型从这次拒绝里学到边界。
-export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
+export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, onModelAccept, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
   const strictEvaluation = toolContext?.strictEvaluation || null
   const toolPromptHints = toolContext?.toolPromptHints || null
   const actionContract = toolContext?.actionContract || null
@@ -1027,12 +1027,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     channel: toolContext?.currentChannel,
     fromId: toolContext?.currentExternalPartyId || toolContext?.currentTargetId,
     targetId: toolContext?.currentTargetId,
-    userMessage: toolContext?.currentUserMessage || (typeof message === 'string' ? message : ''),
+    userMessage: toolContext?.runtimeLane === 'information'
+      ? null
+      : (toolContext?.currentUserMessage || (typeof message === 'string' ? message : '')),
     silentSignal,
     localReply,
     mustReply,
     outputContract: toolContext?.outputContract || (mustReply ? 'user_reply' : 'internal'),
-    informationContextShadow: toolContext?.informationContextShadow || null,
+    informationContext: toolContext?.informationContextAudit || null,
     tools,
   })
 
@@ -1109,6 +1111,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   let mediaPlayed = false
   let mediaPlayedKind = null   // 'music' | 'video'，决定用哪个表情
   let mediaEmojiSent = false   // 本 turn 已用表情代替过一次播放确认（一个 turn 只发一个表情）
+  let modelAccepted = false
 
   try {
   for (let round = 0; round < loopLimits.maxRounds; round++) {
@@ -1170,6 +1173,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         break
       }
       throw err
+    }
+    if (!modelAccepted) {
+      modelAccepted = true
+      if (onModelAccept) await onModelAccept()
     }
     const { content, reasoningContent, toolCalls = [], outputItems = [], incomplete = false, aborted } = roundResult
 

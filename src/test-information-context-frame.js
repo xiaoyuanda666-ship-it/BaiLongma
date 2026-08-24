@@ -146,7 +146,8 @@ try {
   const { beginTurn, getTrace, getTraces, clearTraces } = await import('./runtime/turn-trace.js')
   const traceHandle = beginTurn({
     label: 'context-shadow-test',
-    informationContextShadow: {
+    informationContext: {
+      mode: 'shadow',
       frameId: frame.id,
       triggerEventId: currentUser.id,
       candidateCount: 10,
@@ -159,9 +160,9 @@ try {
   })
   traceHandle.end({ messages: [] })
   const traced = getTrace(getTraces(1)[0].id)
-  assert.equal(traced.meta.informationContextShadow.frameId, frame.id)
-  assert.equal(traced.meta.informationContextShadow.selectedBySemanticKind.policy, 1)
-  assert.equal(Object.hasOwn(traced.meta.informationContextShadow, 'rawPayload'), false)
+  assert.equal(traced.meta.informationContext.frameId, frame.id)
+  assert.equal(traced.meta.informationContext.selectedBySemanticKind.policy, 1)
+  assert.equal(Object.hasOwn(traced.meta.informationContext, 'rawPayload'), false)
   clearTraces()
 } finally {
   delete process.env.BAILONGMA_USER_DIR

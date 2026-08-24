@@ -85,9 +85,11 @@ function sanitizeMeta(meta = {}) {
     const number = Number(value)
     return Number.isFinite(number) ? Math.max(0, Math.min(max, number)) : 0
   }
-  const shadow = meta.informationContextShadow && typeof meta.informationContextShadow === 'object'
-    ? meta.informationContextShadow
-    : null
+  const informationContext = meta.informationContext && typeof meta.informationContext === 'object'
+    ? meta.informationContext
+    : (meta.informationContextShadow && typeof meta.informationContextShadow === 'object'
+        ? meta.informationContextShadow
+        : null)
   const numericMap = value => Object.fromEntries(
     Object.entries(value && typeof value === 'object' ? value : {})
       .slice(0, 30)
@@ -103,23 +105,24 @@ function sanitizeMeta(meta = {}) {
     localReply: !!meta.localReply,
     mustReply: !!meta.mustReply,
     outputContract: pick(meta.outputContract, 40),
-    informationContextShadow: shadow
+    informationContext: informationContext
       ? {
-          frameId: pick(shadow.frameId, 80),
-          triggerEventId: pick(shadow.triggerEventId, 128),
-          subscriberType: pick(shadow.subscriberType, 40),
-          subscriberId: pick(shadow.subscriberId, 160),
-          candidateCount: count(shadow.candidateCount),
-          selectedUserInputCount: count(shadow.selectedUserInputCount),
-          selectedContextCount: count(shadow.selectedContextCount),
-          droppedCount: count(shadow.droppedCount),
-          contextChars: count(shadow.contextChars),
-          maxContextChars: count(shadow.maxContextChars),
-          contextHash: pick(shadow.contextHash, 80),
-          selectedBySemanticKind: numericMap(shadow.selectedBySemanticKind),
-          legacyComponentCount: count(shadow.legacyComponentCount),
-          legacyContextChars: count(shadow.legacyContextChars),
-          legacyCharsByComponent: numericMap(shadow.legacyCharsByComponent),
+          mode: pick(informationContext.mode, 40),
+          frameId: pick(informationContext.frameId, 80),
+          triggerEventId: pick(informationContext.triggerEventId, 128),
+          subscriberType: pick(informationContext.subscriberType, 40),
+          subscriberId: pick(informationContext.subscriberId, 160),
+          candidateCount: count(informationContext.candidateCount),
+          selectedUserInputCount: count(informationContext.selectedUserInputCount),
+          selectedContextCount: count(informationContext.selectedContextCount),
+          droppedCount: count(informationContext.droppedCount),
+          contextChars: count(informationContext.contextChars),
+          maxContextChars: count(informationContext.maxContextChars),
+          contextHash: pick(informationContext.contextHash, 80),
+          selectedBySemanticKind: numericMap(informationContext.selectedBySemanticKind),
+          legacyComponentCount: count(informationContext.legacyComponentCount),
+          legacyContextChars: count(informationContext.legacyContextChars),
+          legacyCharsByComponent: numericMap(informationContext.legacyCharsByComponent),
         }
       : null,
     tools: Array.isArray(meta.tools) ? meta.tools.slice(0, 80) : [],

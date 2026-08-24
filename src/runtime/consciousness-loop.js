@@ -8,6 +8,7 @@ export function createConsciousnessLoop({
   clearCurrentExecution,
   emitEvent,
   enqueueDueReminders,
+  enqueueDueInformationActivations = () => {},
   hasMessages,
   popMessage,
   hasUserMessages,
@@ -28,6 +29,7 @@ export function createConsciousnessLoop({
   getAwakeningTicks,
   isTaskActive,
   getNextPendingReminder,
+  getNextPendingInformationActivation = () => null,
   getQuotaStatus,
   startConsolidationLoop,
   ensureStartupSelfCheckState,
@@ -92,11 +94,14 @@ export function createConsciousnessLoop({
 
     try {
       enqueueDueReminders()
+      enqueueDueInformationActivations()
       if (hasMessages()) {
         const msg = popMessage()
         const lane = msg.runtimeLane === 'l3'
           ? 'L3'
-          : (msg.queueName === 'background' ? 'BG' : 'L1')
+          : (msg.runtimeLane === 'information'
+              ? 'INFO'
+              : (msg.queueName === 'background' ? 'BG' : 'L1'))
         await runTurnWithWatchdog(msg.raw, `${lane} message from ${msg.fromId}`, msg)
       } else {
         // 防御性边界：即使某个旧 timer、测试入口或外部调用直接触发 onTick，
@@ -149,6 +154,7 @@ export function createConsciousnessLoop({
     if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
 
     enqueueDueReminders()
+    enqueueDueInformationActivations()
 
     const hasPending = hasMessages()
     const hasPendingUser = hasUserMessages()
@@ -157,6 +163,7 @@ export function createConsciousnessLoop({
     const customMs = getCustomIntervalMs()
     const taskActive = isTaskActive()
     const nextReminder = getNextPendingReminder()
+    const nextInformationActivation = getNextPendingInformationActivation()
     const baseTickInterval = getBaseTickInterval()
     const heartbeatEnabled = isHeartbeatEnabled()
 
@@ -198,6 +205,16 @@ export function createConsciousnessLoop({
         label = dueInMs > MAX_TIMER_DELAY_MS
           ? `heartbeat disabled; reminder rescan in ${Math.ceil(interval / 1000)}s`
           : `reminder fires in ${Math.ceil(dueInMs / 1000)}s`
+      }
+    }
+
+    if (nextInformationActivation?.dueAt) {
+      const dueInMs = Math.max(0, new Date(nextInformationActivation.dueAt).getTime() - Date.now())
+      if (Number.isFinite(dueInMs) && (interval === null || dueInMs < interval)) {
+        interval = Math.min(dueInMs, MAX_TIMER_DELAY_MS)
+        label = dueInMs > MAX_TIMER_DELAY_MS
+          ? `heartbeat disabled; information rescan in ${Math.ceil(interval / 1000)}s`
+          : `information activation in ${Math.ceil(dueInMs / 1000)}s`
       }
     }
 

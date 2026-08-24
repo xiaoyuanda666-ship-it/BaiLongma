@@ -14,7 +14,7 @@ function assert(condition, label) {
   console.error(`FAIL: ${label}`)
 }
 
-function makeHarness({ queuedMessage = false, queuedEntry = null, run = async () => {}, getTickerRevision = () => 0, heartbeatEnabled = true, running = false } = {}) {
+function makeHarness({ queuedMessage = false, queuedEntry = null, run = async () => {}, getTickerRevision = () => 0, heartbeatEnabled = true, running = false, nextInformationActivation = null } = {}) {
   let consumed = 0
   let awakened = 0
   let loop = null
@@ -48,6 +48,7 @@ function makeHarness({ queuedMessage = false, queuedEntry = null, run = async ()
     getAwakeningTicks: () => 0,
     isTaskActive: () => false,
     getNextPendingReminder: () => null,
+    getNextPendingInformationActivation: () => nextInformationActivation,
     getQuotaStatus: () => ({ rpmUsed: 0, tpmUsed: 0, ratio: 0 }),
     startConsolidationLoop: () => {},
     ensureStartupSelfCheckState: () => {},
@@ -60,6 +61,30 @@ function makeHarness({ queuedMessage = false, queuedEntry = null, run = async ()
     loop,
     counts: () => ({ consumed, awakened }),
   }
+}
+
+{
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  let scheduledDelay = null
+  globalThis.setTimeout = (_callback, delay) => {
+    scheduledDelay = delay
+    return { fake: true }
+  }
+  globalThis.clearTimeout = () => {}
+  try {
+    const h = makeHarness({
+      heartbeatEnabled: false,
+      running: true,
+      nextInformationActivation: { dueAt: new Date(Date.now() + 1_500).toISOString(), state: 'leased' },
+    })
+    await h.loop.start({ runImmediateTick: false })
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+  }
+  assert(scheduledDelay >= 500 && scheduledDelay <= 2_000,
+    'a pending information lease schedules recovery even when heartbeat is disabled')
 }
 
 {
@@ -141,6 +166,22 @@ function makeHarness({ queuedMessage = false, queuedEntry = null, run = async ()
   })
   await h.loop.onTick()
   assert(observedLabel.startsWith('L3 message from SYSTEM'), 'scheduled entries are labeled as the L3 runtime lane')
+}
+
+{
+  let observedLabel = ''
+  const h = makeHarness({
+    queuedMessage: true,
+    queuedEntry: {
+      raw: 'information payload',
+      fromId: 'SYSTEM',
+      queueName: 'background',
+      runtimeLane: 'information',
+    },
+    run: async ({ args }) => { observedLabel = args[1] },
+  })
+  await h.loop.onTick()
+  assert(observedLabel.startsWith('INFO message from SYSTEM'), 'information activations use their own non-user runtime lane')
 }
 
 {

@@ -21,7 +21,16 @@ export {
   hydrateInformationDeliveryCandidates,
   loadInformationDeliveryCandidates,
 } from './context-candidates.js'
-export { observeInformationContextShadow } from './context-shadow.js'
+export { observeInformationContextShadow, buildInformationContextAudit } from './context-shadow.js'
+export {
+  isInformationActivationEnabled,
+  publishInformationEventForMigration,
+  compileInformationActivationFrame,
+  ackInformationActivation,
+  deadLetterInformationActivation,
+  resumePendingInformationActivations,
+  getNextInformationActivation,
+} from './activation-bridge.js'
 export {
   isInformationShadowEnabled,
   shadowPublishInformationEvent,

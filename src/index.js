@@ -22,7 +22,14 @@ import { getDB, getConfig, setConfig, getKnownEntities, getOrInitBirthTime, inse
 import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/executor.js'
 import { pushMessage } from './inbound-message.js'
 import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
-import { observeInformationContextShadow } from './information/context-shadow.js'
+import { observeInformationContextShadow, buildInformationContextAudit } from './information/context-shadow.js'
+import {
+  compileInformationActivationFrame,
+  ackInformationActivation,
+  deadLetterInformationActivation,
+  resumePendingInformationActivations,
+  getNextInformationActivation,
+} from './information/activation-bridge.js'
 import { popMessage, hasMessages, hasUserMessages, getQueueSnapshot, setInterruptCallback, requeueMessage } from './queue.js'
 import { startTUI } from './tui.js'
 import { startAPI } from './api.js'
@@ -448,7 +455,7 @@ function buildToolContextForProcess(msg, injection, turnId = '') {
     replyClientId: msg?.clientId || null,
     replyTurnId: turnId || null,
     voiceReply,
-    currentUserMessage: msg?.content || null,
+    currentUserMessage: msg?.runtimeLane === 'information' ? null : (msg?.content || null),
     // Ordinary page work starts in the compact card. The model only needs the
     // explicit display tool when the user requests a size or a takeover flow
     // (login/CAPTCHA/video) requires the large window.
@@ -515,6 +522,19 @@ function beginExecution({ priority, kind, label, controller }) {
 function clearExecution(controller) {
   if (currentAbortController === controller) currentAbortController = null
   if (currentExecution && currentAbortController === null) currentExecution = null
+}
+
+function enqueueDueInformationActivations() {
+  try {
+    const resumed = resumePendingInformationActivations()
+    if (resumed.some(result => result.activated)) {
+      emitEvent('information_activation_resumed', {
+        count: resumed.filter(result => result.activated).length,
+      })
+    }
+  } catch (error) {
+    console.warn('[information] failed to resume pending activations:', error?.message || error)
+  }
 }
 
 function enqueueDueReminders() {
@@ -640,6 +660,14 @@ function handleLLMFailure(err, label, msg) {
   if (msg?.runtimeLane === 'l3') {
     return scheduleReminderRunRetry(msg, err.message)
   }
+  if (msg?.informationActivation && msg.informationAccepted) {
+    emitEvent('information_turn_failed_after_accept', {
+      event_id: msg.informationEventId,
+      lease_id: msg.informationLeaseId,
+      error: String(err.message || '').slice(0, 500),
+    })
+    return 'handled'
+  }
   if (msg) {
     const nextRetry = (msg.retryCount || 0) + 1
     if (nextRetry <= MAX_MESSAGE_RETRIES) {
@@ -648,6 +676,15 @@ function handleLLMFailure(err, label, msg) {
       requeueMessage(msg, nextRetry)
     } else {
       console.error(`[system] Message dropped after ${MAX_MESSAGE_RETRIES} retries: ${msg.content?.slice(0, 60)}`)
+      if (msg.informationActivation) {
+        const failed = deadLetterInformationActivation(msg, err.message)
+        emitEvent('information_delivery_dead_lettered', {
+          event_id: msg.informationEventId,
+          lease_id: msg.informationLeaseId,
+          dead_lettered: failed.deadLetter,
+          error: String(err.message || '').slice(0, 500),
+        })
+      }
       emitEvent('message_dropped', { fromId: msg.fromId, retryCount: nextRetry - 1, reason: err.message })
     }
   }
@@ -754,11 +791,19 @@ async function runTurn(input, label, msg = null) {
   const sessionRef = newSessionRef()
   if (msg) msg.turnId = sessionRef
   const turnStartedAtMs = Date.now()
-  const runtimeLane = !msg ? 'l2' : (msg.runtimeLane === 'l3' ? 'l3' : 'l1')
+  const runtimeLane = !msg
+    ? 'l2'
+    : (msg.runtimeLane === 'l3' ? 'l3' : (msg.runtimeLane === 'information' ? 'information' : 'l1'))
   const isTick = runtimeLane === 'l2'
   const isScheduledTask = runtimeLane === 'l3'
+  const isInformationTurn = runtimeLane === 'information'
   const isUserTurn = runtimeLane === 'l1'
-  const semanticInput = isScheduledTask ? (msg?.reminderTask || msg?.content || '') : input
+  const semanticInput = isScheduledTask
+    ? (msg?.reminderTask || msg?.content || '')
+    : (isInformationTurn ? (msg?.content || '') : input)
+  const contextChannel = isInformationTurn
+    ? 'SYSTEM'
+    : (msg ? normalizeChannel(msg.channel || '') : '')
   const pendingResourceContext = isUserTurn
     ? buildPendingResourceInjectorContext(msg?.pendingResources || [])
     : ''
@@ -777,7 +822,7 @@ async function runTurn(input, label, msg = null) {
   let toolContext = null
   let terminalEmitted = false
   const finishTurn = (content = '') => {
-    if (isTick || silentSignal || terminalEmitted) return
+    if (isTick || isInformationTurn || silentSignal || terminalEmitted) return
     terminalEmitted = true
     emitEvent('response', {
       sessionRef,
@@ -801,6 +846,13 @@ async function runTurn(input, label, msg = null) {
         due_at: msg.reminderDueAt,
         attempt: msg.reminderAttempt,
         task: semanticInput.slice(0, 500),
+      })
+    } else if (isInformationTurn) {
+      emitEvent('information_turn_started', {
+        label,
+        event_id: msg.informationEventId,
+        domain: msg.informationActivationDomain,
+        delivery_count: msg.informationDeliveryIds?.length || 0,
       })
     } else {
       emitEvent('message_received', {
@@ -854,7 +906,7 @@ async function runTurn(input, label, msg = null) {
     const injection = await runInjector({
       message: injectorInput,
       state,
-      currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+      currentChannel: contextChannel,
     })
     if (msg?.pendingResources?.length) {
       // 即使用户把“聊天消息上下文条数”调到 1，也不能把本轮刚消费的资源挤出窗口。
@@ -1012,6 +1064,11 @@ async function runTurn(input, label, msg = null) {
         'L3 scheduled-task boundary: no user is speaking in this turn. Execute only the scheduled task in the L3 payload. Never expose or paraphrase internal routing instructions, run IDs, system wrappers, or scheduler metadata. A reminder must end with one useful send_message to the specified target after any required tools finish; plain assistant text is private and reaches nobody.',
       )
     }
+    if (isInformationTurn) {
+      directions.unshift(
+        'Information activation boundary: no user is speaking in this turn. Base any action on the attributed trigger item in <context-information>. Plain assistant text is private; communicate only with an explicit send_message when the event creates genuinely useful new information for its intended recipient.',
+      )
+    }
     if (fastUserPath) {
       directions.unshift('Current turn is a real-time external user message. Understand it quickly and reply directly with send_message. If no slow tool is needed, send exactly one final answer and stop. Use heavier tools only when the reply depends on them. During longer execution, send progress only for meaningful new findings or blockers; do not send an acknowledgement and then a near-duplicate final answer.')
     }
@@ -1048,9 +1105,9 @@ async function runTurn(input, label, msg = null) {
     // turns deliberately do not pull documents merely because a region exists;
     // an explicit question, document signal, or eligible task follow-up does.
     const knowledgeInjectionPromise = runKnowledgeInjector({
-      query: isTick ? '' : (msg?.content || semanticInput),
+      query: (isTick || isInformationTurn) ? '' : (msg?.content || semanticInput),
       task: state.task,
-      source: isTick ? 'tick' : 'turn',
+      source: isTick ? 'tick' : (isInformationTurn ? 'information' : 'turn'),
     })
     const weatherSurfacePromise = (isUserTurn && msg && !silentSignal)
       ? projectWeatherSurfaceForTurn(msg.content || semanticInput)
@@ -1152,17 +1209,39 @@ async function runTurn(input, label, msg = null) {
       runtimeInformation: runtimeInjection,
       userId: PRIMARY_USER_ID,
     })
-    const contextShadow = observeInformationContextShadow({
-      triggerEventId: msg?.informationEventId || '',
-      legacyComponents: supplementalInformation.components,
-      now: new Date(),
-    })
-    if (contextShadow.observed) {
-      // Measure-only: no delivery is leased/ACKed and frame.contextText is not
-      // passed to the model until a later, separately gated migration phase.
-      emitEvent('information_context_shadow', contextShadow.audit)
+    const legacyComponentsForAudit = { ...supplementalInformation.components }
+    const activationFrame = isInformationTurn
+      ? compileInformationActivationFrame(msg, { now: new Date() })
+      : null
+    if (isInformationTurn && !activationFrame) {
+      throw new Error('information activation is missing its leased ContextFrame')
     }
-    const extraContextJoined = supplementalInformation.contextText
+    if (isInformationTurn && msg.informationActivationDomain === 'job') {
+      supplementalInformation.components.browserDownloads = ''
+    }
+    supplementalInformation.contextText = Object.values(supplementalInformation.components).filter(Boolean).join('\n\n')
+    const contextShadow = isInformationTurn
+      ? {
+          enabled: true,
+          observed: true,
+          frame: activationFrame,
+          audit: buildInformationContextAudit(activationFrame, {
+            legacyComponents: legacyComponentsForAudit,
+            mode: 'activation',
+          }),
+        }
+      : observeInformationContextShadow({
+          triggerEventId: msg?.informationEventId || '',
+          legacyComponents: legacyComponentsForAudit,
+          now: new Date(),
+        })
+    if (contextShadow.observed) {
+      emitEvent(isInformationTurn ? 'information_context_activated' : 'information_context_shadow', contextShadow.audit)
+    }
+    const extraContextJoined = [
+      supplementalInformation.contextText,
+      activationFrame?.contextText || '',
+    ].filter(Boolean).join('\n\n')
     const skillSelection = selectSkillsForMessage(semanticInput || '')
     const agentSkillsText = formatSkillsForContext(skillSelection)
     if (skillSelection.active.length > 0 || skillSelection.catalogRequested) {
@@ -1193,9 +1272,9 @@ async function runTurn(input, label, msg = null) {
       agentName,
       persona,
       birthTime,
-      userMessage: semanticInput || '',
-      currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
-      isVoiceTurn: isVoiceChannel(msg?.channel),
+      userMessage: isInformationTurn ? '' : (semanticInput || ''),
+      currentChannel: contextChannel,
+      isVoiceTurn: isInformationTurn ? false : isVoiceChannel(msg?.channel),
       isTick,
       hasWechatHistory: false,
       hasActiveFocus: false,
@@ -1231,7 +1310,7 @@ async function runTurn(input, label, msg = null) {
       existenceDesc: describeExistence(birthTime),
       systemEnv: buildSystemEnv(msg),
       security: getSecurity(),
-      currentChannel: msg ? normalizeChannel(msg.channel || '') : '',
+      currentChannel: contextChannel,
       channelSwitched: isUserTurn ? detectChannelSwitch(msg, injection.conversationWindow || []) : false,
       focusTickCounter: state.tickCounter || 0,
       selfPerception: injection.selfPerception || null,
@@ -1344,7 +1423,7 @@ async function runTurn(input, label, msg = null) {
     toolContext.browserLeasePriority = priority
     toolContext.browserLeaseScope = 'turn'
     toolContext.runtimeLane = runtimeLane
-    toolContext.informationContextShadow = contextShadow.observed ? contextShadow.audit : null
+    toolContext.informationContextAudit = contextShadow.observed ? contextShadow.audit : null
     // Intent routing remains model-led.  The narrow action contract below is
     // not a general intent classifier: it is only an execution guard for a
     // high-confidence side-effect request.  It prevents a text-only promise
@@ -1374,7 +1453,7 @@ async function runTurn(input, label, msg = null) {
     }
     // Autonomy changes who makes the semantic decision, not the authority
     // boundary. High-risk tools still require an explicit user-driven turn.
-    toolContext.autonomous = isTick || isScheduledTask
+    toolContext.autonomous = isTick || isScheduledTask || isInformationTurn
     toolContext.tickContext = isTick
       ? {
           id: `${sessionRef}:tick-${state.tickCounter}`,
@@ -1395,7 +1474,7 @@ async function runTurn(input, label, msg = null) {
     // A user-authored turn has a reply body by definition. A heartbeat does not:
     // its plain text is private working output, and only an explicit send_message
     // tool call represents the model's decision to communicate externally.
-    toolContext.outputContract = (isTick || isScheduledTask) ? 'explicit_send_only' : 'user_reply'
+    toolContext.outputContract = (isTick || isScheduledTask || isInformationTurn) ? 'explicit_send_only' : 'user_reply'
     toolContext.allowHighRiskAutonomy = false
     toolContext.strictEvaluation = strictEvaluation
     // 审视分身取证：把本轮正在累积的工具日志数组引用挂进 toolContext。execReviewWork 在循环中途
@@ -1519,6 +1598,27 @@ async function runTurn(input, label, msg = null) {
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
       },
+      onModelAccept: isInformationTurn
+        ? () => {
+            const requested = msg.informationDeliveryIds?.length || 0
+            const acked = ackInformationActivation(msg)
+            if (acked !== requested) {
+              throw new Error(`information delivery ACK mismatch: requested=${requested} acked=${acked}`)
+            }
+            msg.informationAccepted = true
+            try {
+              commitInformationConsumption(injection.categories?.information || injection)
+            } catch (error) {
+              console.warn('[information] compatibility consumption failed after ACK:', error?.message || error)
+            }
+            emitEvent('information_delivery_acked', {
+              event_id: msg.informationEventId,
+              lease_id: msg.informationLeaseId,
+              requested,
+              acked,
+            })
+          }
+        : null,
       onToolExecute: (name, args = {}) => {
         const eventBrowserMode = String(name || '').startsWith('browser_') && name !== 'browser_clear_data'
           ? browserModeForEvent(name, args)
@@ -1593,9 +1693,7 @@ async function runTurn(input, label, msg = null) {
       },
     })
     throwIfAborted(controller.signal)
-    // 消费型信息必须等到模型确实接收了本轮 messages 后再确认。若调用被中断或失败，
-    // UI 信号留给重试轮重新注入，避免 read 阶段提前吞掉。
-    commitInformationConsumption(injection.categories?.information || injection)
+    if (!isInformationTurn) commitInformationConsumption(injection.categories?.information || injection)
   } catch (err) {
     if (err.name === 'AbortError') {
       console.log('[system] LLM processing interrupted (new message arrived)')
@@ -1624,6 +1722,13 @@ async function runTurn(input, label, msg = null) {
     console.log('[system] Current processing interrupted by new message — partial output discarded')
     if (isTick) markCurrentTickAborted()
     if (isScheduledTask) scheduleReminderRunRetry(msg, 'interrupted by higher-priority message', { immediate: true })
+    if (isInformationTurn && !msg.informationAccepted) {
+      requeueMessage(msg, msg.retryCount || 0)
+      emitEvent('information_activation_requeued', {
+        event_id: msg.informationEventId,
+        reason: 'interrupted by higher-priority message',
+      })
+    }
     return
   }
 
@@ -1746,14 +1851,14 @@ async function runTurn(input, label, msg = null) {
   const thinkMatch = response.match(/<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/i)
   const jarvisThink = thinkMatch ? thinkMatch[1].trim() : ''
   const jarvisText = response.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '').trim()
-  // In a heartbeat, uncommitted plain text is private working output, not an
-  // assistant message or a durable experience. Tool calls (including an
-  // explicit send_message) remain available to the recognizer as real evidence.
-  const recognizerResponse = isTick ? '' : jarvisText
+  // In a heartbeat or information-triggered turn, uncommitted plain text is
+  // private working output, not an assistant message or durable experience.
+  // Tool calls (including send_message) remain real evidence.
+  const recognizerResponse = (isTick || isInformationTurn) ? '' : jarvisText
 
-  // A heartbeat with no executed tool has no externally verifiable experience
-  // to recognize. Its private text is retained in turn trace only.
-  if (isTick && toolCallLog.length === 0) {
+  // A heartbeat/information turn with no executed tool has no externally
+  // verifiable experience to recognize. Private text stays in turn trace only.
+  if ((isTick || isInformationTurn) && toolCallLog.length === 0) {
     emitEvent('memories_written', { count: 0, memories: [] })
     return
   }
@@ -1781,6 +1886,7 @@ const consciousnessLoop = createConsciousnessLoop({
   },
   emitEvent,
   enqueueDueReminders,
+  enqueueDueInformationActivations,
   hasMessages,
   popMessage,
   hasUserMessages,
@@ -1801,6 +1907,7 @@ const consciousnessLoop = createConsciousnessLoop({
   getAwakeningTicks: awakeningManager.getAwakeningTicks,
   isTaskActive: () => !!state.task,
   getNextPendingReminder: getNextReminderWork,
+  getNextPendingInformationActivation: getNextInformationActivation,
   getQuotaStatus,
   startConsolidationLoop,
   ensureStartupSelfCheckState: awakeningManager.ensureStartupSelfCheckState,
