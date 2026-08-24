@@ -92,7 +92,7 @@ export class InformationSourceRegistry {
       if (abort) pending.push(abort)
       const raw = await Promise.race(pending)
       const values = Array.isArray(raw) ? raw : (raw == null ? [] : [raw])
-      return values.slice(0, source.maxItems).map((value, index) => {
+      const items = values.slice(0, source.maxItems).map((value, index) => {
         const normalized = source.normalize ? source.normalize(value, request) : value
         if (normalized && typeof normalized === 'object' && normalized.topic) {
           const topic = normalizeInformationTopic(normalized.topic)
@@ -113,6 +113,14 @@ export class InformationSourceRegistry {
           observedAt: request.now || new Date(),
         })
       })
+      Object.defineProperty(items, 'sourceCollectionMeta', {
+        enumerable: false,
+        value: Object.freeze({
+          rawItemCount: values.length,
+          truncatedItemCount: Math.max(0, values.length - items.length),
+        }),
+      })
+      return items
     } finally {
       clearTimeout(timer)
       if (abortHandler) request.signal?.removeEventListener('abort', abortHandler)

@@ -62,6 +62,8 @@ export async function collectInformationSources({
         source,
         ok: true,
         items,
+        rawItemCount: Number(items.sourceCollectionMeta?.rawItemCount) || items.length,
+        truncatedItemCount: Number(items.sourceCollectionMeta?.truncatedItemCount) || 0,
         latencyMs: Date.now() - startedAt,
         error: '',
       }
@@ -70,6 +72,8 @@ export async function collectInformationSources({
         source,
         ok: false,
         items: [],
+        rawItemCount: 0,
+        truncatedItemCount: 0,
         latencyMs: Date.now() - startedAt,
         error: String(error?.message || error).slice(0, 500),
       }
@@ -90,10 +94,15 @@ export async function collectInformationSources({
       sourceCount: results.length,
       succeededSourceCount: successfulResults.length,
       failedSourceCount: results.filter(result => !result.ok).length,
+      truncatedSourceCount: results.filter(result => result.truncatedItemCount > 0).length,
+      truncatedItemCount: results.reduce((sum, result) => sum + result.truncatedItemCount, 0),
       itemCount: candidates.length,
       sourceItemsByDomain: countBy(candidates, candidate => candidate.source.domain),
       sourceItemsById: Object.fromEntries(results.map(result => [result.source.id, result.items.length])),
-      coveredLegacyComponents: [...new Set(representedResults.flatMap(result => (
+      sourceTruncatedItemsById: Object.fromEntries(results
+        .filter(result => result.truncatedItemCount > 0)
+        .map(result => [result.source.id, result.truncatedItemCount])),
+      projectedLegacyComponents: [...new Set(representedResults.flatMap(result => (
         result.source.legacyComponents || []
       )))].sort(),
       sourceLatencyMsById: Object.fromEntries(results.map(result => [result.source.id, result.latencyMs])),

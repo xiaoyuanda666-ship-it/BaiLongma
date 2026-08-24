@@ -24,6 +24,7 @@ import { calculateNextDueAt, detectOpenFollowupQuestion } from './capabilities/e
 import { pushMessage } from './inbound-message.js'
 import { observeInformationContextShadow, buildInformationContextAudit } from './information/context-shadow.js'
 import { observeInformationSourceShadow } from './information/source-shadow.js'
+import { applyInformationSourceRender, renderInformationSourceContext } from './information/source-renderer.js'
 import {
   compileInformationActivationFrame,
   leaseAccumulatedInformationContext,
@@ -799,6 +800,7 @@ async function runTurn(input, label, msg = null) {
   let toolContext = null
   let informationAttachment = null
   let informationSourceShadow = null
+  let informationSourceRender = null
   let terminalEmitted = false
   const finishTurn = (content = '') => {
     if (isTick || isInformationTurn || silentSignal || terminalEmitted) return
@@ -1215,7 +1217,7 @@ async function runTurn(input, label, msg = null) {
     if (hasInformationActivation && !informationFrame) {
       throw new Error('information activation is missing its leased ContextFrame')
     }
-    const informationContextText = [
+    let informationContextText = [
       informationFrame?.contextText || '',
       hasInformationActivation ? (informationAttachment?.frame?.contextText || '') : '',
     ].filter(Boolean).join('\n\n')
@@ -1356,55 +1358,60 @@ async function runTurn(input, label, msg = null) {
         : '',
     }
 
-    informationSourceShadow = await observeInformationSourceShadow({
-      request: {
-        message: semanticInput,
-        userId: msg?.fromId || PRIMARY_USER_ID,
-        currentTime,
-        currentChannel: contextChannel,
-        channelSwitched,
-        systemEnvironmentContext,
-        runtimeComponents: supplementalInformation.components,
-        constraintsProjection: injection.constraints || [],
-        prefetchProjection: injection.prefetchedItems || [],
-        sceneProjection: {
-          revision: sceneStore.rev,
-          manifest: sceneStore.manifest(),
-        },
-        identityProjection: {
-          userId: msg?.fromId || PRIMARY_USER_ID,
-          personMemory: injection.personMemory || null,
-          userProfile: injection.userProfile || null,
-        },
-        selfProjection: {
-          perception: injection.selfPerception || null,
-          snapshot: injection.selfSnapshot || null,
-          evolution: injection.selfEvolution || '',
-        },
-        capabilityProjection: {
-          entries: runtimeInjection.capabilityContextEntries || [],
-        },
-        memoryProjection: {
-          memories: turnMemories,
-          recallMemories: injection.recallMemories || [],
-          activePolicies: turnActivePolicies,
-        },
-        knowledgeProjection: {
-          evidence: knowledgeInjection.evidence || [],
-        },
-        taskProjection: {
-          task: state.task || '',
-          steps: state.taskSteps || [],
-        },
-        signal: controller.signal,
-        now: new Date(),
+    const informationSourceRequest = {
+      message: semanticInput,
+      userId: msg?.fromId || PRIMARY_USER_ID,
+      currentTime,
+      currentChannel: contextChannel,
+      channelSwitched,
+      systemEnvironmentContext,
+      runtimeComponents: supplementalInformation.components,
+      constraintsProjection: injection.constraints || [],
+      prefetchProjection: injection.prefetchedItems || [],
+      sceneProjection: {
+        revision: sceneStore.rev,
+        manifest: sceneStore.manifest(),
       },
+      identityProjection: {
+        userId: msg?.fromId || PRIMARY_USER_ID,
+        personMemory: injection.personMemory || null,
+        userProfile: injection.userProfile || null,
+      },
+      selfProjection: {
+        perception: injection.selfPerception || null,
+        snapshot: injection.selfSnapshot || null,
+        evolution: injection.selfEvolution || '',
+      },
+      capabilityProjection: {
+        entries: runtimeInjection.capabilityContextEntries || [],
+      },
+      memoryProjection: {
+        memories: turnMemories,
+        recallMemories: injection.recallMemories || [],
+        activePolicies: turnActivePolicies,
+      },
+      knowledgeProjection: {
+        evidence: knowledgeInjection.evidence || [],
+      },
+      taskProjection: {
+        task: state.task || '',
+        steps: state.taskSteps || [],
+      },
+      signal: controller.signal,
+      now: new Date(),
+    }
+    const informationSourceLegacyComponents = {
+      ...sourceLegacyComponentsForAudit,
+      currentTime: `Current time: ${currentTime}`,
+      existence: existenceDesc,
+      systemEnvironment: systemEnvironmentContext,
+      channel: contextChannel,
+    }
+
+    informationSourceShadow = await observeInformationSourceShadow({
+      request: informationSourceRequest,
       legacyComponents: {
-        ...sourceLegacyComponentsForAudit,
-        currentTime: `Current time: ${currentTime}`,
-        existence: existenceDesc,
-        systemEnvironment: systemEnvironmentContext,
-        channel: contextChannel,
+        ...informationSourceLegacyComponents,
       },
       domains: [
         'runtime',
@@ -1422,6 +1429,23 @@ async function runTurn(input, label, msg = null) {
     })
     if (informationSourceShadow.observed) {
       emitEvent('information_source_shadow', informationSourceShadow.audit)
+    }
+
+    informationSourceRender = await renderInformationSourceContext({
+      request: informationSourceRequest,
+      legacyComponents: informationSourceLegacyComponents,
+      domains: ['scene', 'prefetch'],
+    })
+    if (informationSourceRender.rendered) {
+      const renderedContext = applyInformationSourceRender({
+        components: supplementalInformation.components,
+        informationContextText,
+      }, informationSourceRender)
+      supplementalInformation.components = renderedContext.components
+      supplementalInformation.contextText = renderedContext.legacyContextText
+      baseContextArgs.extraContext = renderedContext.legacyContextText
+      informationContextText = renderedContext.informationContextText
+      emitEvent('information_source_rendered', informationSourceRender.audit)
     }
     throwIfAborted(controller.signal)
 
@@ -1539,7 +1563,9 @@ async function runTurn(input, label, msg = null) {
     toolContext.runtimeLane = runtimeLane
     toolContext.informationContextAudit = contextShadow.observed
       ? contextShadow.audit
-      : (informationSourceShadow?.observed ? informationSourceShadow.audit : null)
+      : (informationSourceRender?.rendered
+          ? informationSourceRender.audit
+          : (informationSourceShadow?.observed ? informationSourceShadow.audit : null))
     // Intent routing remains model-led.  The narrow action contract below is
     // not a general intent classifier: it is only an execution guard for a
     // high-confidence side-effect request.  It prevents a text-only promise
