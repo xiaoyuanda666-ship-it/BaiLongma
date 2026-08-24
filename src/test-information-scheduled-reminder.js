@@ -82,3 +82,5 @@ try {
   closeDBForTest()
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
+
+process.exit(process.exitCode || 0)

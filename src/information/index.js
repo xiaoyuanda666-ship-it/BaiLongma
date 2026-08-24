@@ -20,6 +20,7 @@ export { ensureBuiltinRuntimeInformationSources } from './runtime-sources.js'
 export { ensureBuiltinProjectionInformationSources } from './projection-sources.js'
 export { isInformationSourceShadowEnabled, observeInformationSourceShadow } from './source-shadow.js'
 export { evaluateInformationSourceParity } from './source-parity.js'
+export { isLegacyInformationMode, configuredInformationDomains } from './mode.js'
 export {
   listInformationSourceRenderableDomains,
   isInformationSourceRenderEnabled,
@@ -48,7 +49,10 @@ export {
   getNextInformationActivation,
 } from './activation-bridge.js'
 export { enqueueReminderRunForMigration } from './reminder-activation.js'
-export { enqueueInboundMessageForMigration } from './user-message-activation.js'
+export {
+  enqueueInboundMessageForMigration,
+  publishInboundResourceForMigration,
+} from './user-message-activation.js'
 export {
   isInformationShadowEnabled,
   shadowPublishInformationEvent,

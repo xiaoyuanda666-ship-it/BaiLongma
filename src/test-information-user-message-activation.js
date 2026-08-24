@@ -6,8 +6,9 @@ import path from 'node:path'
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-information-user-'))
 process.env.BAILONGMA_USER_DIR = tempRoot
 process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
-process.env.BAILONGMA_INFORMATION_ACTIVATION = 'all'
+delete process.env.BAILONGMA_INFORMATION_ACTIVATION
 delete process.env.BAILONGMA_INFORMATION_SHADOW
+delete process.env.BAILONGMA_INFORMATION_MODE
 
 let closeDBForTest = () => {}
 try {
@@ -164,17 +165,22 @@ try {
   assert(staged.conversationId > 0)
   assert.equal(getQueueSnapshot().user, 0, 'persist-only resources remain non-waking with user activation enabled')
   assert.equal(staged.informationActivation, undefined)
+  assert.ok(staged.informationEventId, 'persist-only resources are durable wake=never information events')
+  assert.equal(listInformationDeliveries({ eventId: staged.informationEventId }, { db })[0].state, 'pending')
 
   const localizedChannel = pushMessage('ID:000001', '中文渠道消息', '语音识别', {
     clientMessageId: 'user-localized-channel-0001',
   })
   assert.equal(localizedChannel.informationActivation, true)
+  assert.equal(localizedChannel.informationDeliveryIds.length, 2, 'the next user turn leases its staged resource')
   assert.match(
     db.prepare('SELECT source_id FROM information_events WHERE id = ?').get(localizedChannel.informationEventId).source_id,
     /^channel:encoded-[a-f0-9]{12}$/,
   )
   assert.equal(popMessage(), localizedChannel)
-  assert.equal(ackInformationLease(localizedChannel, { db }), 1)
+  const localizedFrame = compileInformationActivationFrame(localizedChannel, { db })
+  assert.equal(localizedFrame.userInputs.additional[0].event.topic, 'conversation.user_resource')
+  assert.equal(ackInformationLease(localizedChannel, { db }), 2)
 
   const missingRow = pushMessage('ID:000001', 'recovery requires its conversation row', 'TUI', {
     clientMessageId: 'user-missing-conversation-0001',
@@ -250,10 +256,11 @@ try {
   `).get()
   assert.equal(failedDelivery.state, 'dead_letter')
 
-  console.log('PASS user messages migrate through gated information delivery without changing L1 semantics')
+  console.log('PASS user messages use information delivery by default without changing L1 semantics')
 } finally {
   delete process.env.BAILONGMA_INFORMATION_ACTIVATION
   delete process.env.BAILONGMA_INFORMATION_SHADOW
+  delete process.env.BAILONGMA_INFORMATION_MODE
   closeDBForTest?.()
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

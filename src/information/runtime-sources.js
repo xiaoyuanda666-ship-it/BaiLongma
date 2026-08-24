@@ -1,5 +1,4 @@
 import { buildSystemEnvironmentContext } from '../context/system-environment-context.js'
-import { nowTimestamp } from '../time.js'
 import { informationSourceRegistry } from './source-registry.js'
 
 const initializedRegistries = new WeakSet()
@@ -49,12 +48,59 @@ export function ensureBuiltinRuntimeInformationSources({ registry = informationS
         sensitivity: 'normal',
         trust: 'authoritative',
         payload: {
-          localTimestamp: request.currentTime || nowTimestamp(),
+          localTimestamp: request.currentTime || time.toISOString(),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'system-local',
           weekday: new Intl.DateTimeFormat('en-US', { weekday: 'long' }).format(time),
         },
       })
     },
+  }))
+
+  registered.push(registry.register({
+    id: 'runtime:existence',
+    kind: 'snapshot',
+    domain: 'runtime',
+    topics: ['runtime.existence'],
+    description: 'Current agent existence duration projected from the legacy runtime context.',
+    legacyComponents: ['existence'],
+    sensitivity: 'normal',
+    timeoutMs: 250,
+    maxItems: 1,
+    maxChars: 1_200,
+    rank: 88,
+    match: request => !!String(request.existenceDesc || '').trim(),
+    collect: request => contextItem({
+      topic: 'runtime.existence',
+      request,
+      sensitivity: 'normal',
+      trust: 'authoritative',
+      payload: { description: String(request.existenceDesc || '').trim() },
+    }),
+  }))
+
+  registered.push(registry.register({
+    id: 'runtime:security',
+    kind: 'snapshot',
+    domain: 'runtime',
+    topics: ['runtime.security'],
+    description: 'Effective runtime sandbox settings for the current turn.',
+    legacyComponents: ['security'],
+    sensitivity: 'private',
+    timeoutMs: 250,
+    maxItems: 1,
+    maxChars: 2_000,
+    rank: 96,
+    match: request => !!request.securityProjection,
+    collect: request => contextItem({
+      topic: 'runtime.security',
+      request,
+      trust: 'authoritative',
+      payload: {
+        fileSandboxEnabled: request.securityProjection?.fileSandbox !== false,
+        execSandboxEnabled: request.securityProjection?.execSandbox !== false,
+        changedAt: String(request.securityProjection?.updatedAt || ''),
+      },
+    }),
   }))
 
   registered.push(registry.register({
@@ -115,10 +161,8 @@ export function ensureBuiltinRuntimeInformationSources({ registry = informationS
       'runtime',
       'terminal',
       'browserDownloads',
-      'prefetch',
       'uiSignals',
       'subscriptions',
-      'scene',
       'aiVideoPanel',
     ],
     sensitivity: 'private',

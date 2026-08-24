@@ -103,6 +103,23 @@ function projectKnowledgeEvidence(evidence = {}, request = {}, index = 0) {
   }
 }
 
+function projectKnowledgeRefresh(content = '', request = {}) {
+  const now = observedAt(request)
+  return {
+    topic: 'knowledge.refresh_results',
+    subject: { queryPhase: 'memory-refresh' },
+    authorship: 'external',
+    semanticKind: 'knowledge',
+    payload: { content: cleanText(content) },
+    occurredAt: now,
+    observedAt: now,
+    priority: 64,
+    sensitivity: 'private',
+    trust: 'observed',
+    metadata: { canonicalKey: 'knowledge.refresh_results:current-turn' },
+  }
+}
+
 function projectConstraint(constraint = {}, request = {}, index = 0) {
   const now = observedAt(request)
   const id = memoryId(constraint, index)
@@ -344,6 +361,25 @@ export function ensureBuiltinProjectionInformationSources({ registry = informati
   }))
 
   registered.push(registry.register({
+    id: 'memory:refresh',
+    kind: 'query',
+    domain: 'memory',
+    topics: ['memory.refresh'],
+    description: 'Additional memories selected by the in-turn memory refresh loop.',
+    sensitivity: 'private',
+    timeoutMs: 250,
+    maxItems: 30,
+    maxChars: 16_000,
+    rank: 66,
+    match: request => (request.memoryProjection?.refreshMemories || []).length > 0,
+    collect: request => (request.memoryProjection?.refreshMemories || [])
+      .map((memory, index) => {
+        const item = projectMemory(memory, request, index, 'memory.refresh')
+        return { ...item, payload: { ...item.payload, retrievalLane: 'refresh' } }
+      }),
+  }))
+
+  registered.push(registry.register({
     id: 'knowledge:evidence',
     kind: 'query',
     domain: 'knowledge',
@@ -360,6 +396,21 @@ export function ensureBuiltinProjectionInformationSources({ registry = informati
   }))
 
   registered.push(registry.register({
+    id: 'knowledge:refresh-results',
+    kind: 'query',
+    domain: 'knowledge',
+    topics: ['knowledge.refresh_results'],
+    description: 'External query results returned by the in-turn memory refresh loop.',
+    sensitivity: 'private',
+    timeoutMs: 250,
+    maxItems: 1,
+    maxChars: 16_000,
+    rank: 79,
+    match: request => !!cleanText(request.knowledgeProjection?.refreshResults),
+    collect: request => projectKnowledgeRefresh(request.knowledgeProjection.refreshResults, request),
+  }))
+
+  registered.push(registry.register({
     id: 'task:current-state',
     kind: 'snapshot',
     domain: 'task',
@@ -371,22 +422,23 @@ export function ensureBuiltinProjectionInformationSources({ registry = informati
     maxItems: 1,
     maxChars: 8_000,
     rank: 75,
-    match: request => !!String(request.taskProjection?.task || '').trim()
-      || (request.taskProjection?.steps || []).length > 0,
     collect: request => {
       const now = observedAt(request)
+      const task = String(request.taskProjection?.task || '')
+      const steps = (request.taskProjection?.steps || []).map(step => ({
+        text: String(step?.text || ''),
+        status: String(step?.status || 'pending'),
+        note: String(step?.note || ''),
+      }))
       return {
         topic: 'task.current_state',
         subject: { taskId: String(request.taskProjection?.taskId || '') || undefined },
         authorship: 'system',
         semanticKind: 'task_state',
         payload: {
-          task: String(request.taskProjection?.task || ''),
-          steps: (request.taskProjection?.steps || []).map(step => ({
-            text: String(step?.text || ''),
-            status: String(step?.status || 'pending'),
-            note: String(step?.note || ''),
-          })),
+          active: !!task.trim() || steps.length > 0,
+          task,
+          steps,
         },
         occurredAt: now,
         observedAt: now,
@@ -526,6 +578,7 @@ export function ensureBuiltinProjectionInformationSources({ registry = informati
     domain: 'capability',
     topics: ['runtime.capability_prefeed'],
     description: 'Compatibility projection of capability-prefetched runtime context selected for the current message.',
+    legacyComponents: ['capability'],
     sensitivity: 'private',
     timeoutMs: 250,
     maxItems: 30,

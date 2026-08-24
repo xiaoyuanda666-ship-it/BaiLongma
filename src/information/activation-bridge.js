@@ -5,6 +5,7 @@ import { ensureBuiltinInformationRoutes, PRIMARY_INFORMATION_SUBSCRIBER } from '
 import { compileInformationContextFrame } from './context-frame.js'
 import { loadInformationDeliveryCandidates } from './context-candidates.js'
 import { publishInformationEvent } from './hub.js'
+import { configuredInformationDomains } from './mode.js'
 import {
   ackInformationDeliveries,
   leaseInformationDeliveries,
@@ -32,6 +33,8 @@ const QUEUE_METADATA_FIELDS = Object.freeze([
   'browserDownloadState',
   'backgroundJobId',
   'backgroundJobEvent',
+  'softwareInstallJobId',
+  'videoGenerationJobId',
   'surface',
   'scheduledEventType',
   'reminderRunId',
@@ -44,13 +47,11 @@ const QUEUE_METADATA_FIELDS = Object.freeze([
 ])
 
 function activationDomains(env = process.env) {
-  return new Set(
-    String(env.BAILONGMA_INFORMATION_ACTIVATION || '')
-      .trim()
-      .toLowerCase()
-      .split(/[\s,;]+/)
-      .filter(Boolean),
-  )
+  return configuredInformationDomains({
+    env,
+    key: 'BAILONGMA_INFORMATION_ACTIVATION',
+    defaults: ACTIVATION_DOMAINS,
+  })
 }
 
 function safeQueueMetadata(value = {}) {

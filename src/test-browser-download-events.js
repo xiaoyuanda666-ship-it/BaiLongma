@@ -7,6 +7,7 @@ import { BackgroundJobManager } from './background-job-manager.js'
 
 delete process.env.BAILONGMA_INFORMATION_ACTIVATION
 delete process.env.BAILONGMA_INFORMATION_SHADOW
+process.env.BAILONGMA_INFORMATION_MODE = 'legacy'
 
 const messages = []
 const events = []
@@ -185,3 +186,4 @@ assert.equal(notifyBrowserDownloadJobImportantEvent(
 ), true, 'a later retry attempt can notify its own failure once')
 
 console.log('browser download event tests passed')
+delete process.env.BAILONGMA_INFORMATION_MODE

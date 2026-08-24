@@ -649,6 +649,7 @@ export function buildContextBlock({
   existenceDesc = '',
   systemEnv = '',
   security = null,
+  includeSecurityStatus = true,
   currentChannel = '',
   channelSwitched = false,
   // 自我感知层（self-awareness）：injector 算好的内在感知信号对象 或 null。
@@ -659,6 +660,8 @@ export function buildContextBlock({
   // 与 selfPerception 不同：snapshot 在正常情况下也出现，是 agent 的 proprioception。
   selfSnapshot = null,
   selfEvolution = '',
+  includePersonMemoryContext = true,
+  includeTaskState = true,
 } = {}) {
   const sections = []
 
@@ -667,7 +670,7 @@ export function buildContextBlock({
   const runtimeParts = []
   if (currentTime)   runtimeParts.push(`Current time: ${currentTime}`)
   if (existenceDesc) runtimeParts.push(`You have existed for ${existenceDesc}.`)
-  runtimeParts.push(formatSandboxRuntimeStatus(security))
+  if (includeSecurityStatus) runtimeParts.push(formatSandboxRuntimeStatus(security))
   if (systemEnv)     runtimeParts.push(systemEnv)
 
   // 本轮入口渠道：用户从哪个 channel 发来这条消息，决定你能"感知"到什么。
@@ -744,7 +747,7 @@ ${activePolicies}
 
   // Curiosity profile + person root memory live together since both key off personMemory
   const personParts = []
-  if (personMemory) {
+  if (includePersonMemoryContext && personMemory) {
     const relatedEntity = JSON.parse(personMemory.entities || '[]')[0] || 'the other party'
     personParts.push(`About ${relatedEntity}:\n${personMemory.content}\n${personMemory.detail || ''}`.trim())
   }
@@ -767,7 +770,7 @@ ${activePolicies}
   }
 
   // Active task content (the existence of a task is dynamic state)
-  if (hasActiveTask) {
+  if (includeTaskState && hasActiveTask) {
     sections.push(`<task active="true">
 ${task}
 
@@ -777,7 +780,7 @@ Update task state only in these cases:
 - The user changes the goal.
 - The task is complete and [CLEAR_TASK] is needed.
 </task>`)
-  } else {
+  } else if (includeTaskState) {
     sections.push(`<task active="false">
 There is no active current_task. This removes a task obligation; it does not prescribe silence, activity, or communication. Judge the heartbeat from the rest of the current context.
 </task>`)

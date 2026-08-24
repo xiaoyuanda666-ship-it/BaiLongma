@@ -7,6 +7,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-information-ac
 process.env.BAILONGMA_USER_DIR = tempRoot
 delete process.env.BAILONGMA_INFORMATION_SHADOW
 delete process.env.BAILONGMA_INFORMATION_ACTIVATION
+delete process.env.BAILONGMA_INFORMATION_MODE
 
 let closeDBForTest = () => {}
 try {
@@ -40,6 +41,9 @@ try {
   assert.equal(isInformationActivationEnabled('schedule', allEnv), true)
   assert.equal(isInformationActivationEnabled('user', allEnv), true)
   assert.equal(isInformationActivationEnabled('memory', allEnv), false)
+  assert.equal(isInformationActivationEnabled('ui', {}), true, 'event activation is fully enabled by default')
+  assert.equal(isInformationActivationEnabled('user', {}), true)
+  assert.equal(isInformationActivationEnabled('ui', { BAILONGMA_INFORMATION_MODE: 'legacy' }), false)
 
   const queued = []
   const passive = publishInformationEventForMigration({
@@ -263,7 +267,7 @@ try {
     dedupeKey: 'activation-disabled',
   }, {
     domain: 'ui',
-    env: {},
+    env: { BAILONGMA_INFORMATION_MODE: 'legacy' },
     db,
     enqueue: item => queued.push(item),
   })
@@ -469,7 +473,7 @@ try {
     due_at: '2026-08-24T09:00:00.000Z',
     attempts: 1,
   }, {
-    env: {},
+    env: { BAILONGMA_INFORMATION_MODE: 'legacy' },
     db,
     pushMessageFn: (...args) => {
       legacyReminderCalls.push(args)
@@ -606,6 +610,7 @@ try {
 } finally {
   delete process.env.BAILONGMA_INFORMATION_SHADOW
   delete process.env.BAILONGMA_INFORMATION_ACTIVATION
+  delete process.env.BAILONGMA_INFORMATION_MODE
   closeDBForTest()
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

@@ -3,7 +3,10 @@ import { normalizeConversationPartyId, upsertEntity, insertConversation } from '
 import { resolveCanonicalUserId } from './identity.js'
 import { enqueueMessage } from './queue.js'
 import { shadowPublishInboundEntry } from './information/shadow-publisher.js'
-import { enqueueInboundMessageForMigration } from './information/user-message-activation.js'
+import {
+  enqueueInboundMessageForMigration,
+  publishInboundResourceForMigration,
+} from './information/user-message-activation.js'
 
 const PRIORITY = {
   user: 100,
@@ -64,12 +67,14 @@ function persistInboundEntry(rawFromId, content, channel = 'TUI', meta = {}, { p
     ...meta,
   }
 
-  // Information Core is additive and disabled by default. In shadow mode this
-  // records a typed event after the legacy conversation write, but it does not
-  // enqueue, wake, inject, consume, or acknowledge anything in the live path.
+  // Persist-only resources enter Information Core as wake=never deliveries.
+  // Other persist-only rows retain the optional shadow behavior; queued user
+  // messages are published exactly once by enqueueInboundMessageForMigration.
   if (publishShadow) {
-    const shadowInformation = shadowPublishInboundEntry(entry)
-    if (shadowInformation.event?.id) entry.informationEventId = shadowInformation.event.id
+    const information = (channel === 'RESOURCE' || entry.resourceState === 'pending')
+      ? publishInboundResourceForMigration(entry)
+      : shadowPublishInboundEntry(entry)
+    if (information.event?.id) entry.informationEventId = information.event.id
   }
 
   return entry

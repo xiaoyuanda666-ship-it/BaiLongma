@@ -4,21 +4,34 @@ import { ensureBuiltinProjectionInformationSources } from './projection-sources.
 import { ensureBuiltinRuntimeInformationSources } from './runtime-sources.js'
 import { collectInformationSources, compileInformationSourceFrame } from './source-collector.js'
 import { informationSourceRegistry } from './source-registry.js'
+import { configuredInformationDomains } from './mode.js'
 import {
   buildInformationSourceCoverageAudit,
   fullySelectedInformationSourceIds,
 } from './source-audit.js'
 import { evaluateInformationSourceParity } from './source-parity.js'
 
-const RENDERABLE_DOMAINS = Object.freeze(['scene', 'prefetch', 'constraints'])
+const RENDERABLE_DOMAINS = Object.freeze([
+  'runtime',
+  'environment',
+  'memory',
+  'knowledge',
+  'task',
+  'constraints',
+  'prefetch',
+  'scene',
+  'identity',
+  'self',
+  'capability',
+])
 const RENDERABLE_DOMAIN_SET = new Set(RENDERABLE_DOMAINS)
 
 function enabledDomains(env = process.env) {
-  return new Set(String(env.BAILONGMA_INFORMATION_SOURCE_RENDER || '')
-    .trim()
-    .toLowerCase()
-    .split(/[\s,;]+/)
-    .filter(Boolean))
+  return configuredInformationDomains({
+    env,
+    key: 'BAILONGMA_INFORMATION_SOURCE_RENDER',
+    defaults: RENDERABLE_DOMAINS,
+  })
 }
 
 export function listInformationSourceRenderableDomains() {
@@ -42,7 +55,24 @@ export function applyInformationSourceRender({
   if (renderResult.rendered) {
     for (const component of renderResult.legacyComponentsToSuppress || []) {
       if (Object.hasOwn(nextComponents, component)) nextComponents[component] = ''
+      if (component === 'currentTime') nextContextArgs.currentTime = ''
+      if (component === 'existence') nextContextArgs.existenceDesc = ''
+      if (component === 'security') nextContextArgs.includeSecurityStatus = false
+      if (component === 'systemEnvironment') nextContextArgs.systemEnv = ''
+      if (component === 'channel') {
+        nextContextArgs.currentChannel = ''
+        nextContextArgs.channelSwitched = false
+      }
+      if (component === 'memories') nextContextArgs.memories = ''
+      if (component === 'activePolicies') nextContextArgs.activePolicies = ''
       if (component === 'constraints') nextContextArgs.constraints = []
+      if (component === 'knowledgeEvidence') nextContextArgs.knowledgeEvidence = ''
+      if (component === 'task') nextContextArgs.includeTaskState = false
+      if (component === 'personMemory') nextContextArgs.includePersonMemoryContext = false
+      if (component === 'userProfile') nextContextArgs.userProfile = null
+      if (component === 'selfSnapshot') nextContextArgs.selfSnapshot = null
+      if (component === 'selfPerception') nextContextArgs.selfPerception = null
+      if (component === 'selfEvolution') nextContextArgs.selfEvolution = ''
     }
   }
   const legacyContextText = Object.values(nextComponents).filter(Boolean).join('\n\n')
@@ -62,7 +92,7 @@ export async function renderInformationSourceContext({
   request = {},
   legacyComponents = {},
   domains = RENDERABLE_DOMAINS,
-  maxContextChars = 12_000,
+  maxContextChars = 64_000,
 } = {}, {
   env = process.env,
   registry = informationSourceRegistry,

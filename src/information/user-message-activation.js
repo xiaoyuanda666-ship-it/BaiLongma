@@ -24,10 +24,9 @@ function enqueueLegacyEntry(entry, { enqueue, db }) {
   })
 }
 
-// Compatibility boundary for the final push-style input migration. Conversation
-// persistence remains authoritative and happens before this function. With the
-// user flag off, this publishes only the existing optional shadow event and
-// enqueues the exact legacy entry. Persist-only RESOURCE rows never call here.
+// Compatibility boundary for push-style input. Conversation persistence stays
+// authoritative and happens before this function. Information activation is
+// now the default; explicit legacy mode falls back to the exact old queue entry.
 export function enqueueInboundMessageForMigration(entry = {}, {
   env = process.env,
   db = null,
@@ -62,4 +61,23 @@ export function enqueueInboundMessageForMigration(entry = {}, {
   if (result.event?.id) entry.informationEventId = result.event.id
   if (result.handled) return result.entry || entry
   return enqueueLegacyEntry(entry, { enqueue, db })
+}
+
+export function publishInboundResourceForMigration(entry = {}, {
+  env = process.env,
+  db = null,
+} = {}) {
+  const input = buildInboundInformationEvent(entry)
+  if (input?.topic !== 'conversation.user_resource' || !entry.conversationId) {
+    return { handled: false, activated: false, skipped: true }
+  }
+  return publishInformationEventForMigration(input, {
+    domain: 'user',
+    queueMetadata: entry,
+    env,
+    db,
+    enqueue: () => {
+      throw new Error('a staged user resource must never wake the Agent by itself')
+    },
+  })
 }

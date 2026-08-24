@@ -7,7 +7,6 @@ import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-serv
 import { sceneStore } from './scene/scene-store.js'
 import { pushMessage } from './inbound-message.js'
 import { getConfig, insertUISignal, markUISignalsConsumed } from './db.js'
-import { shadowPublishInformationEvent } from './information/shadow-publisher.js'
 import { publishInformationEventForMigration } from './information/activation-bridge.js'
 import { emitEvent, setStickyEvent } from './events.js'
 import { PRIMARY_USER_ID } from './identity.js'
@@ -285,24 +284,21 @@ function attachSceneProtocol() {
       metadata: { legacyUiSignalId: id },
     }
     const securityConfirmationIntent = name === 'select' && surface.startsWith('security-confirm-')
-    const staysOnLegacyUiContext = securityConfirmationIntent
-    // Security confirmation keeps its purpose-built refresh path. Every other
-    // UI event can use the gated bridge: passive observations create only an
-    // accumulated wake=never delivery, while active intents also wake a turn.
-    const informationResult = staysOnLegacyUiContext
-      ? shadowPublishInformationEvent(informationInput)
-      : publishInformationEventForMigration(informationInput, {
-          domain: 'ui',
-          queueMetadata: {
-            surface,
-            notificationTargetId: PRIMARY_USER_ID,
-            notificationChannel: 'TUI',
-          },
-        })
+    // Passive observations create only an accumulated wake=never delivery;
+    // every active intent, including security confirmation, wakes one typed
+    // information turn. The legacy APP_SIGNAL below remains failure-only.
+    const informationResult = publishInformationEventForMigration(informationInput, {
+      domain: 'ui',
+      queueMetadata: {
+        surface,
+        notificationTargetId: PRIMARY_USER_ID,
+        notificationChannel: 'TUI',
+      },
+    })
     const shadowMeta = informationResult.event?.id
       ? { informationEventId: informationResult.event.id }
       : {}
-    if (!staysOnLegacyUiContext && informationResult.handled) {
+    if (informationResult.handled) {
       // The durable Information Core delivery now owns this active intent.
       // Remove only its compatibility row; passive UI rows remain available
       // through the legacy next-turn context until that path is migrated too.
@@ -323,18 +319,20 @@ function attachSceneProtocol() {
         if (pending.browser_private_network !== undefined) updates.browserPrivateNetwork = pending.browser_private_network === true
         const result = Object.keys(updates).length > 0 ? setSecurity(updates) : getSecurity()
         const desc = Object.entries(updates).map(([k, v]) => `${k}=${v}`).join(', ')
-        pushMessage(
-          'SYSTEM',
-          `[security settings updated] User confirmed changes: ${desc}. changed_at=${result.updatedAt || 'not recorded'}\n(Internal context refresh only. Do NOT call send_message.)`,
-          'APP_SIGNAL',
-          {
-            queue: 'background',
-            persist: false,
-            silent: true,
-            ...shadowMeta,
-          },
-        )
-      } else {
+        if (!informationResult.handled) {
+          pushMessage(
+            'SYSTEM',
+            `[security settings updated] User confirmed changes: ${desc}. changed_at=${result.updatedAt || 'not recorded'}\n(Internal context refresh only. Do NOT call send_message.)`,
+            'APP_SIGNAL',
+            {
+              queue: 'background',
+              persist: false,
+              silent: true,
+              ...shadowMeta,
+            },
+          )
+        }
+      } else if (!informationResult.handled) {
         pushMessage(
           'SYSTEM',
           '[security settings change] User cancelled - settings unchanged\n(Internal context refresh only. Do NOT call send_message.)',

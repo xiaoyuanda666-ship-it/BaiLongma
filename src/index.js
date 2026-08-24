@@ -1353,19 +1353,24 @@ async function runTurn(input, label, msg = null) {
       ].filter(Boolean).join('\n'),
       selfEvolution: injection.selfEvolution || '',
       knowledgeEvidence: knowledgeInjection.evidenceText || '',
-      task: (state.task || (state.taskSteps || []).length > 0)
-        ? [state.task || '', JSON.stringify(state.taskSteps || [])].filter(Boolean).join('\n')
-        : '',
+      task: JSON.stringify({
+        active: !!state.task || (state.taskSteps || []).length > 0,
+        task: state.task || '',
+        steps: state.taskSteps || [],
+      }),
     }
 
     const informationSourceRequest = {
       message: semanticInput,
       userId: msg?.fromId || PRIMARY_USER_ID,
       currentTime,
+      existenceDesc,
       currentChannel: contextChannel,
       channelSwitched,
       systemEnvironmentContext,
-      runtimeComponents: supplementalInformation.components,
+      securityProjection: security,
+      runtimeComponents: Object.fromEntries(Object.entries(supplementalInformation.components)
+        .filter(([component]) => !['prefetch', 'scene', 'capability'].includes(component))),
       constraintsProjection: injection.constraints || [],
       prefetchProjection: injection.prefetchedItems || [],
       sceneProjection: {
@@ -1404,6 +1409,11 @@ async function runTurn(input, label, msg = null) {
       ...sourceLegacyComponentsForAudit,
       currentTime: `Current time: ${currentTime}`,
       existence: existenceDesc,
+      security: JSON.stringify({
+        fileSandboxEnabled: security?.fileSandbox !== false,
+        execSandboxEnabled: security?.execSandbox !== false,
+        changedAt: security?.updatedAt || '',
+      }),
       systemEnvironment: systemEnvironmentContext,
       channel: contextChannel,
     }
@@ -1434,7 +1444,6 @@ async function runTurn(input, label, msg = null) {
     informationSourceRender = await renderInformationSourceContext({
       request: informationSourceRequest,
       legacyComponents: informationSourceLegacyComponents,
-      domains: ['scene', 'prefetch', 'constraints'],
     })
     if (informationSourceRender.rendered) {
       const renderedContext = applyInformationSourceRender({
@@ -1516,7 +1525,10 @@ async function runTurn(input, label, msg = null) {
           originalQuery: shouldRefreshL1 ? msg.content : state.task,
           baseMemories: injection.memories,
           formattedBaseMemories: memoriesText,
-          systemPromptBase: combinePromptForPreview(systemPrompt, contextBlock),
+          systemPromptBase: combinePromptForPreview(
+            systemPrompt,
+            [contextBlock, informationContextText].filter(Boolean).join('\n\n'),
+          ),
           signal: controller.signal,
           maxRounds: shouldRefreshTick ? 2 : 3,
         })
@@ -1524,21 +1536,54 @@ async function runTurn(input, label, msg = null) {
         if (shouldRefreshTick) state.lastTaskRefreshTick = state.tickCounter
         throwIfAborted(controller.signal)
         if (!refreshResult.skipped && (refreshResult.additionalMemories.length || refreshResult.round3Results)) {
-          const extraParts = []
-          if (refreshResult.additionalMemories.length) {
-            extraParts.push(formatMemoriesForPrompt([], refreshResult.additionalMemories))
-          }
-          if (refreshResult.round3Results) {
-            extraParts.push(`[Round 3 external query results]\n${refreshResult.round3Results}`)
-          }
-          const enrichedMemoriesText = memoriesText + '\n\n' + extraParts.join('\n\n')
-          // Rebuild only the context block — system stays stable so prompt cache survives.
-          // 用 gateResult.args（过门后的）而非原始 baseContextArgs，让排除层的剔除在 refresh 重建里也保留。
-          contextBlock = buildContextBlock({
-            ...gateResult.args,
-            memories: enrichedMemoriesText,
-            roundInfo: { round: refreshResult.roundsRun },
+          const refreshSourceRender = await renderInformationSourceContext({
+            request: {
+              now: new Date(),
+              memoryProjection: {
+                memories: [],
+                recallMemories: [],
+                activePolicies: [],
+                refreshMemories: refreshResult.additionalMemories || [],
+              },
+              knowledgeProjection: {
+                evidence: [],
+                refreshResults: refreshResult.round3Results || '',
+              },
+            },
+            legacyComponents: {},
+            domains: ['memory', 'knowledge'],
+            maxContextChars: 24_000,
           })
+          if (refreshSourceRender.rendered) {
+            informationContextText = [informationContextText, refreshSourceRender.contextText]
+              .filter(Boolean)
+              .join('\n\n')
+            emitEvent('information_source_refresh_rendered', refreshSourceRender.audit)
+            contextBlock = buildContextBlock({
+              ...gateResult.args,
+              roundInfo: { round: refreshResult.roundsRun },
+            })
+          } else {
+            const extraParts = []
+            if (refreshResult.additionalMemories.length) {
+              extraParts.push(formatMemoriesForPrompt([], refreshResult.additionalMemories))
+            }
+            if (refreshResult.round3Results) {
+              extraParts.push(`[Round 3 external query results]\n${refreshResult.round3Results}`)
+            }
+            const baseMemoryRendered = informationSourceRender?.legacyComponentsToSuppress
+              ?.includes('memories') === true
+            const enrichedMemoriesText = [
+              baseMemoryRendered ? '' : memoriesText,
+              extraParts.join('\n\n'),
+            ].filter(Boolean).join('\n\n')
+            // Emergency legacy mode and any source failure keep the old refresh path intact.
+            contextBlock = buildContextBlock({
+              ...gateResult.args,
+              memories: enrichedMemoriesText,
+              roundInfo: { round: refreshResult.roundsRun },
+            })
+          }
           llmMessages = buildMessagesWithContext(contextBlock)
           console.log(`[memory refresh] Done — ${refreshResult.roundsRun} round(s), appended ${refreshResult.additionalMemories.length} memory/memories`)
         }

@@ -88,7 +88,8 @@ export function buildSupplementalInformationContext({
 } = {}) {
   const components = {
     presence: formatPresenceForPrompt(userId),
-    runtime: runtimeInformation.contextText || '',
+    runtime: runtimeInformation.contextWithoutCapabilityText ?? runtimeInformation.contextText ?? '',
+    capability: runtimeInformation.capabilityContextText || '',
     terminal: formatTerminalStreamContext(),
     browserDownloads: formatBrowserDownloadContext(),
     prefetch: formatPrefetchedItems(information.prefetchedItems || []),
@@ -159,6 +160,16 @@ export async function runRuntimeInformationInjector({
     docContextText,
     taskExtraContextText,
   ].filter(Boolean)
+  const contextWithoutCapabilityParts = [
+    keywordContextText,
+    hotspotStateText,
+    worldcupStateText,
+    personCardStateText,
+    personCardContextText,
+    docStateText,
+    docContextText,
+    taskExtraContextText,
+  ].filter(Boolean)
 
   return {
     keywordContextText,
@@ -179,5 +190,6 @@ export async function runRuntimeInformationInjector({
     taskExtraContextText,
     taskExtraContextItems,
     contextText: contextParts.join('\n\n'),
+    contextWithoutCapabilityText: contextWithoutCapabilityParts.join('\n\n'),
   }
 }

@@ -390,15 +390,15 @@ src/information/
 - inbound message、UI、reminder、background job 在执行旧路径的同时 shadow publish；shadow delivery 不驱动 turn。
 - 校验 event 数量、去重键、优先级和旧路径结果一致性。
 
-### Phase 2：统一事件输入和唤醒（当前进行中）
+### Phase 2：统一事件输入和唤醒（已默认全量）
 
-- 领域切换由 `BAILONGMA_INFORMATION_ACTIVATION=ui,job,schedule,user`（或 `all`）显式开启，默认关闭；四个领域可独立启用，未设置时完全保留 legacy 行为。
+- `ui/job/schedule/user` 四个事件领域现在默认全部走 publish → route → delivery → activation；`BAILONGMA_INFORMATION_ACTIVATION` 仍可用于缩小启用范围，`BAILONGMA_INFORMATION_MODE=legacy` 是统一紧急回退开关。
 - 用户消息现在有独立 `user` 激活桥：先写 `conversations`，再 publish `conversation.user_message`，由 route 生成 delivery 并恢复成原生 L1 queue entry。正文不复制进 event payload，而是通过 `payloadRef` 从权威 conversation row 恢复；client、附件、严格评测和待处理资源等轮次元数据可随恢复保留。
 - user ContextFrame 必须拥有匹配 conversation/author 的 `userInputs.current`；模型消息中当前输入仍只出现一次，并保持最后一条干净的 `role=user`。被动 UI 信息使用独立 `role=system` context，不能冒充用户发言。
 - `persistInboundMessage()` 仍是只持久化边界：RESOURCE 资源暂存不进入激活队列、不唤醒 Agent；`SYSTEM`、`APP_SIGNAL` 和 `REMINDER` 也不会被 user adapter 误分类。
 - 用户 delivery 在首次 model accept 后 ACK；模型接受前的 provider 失败沿用现有消息重试，租约可在重启/超时后恢复。待处理用户消息被新消息替代时，只 ACK 旧 user trigger，释放其 passive companions，使其进入新 turn；正在执行的旧 turn 被抢占时采用同一拆分规则。
 - activation entry 构造或入队失败会进入 dead-letter；若失败发生在来源调用期间，该调用会立即放行原 queue entry 作为 legacy fallback，避免功能开关造成消息丢失。重启恢复时若权威 conversation row 已不存在，则明确 dead-letter，避免无穷恢复循环。
-- 普通 UI intent 与 browser download job 已具备 activation bridge：publish → route → lease → `information` runtime lane → ContextFrame → 首次 model accept ACK；接受前失败按原重试次数处理后进入 dead-letter，接受后不再重复投递。
+- 普通 UI intent、安全确认、browser download、software install 和 AI video job 已具备 activation bridge：publish → route → lease → `information` runtime lane → ContextFrame → 首次 model accept ACK；接受前失败按原重试次数处理后进入 dead-letter，接受后不再重复投递。
 - 被动 UI observation 现在发布为 `wake=never` delivery：它本身不唤醒 Agent，可随下一次主动 UI intent 合并，也可由下一条真实 L1 用户消息租约并附加；模型接受前失败会 NACK 回 pending。
 - 非安全确认 UI event 被新桥接管后，只退休对应的单条 `ui_signals` 兼容记录；若新桥发布失败则不退休，旧 next-turn context 自动兜底。
 - 附加到 L1 的 ContextFrame 使用独立 `role=system` 消息，真实当前用户消息仍是最后一条干净的 `role=user`；不会把 UI observation 伪装成用户发言。
@@ -406,11 +406,11 @@ src/information/
 - reminder due event 已接入同一 delivery inbox，但继续使用现有 L3 task payload、`reminder_runs` 和验证通知契约；只有目标消息验证发送成功后才 `after_turn` ACK，失败或中断时 reminder run 与 delivery 使用同一个重试时间。
 - activation 使用独立 dedupe namespace，避免启用开关时误复用先前 shadow event；dead-letter 会明确放行 legacy fallback，避免吞掉提醒重试。
 - scheduler 改为从 delivery inbox 选择 turn trigger；保留 legacy queue bridge 作为回滚开关。
-- UI、background job、reminder 与 user message 均已完成 gated migration；legacy queue 仍作为调度桥和一键回滚路径保留。
+- UI、background job、reminder、user message 与 wake=never user resource 均已完成默认迁移；legacy queue 只保留为失败兜底和统一紧急回退路径。
 - 移除 UI intent 的“双写 signal + 伪消息”行为。
 - L1/L2/L3 改为由 trigger item 的语义决定，不再依赖 `msg/null` 和字符串 `TICK` 推断。
 
-### Phase 3：ContextFrame 编译器（当前已开始）
+### Phase 3：ContextFrame 编译器（已默认全量）
 
 - pull source shadow 由 `BAILONGMA_INFORMATION_SOURCE_SHADOW=runtime,environment,memory,knowledge,task,constraints,prefetch,scene,identity,self,capability`（或 `all`）独立开启，默认关闭；它不写 event journal、不创建 delivery、不进入 prompt，只构造瞬时 ContextFrame 和无正文审计。
 - `InformationSourceRegistry` 现在声明 source domain、字符预算和 rank；`source-collector` 按 domain/source id 并发收集 snapshot/query，逐来源超时、失败隔离，并从结构上拒绝 pull source 产生 `user_input`。
@@ -418,10 +418,10 @@ src/information/
 - memory relevant/recall、active policy、Knowledge Cortex evidence、current task state、behavioral constraints、prefetch cache、scene manifest、person/profile、self state 和 capability prefeed 均已有 projection source。projection 复用本轮 legacy 结果，不重复查询；信息进入 policy、task_state、system_fact、knowledge、memory、ui_signal 各自语义通道，且都不能冒充当前用户发言。
 - source frame 审计记录 source/item 数量、逐来源耗时、失败数、统一预算结果、逐 domain 的收集/入选数量，以及 legacy component 的覆盖字符数、未覆盖字符数和千分比；turn trace 只保留这些计数与哈希，不持久化 source payload 正文。
 - 每个 source 声明自己替代的 legacy component；只有该 source 本轮产出的全部 item 都进入最终 ContextFrame 才计为覆盖，因预算被部分或全部丢弃的 source 不会被误报为已覆盖。
-- renderer canary 由 `BAILONGMA_INFORMATION_SOURCE_RENDER=scene,prefetch,constraints` 显式开启，默认关闭；当前 allowlist 只接受这三个 domain，即使配置 `all` 也不会越过 allowlist 切换其他 domain。
-- canary 在完整性门之后还要通过 domain parity gate：scene 对照 surface manifest，prefetch 对照缓存记录，constraints 对照正文、detail、dimension、tags 以及 authorship/semantic kind/trust；审计只记录计数和通过状态，不记录正文。
-- canary 成功时把 source frame 作为独立 `role=system` 的 `<context-information>` 注入，并只抑制已被完整覆盖且语义等价的对应 legacy component；source 初始化/采集/编译失败、`maxItems` 截断、预算只选中部分 item 或 parity 不一致时均 fail-open，保留旧上下文。
-- injector 暂时仍返回兼容字段；除 scene/prefetch/constraints 的显式 canary 外，其他 domain 继续只做 shadow，对照稳定后再逐类把 `InformationItem[]` 提升为真值并扩大 renderer allowlist。
+- renderer 现在默认启用 `runtime/environment/memory/knowledge/task/constraints/prefetch/scene/identity/self/capability` 全部 11 个 domain；`BAILONGMA_INFORMATION_SOURCE_RENDER` 仍可用于缩小范围，统一 legacy 模式会关闭全部 source render。
+- 完整性门之后，11 个 domain 都必须通过各自的语义 parity adapter；对照覆盖 envelope、topic、身份、运行时状态、记忆/知识字段、任务空状态、人物/画像、自我状态和 capability prefeed。审计只记录计数、哈希和通过状态，不记录正文。
+- 全量渲染成功时把 source frame 作为独立 `role=system` 的 `<context-information>` 注入，并只抑制已被完整覆盖且语义等价的对应 legacy component；source 初始化/采集/编译失败、`maxItems` 截断、预算只选中部分 item 或 parity 不一致时仍 fail-open，逐 domain 保留旧上下文。
+- runtime security/existence、无 active task 的负状态、capability prefeed 和 memory-refresh 新增结果均已进入结构化 source；capability 从 legacy runtime 聚合中拆出，避免同一信息被 blob source 和专用 source 重复注入。
 - 把去重、优先级、字符预算、超时、敏感度和 provenance 集中到 Context Compiler。
 - renderer 保证只有 `user_input` 进入当前 `role=user`；其余信息按语义 section 渲染。
 
@@ -473,7 +473,7 @@ src/information/
 
 - L1 回复、L2 autonomous output contract、L3 reminder verified delivery 行为保持一致。
 - 原有 provider timeout/maxChars 和 UI 两阶段消费测试继续通过。
-- feature flag 关闭时可完全回到旧队列和旧 injector。
+- 设置 `BAILONGMA_INFORMATION_MODE=legacy` 时可完全回到旧队列和旧 injector；该开关只用于紧急回退，不再是默认运行方式。
 
 ### 观测指标
 

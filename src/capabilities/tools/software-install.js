@@ -4,6 +4,7 @@ import { emitEvent } from '../../events.js'
 import { insertActionLog, getConfig, setConfig } from '../../db.js'
 import { pushMessage } from '../../inbound-message.js'
 import { PRIMARY_USER_ID, isVoiceChannel } from '../../identity.js'
+import { publishInformationEventForMigration } from '../../information/activation-bridge.js'
 import { projectInstallJobToScene } from './software-install-scene.js'
 
 const IS_WIN = process.platform === 'win32'
@@ -526,7 +527,7 @@ function makeAgentSignal(job) {
 }
 
 function enqueueAgentNotification(job) {
-  pushMessage('SYSTEM', makeAgentSignal(job), 'APP_SIGNAL', {
+  const queueMetadata = {
     queue: 'background',
     persist: false,
     notificationTargetId: job.notify_target_id || PRIMARY_USER_ID,
@@ -534,7 +535,42 @@ function enqueueAgentNotification(job) {
     notificationExternalPartyId: job.notify_external_party_id || null,
     notificationVoiceReply: job.notify_voice_reply === true || isVoiceChannel(job.notify_channel),
     softwareInstallJobId: job.job_id,
+    backgroundJobId: job.job_id,
+    backgroundJobEvent: job.status,
+  }
+  const informationResult = publishInformationEventForMigration({
+    topic: 'job.state_changed',
+    source: { id: 'job:software-install', kind: 'event' },
+    subject: {
+      userId: job.notify_target_id || PRIMARY_USER_ID,
+      jobId: job.job_id,
+    },
+    authorship: 'system',
+    semanticKind: 'runtime_event',
+    payload: {
+      jobId: job.job_id,
+      kind: 'software_install',
+      state: job.status,
+      packageId: job.selected_package_id || job.package_id || job.requested_package_id || '',
+      query: job.query || '',
+      summary: job.message || job.error || job.reason || '',
+    },
+    occurredAt: job.completed_at || job.updated_at || nowIso(),
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+    priority: 40,
+    sensitivity: 'private',
+    trust: 'verified',
+    orderingKey: `job:${job.job_id}`,
+    dedupeKey: `software-install:${job.job_id}:${job.status}:${job.completed_at || job.updated_at || ''}`,
+    correlationId: job.job_id,
+  }, {
+    domain: 'job',
+    queueMetadata,
   })
+  if (!informationResult.handled) {
+    const queued = pushMessage('SYSTEM', makeAgentSignal(job), 'APP_SIGNAL', queueMetadata)
+    if (queued && informationResult.event?.id) queued.informationEventId = informationResult.event.id
+  }
 }
 
 function notifyJobFinished(job) {

@@ -212,6 +212,7 @@ try {
   }), { pending: 0, deadLetter: 1, total: 1 })
 
   const eventCountBeforeDisabledShadow = db.prepare(`SELECT COUNT(*) AS count FROM information_events`).get().count
+  process.env.BAILONGMA_INFORMATION_MODE = 'legacy'
   const legacyOff = pushMessage('ID:shadow-off', 'legacy queue remains authoritative', 'TUI', {
     clientMessageId: 'shadow-off-message-0001',
   })
@@ -262,6 +263,7 @@ try {
   console.log('information core tests passed')
 } finally {
   delete process.env.BAILONGMA_INFORMATION_SHADOW
+  delete process.env.BAILONGMA_INFORMATION_MODE
   closeDBForTest()
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }

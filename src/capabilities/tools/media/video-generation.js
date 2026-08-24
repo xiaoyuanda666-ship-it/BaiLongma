@@ -4,6 +4,8 @@ import path from 'path'
 import { emitEvent } from '../../../events.js'
 import { pushMessage } from '../../../inbound-message.js'
 import { getSeedanceConfig } from '../../../config.js'
+import { PRIMARY_USER_ID } from '../../../identity.js'
+import { publishInformationEventForMigration } from '../../../information/activation-bridge.js'
 import { paths } from '../../../paths.js'
 import { SANDBOX_ROOT } from '../../sandbox.js'
 
@@ -38,15 +40,61 @@ function emitAIVideo(action, payload = {}) {
 // 视频生成进入终态后，给 agent 推一条 SYSTEM 通知，让它"知道"结果（成功/失败）。
 // 走后台队列（background 优先级），不打断用户当前对话；agent 空闲时自然处理这条通知。
 // 这是 emitAIVideo（只通知前端面板）之外的另一条通道——前者给眼睛，这条给 agent 的认知。
-function notifyAgentVideoDone({ prompt = '', mode = 'text', ok = true, reason = '' } = {}) {
+function notifyAgentVideoDone({ jobId = '', prompt = '', mode = 'text', ok = true, reason = '' } = {}) {
   const modeLabel = seedanceModeLabel(mode)
   const p = String(prompt || '').trim()
   const promptPart = p ? `，提示词：「${p}」` : ''
   const content = ok
     ? `[系统通知] 你之前提交的 AI 视频已经生成完成（${modeLabel}${promptPart}）。视频已自动在右侧面板播放。如果用户在等这个视频，简短地告诉他生成好了即可，不必复述提示词或描述画面。`
     : `[系统通知] 你之前提交的 AI 视频生成失败了（${modeLabel}${promptPart}）。原因：${reason || '未知'}。可以简短地把失败情况告诉用户，必要时建议换个提示词或稍后重试。`
-  try { pushMessage('SYSTEM', content, 'SYSTEM', { queue: 'background' }) }
+  try {
+    const state = ok ? 'completed' : 'failed'
+    const queueMetadata = {
+      queue: 'background',
+      priority: 40,
+      persist: false,
+      notificationTargetId: PRIMARY_USER_ID,
+      notificationChannel: 'TUI',
+      backgroundJobId: jobId,
+      backgroundJobEvent: state,
+      videoGenerationJobId: jobId,
+    }
+    const informationResult = publishInformationEventForMigration({
+      topic: 'job.state_changed',
+      source: { id: 'job:ai-video-generation', kind: 'event' },
+      subject: { userId: PRIMARY_USER_ID, jobId },
+      authorship: 'system',
+      semanticKind: 'runtime_event',
+      payload: {
+        jobId,
+        kind: 'ai_video_generation',
+        state,
+        mode,
+        prompt: p,
+        reason: cleanVideoNotificationReason(reason),
+      },
+      occurredAt: new Date(),
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60_000),
+      priority: 40,
+      sensitivity: 'private',
+      trust: 'verified',
+      orderingKey: `job:${jobId}`,
+      dedupeKey: `ai-video:${jobId}:${state}`,
+      correlationId: jobId,
+    }, {
+      domain: 'job',
+      queueMetadata,
+    })
+    if (!informationResult.handled) {
+      const queued = pushMessage('SYSTEM', content, 'SYSTEM', queueMetadata)
+      if (queued && informationResult.event?.id) queued.informationEventId = informationResult.event.id
+    }
+  }
   catch (e) { console.warn(`[aivideo] 通知 agent 失败：${e.message}`) }
+}
+
+function cleanVideoNotificationReason(value = '') {
+  return String(value || '').trim().slice(0, 2_000)
 }
 
 // ── AI 视频面板「感知」状态 ──
@@ -172,20 +220,20 @@ async function seedancePollLoop({ taskId, jobId, baseURL, apiKey, prompt = '', m
           // 下载失败时退而求其次：直接播远端 URL（临时链接，可能数小时后过期）
           emitAIVideo('ready', { jobId, videoUrl })
         }
-        notifyAgentVideoDone({ prompt, mode, ok: true })
+        notifyAgentVideoDone({ jobId, prompt, mode, ok: true })
         return
       }
       if (status === 'failed' || status === 'cancelled' || status === 'expired') {
         const m = data?.error?.message || status
         emitAIVideo('error', { jobId, message: `生成失败：${m}` })
-        notifyAgentVideoDone({ prompt, mode, ok: false, reason: m })
+        notifyAgentVideoDone({ jobId, prompt, mode, ok: false, reason: m })
         return
       }
       // queued / running → 推进度
       emitAIVideo('progress', { jobId, status: status || 'running' })
     }
     emitAIVideo('error', { jobId, message: '生成超时（超过 8 分钟未完成）' })
-    notifyAgentVideoDone({ prompt, mode, ok: false, reason: '生成超时（超过 8 分钟未完成）' })
+    notifyAgentVideoDone({ jobId, prompt, mode, ok: false, reason: '生成超时（超过 8 分钟未完成）' })
   } finally {
     // 无论成功/失败/超时/异常，都从待恢复列表移除该任务
     removePending(taskId)
