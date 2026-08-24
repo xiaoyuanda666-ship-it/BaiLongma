@@ -3,6 +3,7 @@ import { normalizeConversationPartyId, upsertEntity, insertConversation } from '
 import { resolveCanonicalUserId } from './identity.js'
 import { enqueueMessage } from './queue.js'
 import { shadowPublishInboundEntry } from './information/shadow-publisher.js'
+import { enqueueInboundMessageForMigration } from './information/user-message-activation.js'
 
 const PRIORITY = {
   user: 100,
@@ -25,7 +26,7 @@ function resolveQueueName(priority, meta = {}) {
 
 // 只持久化到聊天历史，不进入 Agent 队列。资源拖入使用这个边界：历史记录
 // 立即出现，但只有后续文字/语音消息调用 pushMessage 才会启动一个 turn。
-export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta = {}) {
+function persistInboundEntry(rawFromId, content, channel = 'TUI', meta = {}, { publishShadow = true } = {}) {
   const normalizedRaw = normalizeConversationPartyId(rawFromId)
   const canonicalId = resolveCanonicalUserId({ rawFromId: normalizedRaw, channel })
   const externalPartyId = canonicalId !== normalizedRaw ? normalizedRaw : ''
@@ -66,13 +67,21 @@ export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta 
   // Information Core is additive and disabled by default. In shadow mode this
   // records a typed event after the legacy conversation write, but it does not
   // enqueue, wake, inject, consume, or acknowledge anything in the live path.
-  const shadowInformation = shadowPublishInboundEntry(entry)
-  if (shadowInformation.event?.id) entry.informationEventId = shadowInformation.event.id
+  if (publishShadow) {
+    const shadowInformation = shadowPublishInboundEntry(entry)
+    if (shadowInformation.event?.id) entry.informationEventId = shadowInformation.event.id
+  }
 
   return entry
 }
 
+export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta = {}) {
+  return persistInboundEntry(rawFromId, content, channel, meta)
+}
+
 export function pushMessage(rawFromId, content, channel = 'TUI', meta = {}) {
-  const entry = persistInboundMessage(rawFromId, content, channel, meta)
-  return enqueueMessage(entry, entry.queueName)
+  // The migration adapter owns the single information publication for queued
+  // messages, avoiding a shadow + activation double write when user mode is on.
+  const entry = persistInboundEntry(rawFromId, content, channel, meta, { publishShadow: false })
+  return enqueueInboundMessageForMigration(entry, { enqueue: enqueueMessage })
 }

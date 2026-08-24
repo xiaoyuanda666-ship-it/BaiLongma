@@ -14,8 +14,16 @@ import {
 } from './repositories/deliveries.js'
 import { shadowPublishInformationEvent } from './shadow-publisher.js'
 
-const ACTIVATION_DOMAINS = new Set(['ui', 'job', 'schedule'])
+const ACTIVATION_DOMAINS = new Set(['ui', 'job', 'schedule', 'user'])
 const QUEUE_METADATA_FIELDS = Object.freeze([
+  'clientId',
+  'clientMessageId',
+  'strictEvaluation',
+  'forbiddenTools',
+  'attachments',
+  'pendingResources',
+  'social',
+  'voiceReply',
   'notificationTargetId',
   'notificationChannel',
   'notificationExternalPartyId',
@@ -94,7 +102,11 @@ function existingWakeState(candidates = []) {
 
 function sameActivationScope(triggerEvent = {}, candidateEvent = {}) {
   const triggerDomain = activationDomainFromEvent(triggerEvent)
-  if (!triggerDomain || activationDomainFromEvent(candidateEvent) !== triggerDomain) return false
+  const candidateDomain = activationDomainFromEvent(candidateEvent)
+  if (!triggerDomain || !candidateDomain) return false
+  // A real user turn is the natural host for passive context from any enabled
+  // domain. Non-user activations only coalesce within their own domain.
+  if (triggerDomain !== 'user' && candidateDomain !== triggerDomain) return false
   if (candidateEvent.metadata?.activation !== true) return false
   const triggerUserId = String(triggerEvent.subject?.userId || '').trim()
   const candidateUserId = String(candidateEvent.subject?.userId || '').trim()
@@ -111,7 +123,7 @@ function mergeDeliveryCandidates(...groups) {
   return [...merged.values()]
 }
 
-function loadPendingActivationFrameCandidates(event, { db }) {
+function loadPendingActivationFrameCandidates(event, { db, env }) {
   return loadInformationDeliveryCandidates({
     subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
     subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
@@ -120,11 +132,33 @@ function loadPendingActivationFrameCandidates(event, { db }) {
   }, { db }).filter(candidate => (
     candidate.route?.activation?.type === 'event'
     && candidate.route?.wake?.policy === 'never'
+    && isInformationActivationEnabled(activationDomainFromEvent(candidate.event), env)
     && sameActivationScope(event, candidate.event)
   ))
 }
 
-function createActivationEntry({ event, lease, candidates, queueMetadata = {} }) {
+function loadUserMessageSnapshot(event, { db }) {
+  const table = String(event.payloadRef?.table || '')
+  const conversationId = Number(event.payloadRef?.id || event.subject?.conversationId) || 0
+  if (table !== 'conversations' || conversationId <= 0) {
+    throw new Error('user message activation requires a persisted conversation reference')
+  }
+  const row = db.prepare(`
+    SELECT id, role, from_id, content, timestamp, channel, external_party_id
+    FROM conversations
+    WHERE id = ?
+  `).get(conversationId)
+  if (!row || row.role !== 'user' || !row.content) {
+    throw new Error(`user message conversation ${conversationId} is unavailable`)
+  }
+  const subjectUserId = String(event.subject?.userId || '').trim()
+  if (subjectUserId && subjectUserId !== row.from_id) {
+    throw new Error(`user message conversation ${conversationId} has a mismatched author`)
+  }
+  return row
+}
+
+function createActivationEntry({ event, lease, candidates, queueMetadata = {}, db }) {
   const routeByDeliveryId = new Map(candidates.map(candidate => [candidate.delivery.id, candidate.route]))
   const policies = [...new Set(lease.deliveries.map(delivery => (
     routeByDeliveryId.get(delivery.id)?.delivery?.ack || 'after_model_accept'
@@ -150,7 +184,23 @@ function createActivationEntry({ event, lease, candidates, queueMetadata = {} })
     informationAckPolicies: policies,
     ...metadata,
   }
-  if (activationDomainFromEvent(event) !== 'schedule') return base
+  const domain = activationDomainFromEvent(event)
+  if (domain === 'user') {
+    const row = loadUserMessageSnapshot(event, { db })
+    return {
+      ...base,
+      raw: `[${row.from_id}${row.external_party_id ? ` via ${row.external_party_id}` : ''}] ${row.timestamp} [${row.channel}] ${row.content}`,
+      fromId: row.from_id,
+      externalPartyId: row.external_party_id || '',
+      content: row.content,
+      timestamp: row.timestamp,
+      conversationId: Number(row.id) || 0,
+      channel: row.channel || '',
+      queueName: 'user',
+      runtimeLane: 'l1',
+    }
+  }
+  if (domain !== 'schedule') return base
 
   const deliveryAttempt = lease.deliveries.reduce(
     (max, delivery) => Math.max(max, Number(delivery.attempts) || 0),
@@ -175,6 +225,7 @@ function activatePersistedEvent({
   db,
   enqueue,
   now,
+  env,
 }) {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     return { handled: false, activated: false, reason: 'no_matching_route', event, entry: null }
@@ -197,7 +248,7 @@ function activatePersistedEvent({
   // immutable frame. In particular, passive UI observations stay wake=never
   // on their own but are consumed with the next active UI intent.
   const triggerDeliveryIds = new Set(pending.map(candidate => candidate.delivery.id))
-  const companionCandidates = loadPendingActivationFrameCandidates(event, { db })
+  const companionCandidates = loadPendingActivationFrameCandidates(event, { db, env })
     .filter(candidate => !triggerDeliveryIds.has(candidate.delivery.id))
     .slice(0, Math.max(0, 100 - pending.length))
   const frameCandidates = mergeDeliveryCandidates(pending, companionCandidates)
@@ -215,14 +266,19 @@ function activatePersistedEvent({
 
   const leasedIds = new Set(lease.deliveries.map(delivery => delivery.id))
   const leasedCandidates = frameCandidates.filter(candidate => leasedIds.has(candidate.delivery.id))
-  const entry = createActivationEntry({ event, lease, candidates: leasedCandidates, queueMetadata })
+  let entry = null
   try {
-    enqueue(entry, 'background')
+    entry = createActivationEntry({ event, lease, candidates: leasedCandidates, queueMetadata, db })
+    enqueue(entry, entry.queueName, {
+      onSuperseded: superseded => {
+        supersedeInformationActivation(superseded, { db, retryAt: now })
+      },
+    })
     return { handled: true, activated: true, reason: 'enqueued', event, lease, entry }
   } catch (error) {
     nackInformationDeliveries({
       leaseId: lease.leaseId,
-      deliveryIds: entry.informationDeliveryIds,
+      deliveryIds: entry?.informationDeliveryIds || lease.deliveries.map(delivery => delivery.id),
       error: `activation enqueue failed: ${error?.message || error}`,
       maxAttempts: 1,
     }, { db })
@@ -281,6 +337,7 @@ export function publishInformationEventForMigration(input, {
       db: targetDb,
       enqueue,
       now: now || new Date(),
+      env,
     })
     return { mode: 'activation', enabled: true, created: persisted.created, ...activation }
   } catch (error) {
@@ -314,11 +371,22 @@ export function compileInformationActivationFrame(entry = {}, {
     subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
     subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
   }, { db })
-  return compileInformationContextFrame({
+  const frame = compileInformationContextFrame({
     candidates,
     triggerEventId: entry.informationEventId,
     now,
   })
+  if (entry.informationActivationDomain === 'user') {
+    const current = frame.userInputs.current?.event
+    if (!current || current.authorship !== 'user' || current.semanticKind !== 'user_input') {
+      throw new Error('user message activation did not compile a current user input')
+    }
+    if (Number(current.payloadRef?.id) !== Number(entry.conversationId)
+      || String(current.subject?.userId || '') !== String(entry.fromId || '')) {
+      throw new Error('user message activation ContextFrame does not match its queue entry')
+    }
+  }
+  return frame
 }
 
 export function leaseAccumulatedInformationContext({
@@ -434,6 +502,42 @@ export function nackInformationLease(entry = {}, error = '', {
 
 export const nackInformationActivation = nackInformationLease
 
+export function supersedeInformationActivation(entry = {}, {
+  db = getDB(),
+  retryAt = new Date(),
+} = {}) {
+  if (entry.informationActivationDomain !== 'user' || !hasInformationLease(entry)) {
+    return { acked: 0, released: 0 }
+  }
+  const candidates = loadInformationDeliveryCandidates({
+    deliveryIds: entry.informationDeliveryIds || [],
+    subscriberType: PRIMARY_INFORMATION_SUBSCRIBER.type,
+    subscriberId: PRIMARY_INFORMATION_SUBSCRIBER.id,
+  }, { db })
+  const triggerDeliveryIds = candidates
+    .filter(candidate => candidate.event?.id === entry.informationEventId)
+    .map(candidate => candidate.delivery.id)
+  const companionDeliveryIds = candidates
+    .filter(candidate => candidate.event?.id !== entry.informationEventId)
+    .map(candidate => candidate.delivery.id)
+  const acked = triggerDeliveryIds.length > 0
+    ? ackInformationDeliveries({
+        leaseId: entry.informationLeaseId,
+        deliveryIds: triggerDeliveryIds,
+      }, { db })
+    : 0
+  const released = companionDeliveryIds.length > 0
+    ? nackInformationDeliveries({
+        leaseId: entry.informationLeaseId,
+        deliveryIds: companionDeliveryIds,
+        error: 'host user message was superseded before model accept',
+        retryAt,
+        maxAttempts: 100,
+      }, { db }).pending
+    : 0
+  return { acked, released }
+}
+
 export function resumePendingInformationActivations({
   env = process.env,
   db = null,
@@ -476,6 +580,7 @@ export function resumePendingInformationActivations({
         db: targetDb,
         enqueue,
         now,
+        env,
       }))
     } catch (error) {
       logWarn(error, {

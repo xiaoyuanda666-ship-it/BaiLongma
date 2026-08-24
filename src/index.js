@@ -27,6 +27,7 @@ import {
   leaseAccumulatedInformationContext,
   ackInformationLease,
   nackInformationLease,
+  supersedeInformationActivation,
   deadLetterInformationActivation,
   resumePendingInformationActivations,
   getNextInformationActivation,
@@ -789,6 +790,10 @@ async function runTurn(input, label, msg = null) {
   const isScheduledTask = runtimeLane === 'l3'
   const isInformationTurn = runtimeLane === 'information'
   const hasInformationActivation = msg?.informationActivation === true
+  const informationAckAfterModelAccept = hasInformationActivation
+    && !isScheduledTask
+    && (msg?.informationAckPolicies || ['after_model_accept'])
+      .every(policy => policy === 'after_model_accept')
   const isUserTurn = runtimeLane === 'l1'
   const semanticInput = isScheduledTask
     ? (msg?.reminderTask || msg?.content || '')
@@ -883,6 +888,19 @@ async function runTurn(input, label, msg = null) {
           ttsText: autoConfigResult.hasTTS ? 'Voice synthesis successful' : null,
           target_client_id: msg?.clientId || '',
         })
+        if (informationAckAfterModelAccept) {
+          const requested = msg.informationDeliveryIds?.length || 0
+          const acked = ackInformationLease(msg)
+          msg.informationAccepted = true
+          emitEvent('information_delivery_acked', {
+            event_id: msg.informationEventId,
+            lease_id: msg.informationLeaseId,
+            requested,
+            acked,
+            policy: 'after_local_accept',
+            mode: 'activation',
+          })
+        }
         finishTurn()
         return  // Skip LLM, silent round
       }
@@ -1203,7 +1221,7 @@ async function runTurn(input, label, msg = null) {
       userId: PRIMARY_USER_ID,
     })
     const legacyComponentsForAudit = { ...supplementalInformation.components }
-    informationAttachment = isUserTurn && !hasInformationActivation
+    informationAttachment = isUserTurn
       ? leaseAccumulatedInformationContext({
           userId: msg?.fromId || PRIMARY_USER_ID,
           domains: ['ui'],
@@ -1216,6 +1234,10 @@ async function runTurn(input, label, msg = null) {
     if (hasInformationActivation && !informationFrame) {
       throw new Error('information activation is missing its leased ContextFrame')
     }
+    const informationContextText = [
+      informationFrame?.contextText || '',
+      hasInformationActivation ? (informationAttachment?.frame?.contextText || '') : '',
+    ].filter(Boolean).join('\n\n')
     if (isInformationTurn && msg.informationActivationDomain === 'job') {
       supplementalInformation.components.browserDownloads = ''
     }
@@ -1243,6 +1265,12 @@ async function runTurn(input, label, msg = null) {
           : (informationAttachment ? 'information_context_attached' : 'information_context_shadow'),
         contextShadow.audit,
       )
+    }
+    if (hasInformationActivation && informationAttachment) {
+      emitEvent('information_context_attached', buildInformationContextAudit(informationAttachment.frame, {
+        legacyComponents: legacyComponentsForAudit,
+        mode: 'attachment',
+      }))
     }
     const extraContextJoined = supplementalInformation.contextText
     const skillSelection = selectSkillsForMessage(semanticInput || '')
@@ -1360,7 +1388,7 @@ async function runTurn(input, label, msg = null) {
     const buildMessagesWithContext = (ctxBlock) => buildLLMMessages({
       systemPrompt,
       contextBlock: ctxBlock,
-      informationContextBlock: informationFrame?.contextText || '',
+      informationContextBlock: informationContextText,
       conversationWindow: injection.conversationWindow || [],
       input: semanticInput,
       msg,
@@ -1422,7 +1450,7 @@ async function runTurn(input, label, msg = null) {
     emitEvent('system_prompt', {
       content: combinePromptForPreview(
         systemPrompt,
-        [contextBlock, informationFrame?.contextText || ''].filter(Boolean).join('\n\n'),
+        [contextBlock, informationContextText].filter(Boolean).join('\n\n'),
       ),
       fastUserPath,
     })
@@ -1608,33 +1636,49 @@ async function runTurn(input, label, msg = null) {
       onRetry: ({ attempt, nextAttempt, maxAttempts, delayMs, error }) => {
         emitEvent('llm_retry', { attempt, nextAttempt, maxAttempts, delayMs, error })
       },
-      onModelAccept: (isInformationTurn || informationAttachment)
+      onModelAccept: (informationAckAfterModelAccept || informationAttachment)
         ? () => {
-            const leasedEntry = isInformationTurn ? msg : informationAttachment.entry
-            const requested = leasedEntry.informationDeliveryIds?.length || 0
-            const acked = ackInformationLease(leasedEntry)
-            if (acked !== requested) {
-              throw new Error(`information delivery ACK mismatch: requested=${requested} acked=${acked}`)
-            }
-            if (isInformationTurn) {
-              msg.informationAccepted = true
-              try {
-                commitInformationConsumption(injection.categories?.information || injection)
-              } catch (error) {
-                console.warn('[information] compatibility consumption failed after ACK:', error?.message || error)
+            if (informationAckAfterModelAccept) {
+              const requested = msg.informationDeliveryIds?.length || 0
+              const acked = ackInformationLease(msg)
+              if (acked !== requested) {
+                throw new Error(`information delivery ACK mismatch: requested=${requested} acked=${acked}`)
               }
-            } else {
-              informationAttachment.accepted = true
+              msg.informationAccepted = true
+              if (isInformationTurn) {
+                try {
+                  commitInformationConsumption(injection.categories?.information || injection)
+                } catch (error) {
+                  console.warn('[information] compatibility consumption failed after ACK:', error?.message || error)
+                }
+              }
+              emitEvent('information_delivery_acked', {
+                event_id: msg.informationEventId,
+                lease_id: msg.informationLeaseId,
+                requested,
+                acked,
+                policy: 'after_model_accept',
+                mode: 'activation',
+              })
             }
-            emitEvent('information_delivery_acked', {
-              event_id: isInformationTurn ? msg.informationEventId : '',
-              event_ids: isInformationTurn ? undefined : leasedEntry.informationEventIds,
-              lease_id: leasedEntry.informationLeaseId,
-              requested,
-              acked,
-              policy: 'after_model_accept',
-              mode: isInformationTurn ? 'activation' : 'attachment',
-            })
+            if (informationAttachment) {
+              const leasedEntry = informationAttachment.entry
+              const requested = leasedEntry.informationDeliveryIds?.length || 0
+              const acked = ackInformationLease(leasedEntry)
+              if (acked !== requested) {
+                throw new Error(`information attachment ACK mismatch: requested=${requested} acked=${acked}`)
+              }
+              informationAttachment.accepted = true
+              emitEvent('information_delivery_acked', {
+                event_id: '',
+                event_ids: leasedEntry.informationEventIds,
+                lease_id: leasedEntry.informationLeaseId,
+                requested,
+                acked,
+                policy: 'after_model_accept',
+                mode: 'attachment',
+              })
+            }
           }
         : null,
       onToolExecute: (name, args = {}) => {
@@ -1754,6 +1798,20 @@ async function runTurn(input, label, msg = null) {
     console.log('[system] Current processing interrupted by new message — partial output discarded')
     if (isTick) markCurrentTickAborted()
     if (isScheduledTask) scheduleReminderRunRetry(msg, 'interrupted by higher-priority message', { immediate: true })
+    if (isUserTurn && informationAckAfterModelAccept && !msg.informationAccepted
+      && controller.signal.reason === 'higher-priority-message') {
+      const requested = msg.informationDeliveryIds?.length || 0
+      const superseded = supersedeInformationActivation(msg, { retryAt: new Date() })
+      msg.informationAccepted = true
+      emitEvent('information_delivery_superseded', {
+        event_id: msg.informationEventId,
+        lease_id: msg.informationLeaseId,
+        requested,
+        acked: superseded.acked,
+        released: superseded.released,
+        reason: 'higher-priority user message arrived',
+      })
+    }
     if (isInformationTurn && !msg.informationAccepted) {
       requeueMessage(msg, msg.retryCount || 0)
       emitEvent('information_activation_requeued', {

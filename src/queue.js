@@ -9,8 +9,10 @@ export function setInterruptCallback(fn) {
   interruptCallback = fn
 }
 
-function pruneSupersededUserMessages(entry) {
-  if (!entry || entry.queueName !== 'user') return
+export function removeSupersededUserMessages(entry, { onSuperseded = null } = {}) {
+  if (!entry || entry.queueName !== 'user') return []
+
+  const removed = []
 
   for (let i = queues.user.length - 1; i >= 0; i--) {
     const pending = queues.user[i]
@@ -18,12 +20,17 @@ function pruneSupersededUserMessages(entry) {
     if (pending.fromId !== entry.fromId) continue
     if ((pending.channel || '') !== (entry.channel || '')) continue
     queues.user.splice(i, 1)
+    removed.push(pending)
+    try { onSuperseded?.(pending, entry) } catch (error) {
+      console.warn('[queue] failed to settle superseded user entry:', error?.message || error)
+    }
   }
+  return removed
 }
 
-export function enqueueMessage(entry, queueName = entry?.queueName) {
+export function enqueueMessage(entry, queueName = entry?.queueName, options = {}) {
   const targetQueue = queueName === 'background' ? 'background' : 'user'
-  pruneSupersededUserMessages(entry)
+  removeSupersededUserMessages(entry, options)
   queues[targetQueue].push(entry)
   interruptCallback?.(entry)
   return entry

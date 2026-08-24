@@ -7,6 +7,18 @@ import { publishInformationEvent } from './hub.js'
 const SHADOW_TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
 const SYSTEM_CHANNELS = new Set(['APP_SIGNAL', 'REMINDER', 'SYSTEM'])
 
+function inboundChannelSourceId(channel = '') {
+  const raw = String(channel || '').trim().toLowerCase()
+  if (!raw) return 'channel:unknown'
+  if (/^[a-z0-9._/-]+$/.test(raw)) return `channel:${raw}`
+  const slug = raw
+    .replace(/[^a-z0-9._/-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  const digest = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 12)
+  return `channel:${slug || 'encoded'}-${digest}`
+}
+
 export function isInformationShadowEnabled(env = process.env) {
   return SHADOW_TRUE_VALUES.has(String(env.BAILONGMA_INFORMATION_SHADOW || '').trim().toLowerCase())
 }
@@ -37,11 +49,11 @@ export function shadowPublishInformationEvent(input, {
   }
 }
 
-export function shadowPublishInboundEntry(entry = {}, options = {}) {
+export function buildInboundInformationEvent(entry = {}) {
   const channel = String(entry.channel || '').trim().toUpperCase()
   const fromId = String(entry.fromId || '').trim()
   if (!fromId || fromId.toUpperCase() === 'SYSTEM' || fromId.startsWith('UI:') || SYSTEM_CHANNELS.has(channel)) {
-    return { enabled: isInformationShadowEnabled(options.env), skipped: true, created: false, deliveries: [] }
+    return null
   }
 
   const isResource = channel === 'RESOURCE' || entry.resourceState === 'pending'
@@ -54,9 +66,9 @@ export function shadowPublishInboundEntry(entry = {}, options = {}) {
     ? `client:${clientMessageId}`
     : (conversationId ? `conversation:${conversationId}` : `content:${contentHash}`)
 
-  return shadowPublishInformationEvent({
+  return {
     topic,
-    source: { id: `channel:${channel.toLowerCase() || 'unknown'}`, kind: 'event' },
+    source: { id: inboundChannelSourceId(channel), kind: 'event' },
     subject: {
       userId: fromId,
       channel,
@@ -79,5 +91,13 @@ export function shadowPublishInboundEntry(entry = {}, options = {}) {
     dedupeKey,
     correlationId: clientMessageId || (conversationId ? `conversation:${conversationId}` : ''),
     metadata: { legacyQueue: entry.queueName || '' },
-  }, options)
+  }
+}
+
+export function shadowPublishInboundEntry(entry = {}, options = {}) {
+  const input = buildInboundInformationEvent(entry)
+  if (!input) {
+    return { enabled: isInformationShadowEnabled(options.env), skipped: true, created: false, deliveries: [] }
+  }
+  return shadowPublishInformationEvent(input, options)
 }

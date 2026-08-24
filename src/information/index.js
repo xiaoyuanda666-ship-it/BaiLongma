@@ -31,14 +31,17 @@ export {
   ackInformationActivation,
   nackInformationLease,
   nackInformationActivation,
+  supersedeInformationActivation,
   deadLetterInformationActivation,
   resumePendingInformationActivations,
   getNextInformationActivation,
 } from './activation-bridge.js'
 export { enqueueReminderRunForMigration } from './reminder-activation.js'
+export { enqueueInboundMessageForMigration } from './user-message-activation.js'
 export {
   isInformationShadowEnabled,
   shadowPublishInformationEvent,
+  buildInboundInformationEvent,
   shadowPublishInboundEntry,
 } from './shadow-publisher.js'
 export {

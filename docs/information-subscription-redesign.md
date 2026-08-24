@@ -348,7 +348,7 @@ src/information/
 3. 默认订阅生成 primary Agent delivery，wake=always、priority=100。
 4. scheduler 租约 delivery 并启动 interactive turn。
 5. Context Compiler 把该 item 设为唯一 current user input，同时查询本轮需要的记忆、知识和状态。
-6. 模型接受该帧后 ACK；若被更新的高优先级输入中断，释放租约。
+6. 模型接受该帧后 ACK；若尚未处理就被同渠道的新输入替代，旧用户触发项 ACK（其 conversation row 仍作为历史可见），随附的被动信息释放回 pending 并交给新 turn。
 
 ### 9.2 记忆注入
 
@@ -390,9 +390,14 @@ src/information/
 - inbound message、UI、reminder、background job 在执行旧路径的同时 shadow publish；shadow delivery 不驱动 turn。
 - 校验 event 数量、去重键、优先级和旧路径结果一致性。
 
-### Phase 2：统一事件输入和唤醒
+### Phase 2：统一事件输入和唤醒（当前进行中）
 
-- 领域切换由 `BAILONGMA_INFORMATION_ACTIVATION=ui,job,schedule`（或 `all`）显式开启，默认关闭；当前只允许 `ui`、`job` 和 `schedule`，不能意外提前切换 user message。
+- 领域切换由 `BAILONGMA_INFORMATION_ACTIVATION=ui,job,schedule,user`（或 `all`）显式开启，默认关闭；四个领域可独立启用，未设置时完全保留 legacy 行为。
+- 用户消息现在有独立 `user` 激活桥：先写 `conversations`，再 publish `conversation.user_message`，由 route 生成 delivery 并恢复成原生 L1 queue entry。正文不复制进 event payload，而是通过 `payloadRef` 从权威 conversation row 恢复；client、附件、严格评测和待处理资源等轮次元数据可随恢复保留。
+- user ContextFrame 必须拥有匹配 conversation/author 的 `userInputs.current`；模型消息中当前输入仍只出现一次，并保持最后一条干净的 `role=user`。被动 UI 信息使用独立 `role=system` context，不能冒充用户发言。
+- `persistInboundMessage()` 仍是只持久化边界：RESOURCE 资源暂存不进入激活队列、不唤醒 Agent；`SYSTEM`、`APP_SIGNAL` 和 `REMINDER` 也不会被 user adapter 误分类。
+- 用户 delivery 在首次 model accept 后 ACK；模型接受前的 provider 失败沿用现有消息重试，租约可在重启/超时后恢复。待处理用户消息被新消息替代时，只 ACK 旧 user trigger，释放其 passive companions，使其进入新 turn；正在执行的旧 turn 被抢占时采用同一拆分规则。
+- activation entry 构造或入队失败会进入 dead-letter；若失败发生在来源调用期间，该调用会立即放行原 queue entry 作为 legacy fallback，避免功能开关造成消息丢失。重启恢复时若权威 conversation row 已不存在，则明确 dead-letter，避免无穷恢复循环。
 - 普通 UI intent 与 browser download job 已具备 activation bridge：publish → route → lease → `information` runtime lane → ContextFrame → 首次 model accept ACK；接受前失败按原重试次数处理后进入 dead-letter，接受后不再重复投递。
 - 被动 UI observation 现在发布为 `wake=never` delivery：它本身不唤醒 Agent，可随下一次主动 UI intent 合并，也可由下一条真实 L1 用户消息租约并附加；模型接受前失败会 NACK 回 pending。
 - 非安全确认 UI event 被新桥接管后，只退休对应的单条 `ui_signals` 兼容记录；若新桥发布失败则不退休，旧 next-turn context 自动兜底。
@@ -401,7 +406,7 @@ src/information/
 - reminder due event 已接入同一 delivery inbox，但继续使用现有 L3 task payload、`reminder_runs` 和验证通知契约；只有目标消息验证发送成功后才 `after_turn` ACK，失败或中断时 reminder run 与 delivery 使用同一个重试时间。
 - activation 使用独立 dedupe namespace，避免启用开关时误复用先前 shadow event；dead-letter 会明确放行 legacy fallback，避免吞掉提醒重试。
 - scheduler 改为从 delivery inbox 选择 turn trigger；保留 legacy queue bridge 作为回滚开关。
-- UI、background job 与 reminder 已完成 gated migration；user message 最后迁移。
+- UI、background job、reminder 与 user message 均已完成 gated migration；legacy queue 仍作为调度桥和一键回滚路径保留。
 - 移除 UI intent 的“双写 signal + 伪消息”行为。
 - L1/L2/L3 改为由 trigger item 的语义决定，不再依赖 `msg/null` 和字符串 `TICK` 推断。
 

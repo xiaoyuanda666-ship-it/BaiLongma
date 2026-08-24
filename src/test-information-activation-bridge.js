@@ -38,7 +38,8 @@ try {
   assert.equal(isInformationActivationEnabled('schedule', uiEnv), false)
   assert.equal(isInformationActivationEnabled('job', allEnv), true)
   assert.equal(isInformationActivationEnabled('schedule', allEnv), true)
-  assert.equal(isInformationActivationEnabled('user', allEnv), false)
+  assert.equal(isInformationActivationEnabled('user', allEnv), true)
+  assert.equal(isInformationActivationEnabled('memory', allEnv), false)
 
   const queued = []
   const passive = publishInformationEventForMigration({
