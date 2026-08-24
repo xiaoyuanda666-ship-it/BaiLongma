@@ -26,6 +26,15 @@ function sourceCandidate(item, source) {
   }
 }
 
+function countBy(values = [], keyOf) {
+  const counts = {}
+  for (const value of values) {
+    const key = String(keyOf(value) || '').trim()
+    if (key) counts[key] = (counts[key] || 0) + 1
+  }
+  return counts
+}
+
 export async function collectInformationSources({
   registry = informationSourceRegistry,
   request = {},
@@ -70,6 +79,8 @@ export async function collectInformationSources({
   const candidates = results.flatMap(result => (
     result.items.map(item => sourceCandidate(item, result.source))
   ))
+  const successfulResults = results.filter(result => result.ok)
+  const representedResults = successfulResults.filter(result => result.items.length > 0)
   return {
     request,
     results,
@@ -77,10 +88,14 @@ export async function collectInformationSources({
     items: candidates.map(candidate => candidate.event),
     audit: {
       sourceCount: results.length,
-      succeededSourceCount: results.filter(result => result.ok).length,
+      succeededSourceCount: successfulResults.length,
       failedSourceCount: results.filter(result => !result.ok).length,
       itemCount: candidates.length,
+      sourceItemsByDomain: countBy(candidates, candidate => candidate.source.domain),
       sourceItemsById: Object.fromEntries(results.map(result => [result.source.id, result.items.length])),
+      coveredLegacyComponents: [...new Set(representedResults.flatMap(result => (
+        result.source.legacyComponents || []
+      )))].sort(),
       sourceLatencyMsById: Object.fromEntries(results.map(result => [result.source.id, result.latencyMs])),
       sourceErrorsById: Object.fromEntries(
         results.filter(result => !result.ok).map(result => [result.source.id, result.error]),

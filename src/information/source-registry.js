@@ -3,6 +3,12 @@ import { createInformationItem, normalizeInformationTopic } from './envelope.js'
 const SOURCE_ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9:._/-]{0,159}$/
 const SOURCE_KINDS = new Set(['event', 'snapshot', 'query'])
 
+function normalizeLegacyComponents(values = []) {
+  return Object.freeze([...new Set((Array.isArray(values) ? values : [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean))])
+}
+
 function normalizeSource(source = {}) {
   const id = String(source.id || '').trim()
   if (!SOURCE_ID_RE.test(id)) throw new Error('information source id is invalid')
@@ -20,6 +26,7 @@ function normalizeSource(source = {}) {
     topics,
     domain: String(source.domain || 'general').trim().toLowerCase(),
     description: String(source.description || '').trim(),
+    legacyComponents: normalizeLegacyComponents(source.legacyComponents),
     sensitivity: String(source.sensitivity || 'normal').trim(),
     timeoutMs: Math.max(50, Math.min(30_000, Number(source.timeoutMs) || 2_000)),
     maxItems: Math.max(1, Math.min(100, Number(source.maxItems) || 20)),
@@ -49,6 +56,7 @@ export class InformationSourceRegistry {
     return [...this.#sources.values()].map(({ collect, match, normalize, ...source }) => ({
       ...source,
       topics: [...source.topics],
+      legacyComponents: [...source.legacyComponents],
     }))
   }
 

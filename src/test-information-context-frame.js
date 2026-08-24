@@ -155,10 +155,19 @@ try {
       contextHash: frame.audit.contextHash,
       selectedBySemanticKind: { policy: 1, runtime_event: 2 },
       legacyCharsByComponent: { runtime: 22 },
+      legacyCoveredComponentCount: 1,
+      legacyUncoveredComponentCount: 0,
+      legacyCoveredChars: 22,
+      legacyUncoveredChars: 0,
+      legacyCoveragePermille: 1000,
+      sourceToLegacyCharRatioPermille: 1500,
+      legacyCoverageByComponent: { runtime: 1 },
       sourceCount: 4,
       succeededSourceCount: 3,
       failedSourceCount: 1,
       itemCount: 7,
+      sourceItemsByDomain: { runtime: 7 },
+      selectedSourceItemsByDomain: { runtime: 3 },
       sourceItemsById: { 'runtime:clock': 1, 'runtime:legacy-components': 6 },
       sourceLatencyMsById: { 'runtime:clock': 2, 'runtime:legacy-components': 4 },
       rawPayload: 'must not be persisted',
@@ -170,6 +179,10 @@ try {
   assert.equal(traced.meta.informationContext.selectedBySemanticKind.policy, 1)
   assert.equal(traced.meta.informationContext.sourceCount, 4)
   assert.equal(traced.meta.informationContext.failedSourceCount, 1)
+  assert.equal(traced.meta.informationContext.legacyCoveragePermille, 1000)
+  assert.equal(traced.meta.informationContext.legacyCoverageByComponent.runtime, 1)
+  assert.equal(traced.meta.informationContext.sourceItemsByDomain.runtime, 7)
+  assert.equal(traced.meta.informationContext.selectedSourceItemsByDomain.runtime, 3)
   assert.equal(traced.meta.informationContext.sourceItemsById['runtime:clock'], 1)
   assert.equal(Object.hasOwn(traced.meta.informationContext, 'rawPayload'), false)
   clearTraces()

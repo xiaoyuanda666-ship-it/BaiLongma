@@ -1337,6 +1337,25 @@ async function runTurn(input, label, msg = null) {
       selfEvolution: injection.selfEvolution || '',
     }
 
+    const sourceLegacyComponentsForAudit = {
+      ...supplementalInformation.components,
+      memories: memoriesText,
+      activePolicies: activePoliciesText,
+      constraints: (injection.constraints || []).map(item => item.content || '').filter(Boolean).join('\n'),
+      personMemory: [injection.personMemory?.content, injection.personMemory?.detail].filter(Boolean).join('\n'),
+      userProfile: injection.userProfile ? JSON.stringify(injection.userProfile) : '',
+      selfSnapshot: injection.selfSnapshot?.snapshotText || '',
+      selfPerception: [
+        injection.selfPerception?.perceptionText,
+        injection.selfPerception?.boundaryDirective,
+      ].filter(Boolean).join('\n'),
+      selfEvolution: injection.selfEvolution || '',
+      knowledgeEvidence: knowledgeInjection.evidenceText || '',
+      task: (state.task || (state.taskSteps || []).length > 0)
+        ? [state.task || '', JSON.stringify(state.taskSteps || [])].filter(Boolean).join('\n')
+        : '',
+    }
+
     informationSourceShadow = await observeInformationSourceShadow({
       request: {
         message: semanticInput,
@@ -1346,6 +1365,25 @@ async function runTurn(input, label, msg = null) {
         channelSwitched,
         systemEnvironmentContext,
         runtimeComponents: supplementalInformation.components,
+        constraintsProjection: injection.constraints || [],
+        prefetchProjection: injection.prefetchedItems || [],
+        sceneProjection: {
+          revision: sceneStore.rev,
+          manifest: sceneStore.manifest(),
+        },
+        identityProjection: {
+          userId: msg?.fromId || PRIMARY_USER_ID,
+          personMemory: injection.personMemory || null,
+          userProfile: injection.userProfile || null,
+        },
+        selfProjection: {
+          perception: injection.selfPerception || null,
+          snapshot: injection.selfSnapshot || null,
+          evolution: injection.selfEvolution || '',
+        },
+        capabilityProjection: {
+          entries: runtimeInjection.capabilityContextEntries || [],
+        },
         memoryProjection: {
           memories: turnMemories,
           recallMemories: injection.recallMemories || [],
@@ -1362,13 +1400,25 @@ async function runTurn(input, label, msg = null) {
         now: new Date(),
       },
       legacyComponents: {
-        ...legacyComponentsForAudit,
+        ...sourceLegacyComponentsForAudit,
         currentTime: `Current time: ${currentTime}`,
         existence: existenceDesc,
         systemEnvironment: systemEnvironmentContext,
         channel: contextChannel,
       },
-      domains: ['runtime', 'environment', 'memory', 'knowledge', 'task'],
+      domains: [
+        'runtime',
+        'environment',
+        'memory',
+        'knowledge',
+        'task',
+        'constraints',
+        'prefetch',
+        'scene',
+        'identity',
+        'self',
+        'capability',
+      ],
     })
     if (informationSourceShadow.observed) {
       emitEvent('information_source_shadow', informationSourceShadow.audit)

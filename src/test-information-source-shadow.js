@@ -24,6 +24,7 @@ registry.register({
   kind: 'snapshot',
   domain: 'runtime',
   topics: ['runtime.test_ok'],
+  legacyComponents: ['runtime', 'runtime'],
   rank: 75,
   collect: ({ now }) => ({
     id: 'info_source_test_ok_0001',
@@ -36,6 +37,10 @@ registry.register({
     trust: 'authoritative',
   }),
 })
+assert.deepEqual(
+  registry.list().find(source => source.id === 'runtime:test-ok').legacyComponents,
+  ['runtime'],
+)
 registry.register({
   id: 'runtime:test-invalid-user',
   kind: 'query',
@@ -203,4 +208,161 @@ assert.ok(
 )
 assert.equal(cognitiveShadow.frame.userInputs.current, null)
 
-console.log('PASS pull Information Sources compile fail-open runtime, memory, knowledge, and task shadow frames')
+const extendedProjectionShadow = await observeInformationSourceShadow({
+  request: {
+    constraintsProjection: [{
+      id: 31,
+      mem_id: 'C:31',
+      content: '涉及发布时必须先运行验证',
+      tags: JSON.stringify(['dimension:release-safety']),
+      timestamp: '2026-08-23T12:00:00.000Z',
+    }],
+    prefetchProjection: [{
+      id: 41,
+      source: 'weather:test',
+      content: 'Shanghai: sunny, 28C',
+      tags: JSON.stringify(['weather']),
+      fetched_at: '2026-08-24T11:55:00.000Z',
+      expires_at: '2026-08-24T13:00:00.000Z',
+    }],
+    sceneProjection: {
+      revision: 7,
+      manifest: [{ id: 'weather-main', kind: 'weather', intent: 'inform', focus: true }],
+    },
+    identityProjection: {
+      userId: 'ID:test-user',
+      personMemory: {
+        id: 51,
+        mem_id: 'PERSON:51',
+        content: '长期合作中的产品负责人',
+        detail: '偏好先看结论',
+        entities: JSON.stringify(['ID:test-user']),
+      },
+      userProfile: {
+        user_id: 'ID:test-user',
+        summary: '熟悉 agent 系统设计',
+        roles: [{ label: '产品负责人', confidence: 0.9 }],
+        domains: ['agent architecture'],
+        communication_style: [{ label: '结论优先', confidence: 0.8 }],
+        updated_at: '2026-08-24T10:00:00.000Z',
+      },
+    },
+    selfProjection: {
+      snapshot: { snapshotText: '你是小白龙，最近一轮保持了简洁表达。' },
+      perception: {
+        perceptionText: '检测到当前输入与上一轮输出高度相似。',
+        boundaryState: 'mirror',
+        boundaryDirective: '先确认对方意图，不要继续复述。',
+        mirror: { score: 0.92 },
+        loop: 1,
+      },
+      evolution: '最近学到：发布前先验证。',
+    },
+    capabilityProjection: {
+      entries: [{ id: 'weather', text: 'Weather capability context for Shanghai.' }],
+    },
+    now,
+  },
+  legacyComponents: {
+    constraints: 'legacy constraints',
+    prefetch: 'legacy prefetch',
+    scene: 'legacy scene',
+    personMemory: 'legacy person memory',
+    userProfile: 'legacy user profile',
+    selfSnapshot: 'legacy self snapshot',
+    selfPerception: 'legacy self perception',
+    selfEvolution: 'legacy self evolution',
+  },
+  domains: ['constraints', 'prefetch', 'scene', 'identity', 'self', 'capability'],
+}, {
+  env: {
+    BAILONGMA_INFORMATION_SOURCE_SHADOW: 'constraints,prefetch,scene,identity,self,capability',
+  },
+  registry: new InformationSourceRegistry(),
+})
+assert.equal(extendedProjectionShadow.audit.sourceCount, 7)
+assert.equal(extendedProjectionShadow.audit.failedSourceCount, 0)
+assert.equal(extendedProjectionShadow.audit.itemCount, 10)
+assert.equal(extendedProjectionShadow.audit.sourceItemsByDomain.identity, 2)
+assert.equal(extendedProjectionShadow.audit.selectedSourceItemsByDomain.self, 4)
+assert.equal(extendedProjectionShadow.audit.legacyCoveredComponentCount, 8)
+assert.equal(extendedProjectionShadow.audit.legacyUncoveredComponentCount, 0)
+assert.equal(extendedProjectionShadow.audit.legacyCoveragePermille, 1_000)
+assert.equal(extendedProjectionShadow.audit.legacyCoverageByComponent.userProfile, 1)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => (
+    item.event.topic === 'policy.behavioral_constraint'
+      && item.event.subject.dimension === 'release-safety'
+  )),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => (
+    item.event.topic === 'knowledge.prefetched'
+      && item.event.authorship === 'external'
+  )),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => item.event.topic === 'ui.scene_manifest'),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => (
+    item.event.topic === 'memory.user_profile'
+      && item.event.payload.workingImpression === true
+  )),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => (
+    item.event.topic === 'policy.boundary_state'
+      && item.event.semanticKind === 'policy'
+  )),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.some(item => (
+    item.event.topic === 'runtime.capability_prefeed'
+      && item.event.subject.capabilityId === 'weather'
+  )),
+  true,
+)
+assert.equal(
+  extendedProjectionShadow.frame.contextItems.every(item => item.event.authorship !== 'user'),
+  true,
+)
+
+const partialCoverageRegistry = new InformationSourceRegistry()
+partialCoverageRegistry.register({
+  id: 'coverage:partial',
+  kind: 'snapshot',
+  domain: 'coverage',
+  topics: ['runtime.coverage_partial'],
+  legacyComponents: ['runtime'],
+  maxChars: 2_000,
+  collect: request => [1, 2].map(index => ({
+    id: `info_coverage_partial_${index}`,
+    topic: 'runtime.coverage_partial',
+    authorship: 'system',
+    semanticKind: 'system_fact',
+    payload: { index, contextText: `item-${index}-${'x'.repeat(700)}` },
+    occurredAt: request.now,
+    observedAt: request.now,
+  })),
+})
+const partialCoverageShadow = await observeInformationSourceShadow({
+  request: { now },
+  legacyComponents: { runtime: 'legacy runtime aggregate' },
+  domains: ['coverage'],
+  maxContextChars: 512,
+}, {
+  env: { BAILONGMA_INFORMATION_SOURCE_SHADOW: 'coverage' },
+  registry: partialCoverageRegistry,
+})
+assert.equal(partialCoverageShadow.audit.itemCount, 2)
+assert.ok(partialCoverageShadow.audit.selectedContextCount < 2)
+assert.equal(partialCoverageShadow.audit.legacyCoverageByComponent.runtime, 0)
+assert.equal(partialCoverageShadow.audit.legacyCoveragePermille, 0)
+
+console.log('PASS pull Information Sources compile all projection domains into attributed shadow frames')

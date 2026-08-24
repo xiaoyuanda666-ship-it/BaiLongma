@@ -412,12 +412,12 @@ src/information/
 
 ### Phase 3：ContextFrame 编译器（当前已开始）
 
-- pull source shadow 由 `BAILONGMA_INFORMATION_SOURCE_SHADOW=runtime,environment,memory,knowledge,task`（或 `all`）独立开启，默认关闭；它不写 event journal、不创建 delivery、不进入 prompt，只构造瞬时 ContextFrame 和无正文审计。
+- pull source shadow 由 `BAILONGMA_INFORMATION_SOURCE_SHADOW=runtime,environment,memory,knowledge,task,constraints,prefetch,scene,identity,self,capability`（或 `all`）独立开启，默认关闭；它不写 event journal、不创建 delivery、不进入 prompt，只构造瞬时 ContextFrame 和无正文审计。
 - `InformationSourceRegistry` 现在声明 source domain、字符预算和 rank；`source-collector` 按 domain/source id 并发收集 snapshot/query，逐来源超时、失败隔离，并从结构上拒绝 pull source 产生 `user_input`。
 - 已注册 runtime clock、incoming channel、on-demand host environment 和 legacy runtime components 四类快照来源。旧 `buildSystemEnv` 已提取为共享兼容实现，因此 legacy prompt 与新 environment source 使用同一匹配逻辑，不会在 shadow 期漂移。
-- memory relevant/recall、active policy、Knowledge Cortex evidence 和 current task state 已有 projection source。projection 复用本轮 legacy 检索结果，不重复查询；记忆、policy、带 citation 的 knowledge 与 task_state 进入各自语义通道，且都不能冒充当前用户发言。
-- source frame 审计记录 source/item 数量、逐来源耗时、失败数、统一预算结果和 legacy component 字符基线；turn trace 只保留这些计数与哈希，不持久化 source payload 正文。
-- 下一批继续给 scene、prefetch、constraints、capability prefeed、person/profile 和 self state 增加 source adapter。
+- memory relevant/recall、active policy、Knowledge Cortex evidence、current task state、behavioral constraints、prefetch cache、scene manifest、person/profile、self state 和 capability prefeed 均已有 projection source。projection 复用本轮 legacy 结果，不重复查询；信息进入 policy、task_state、system_fact、knowledge、memory、ui_signal 各自语义通道，且都不能冒充当前用户发言。
+- source frame 审计记录 source/item 数量、逐来源耗时、失败数、统一预算结果、逐 domain 的收集/入选数量，以及 legacy component 的覆盖字符数、未覆盖字符数和千分比；turn trace 只保留这些计数与哈希，不持久化 source payload 正文。
+- 每个 source 声明自己替代的 legacy component；只有该 source 本轮产出的全部 item 都进入最终 ContextFrame 才计为覆盖，因预算被部分或全部丢弃的 source 不会被误报为已覆盖。
 - injector 暂时仍返回兼容字段；待 shadow 对照稳定后，再逐类把 `InformationItem[]` 提升为真值并切换 renderer。
 - 把去重、优先级、字符预算、超时、敏感度和 provenance 集中到 Context Compiler。
 - renderer 保证只有 `user_input` 进入当前 `role=user`；其余信息按语义 section 渲染。
