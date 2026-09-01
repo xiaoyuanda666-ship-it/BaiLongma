@@ -1,4 +1,6 @@
 import './network-proxy.js'
+import { spawn } from 'child_process'
+import { fileURLToPath } from 'node:url'
 import { config, getMinimaxKey as _getMinimaxKey, getSecurity } from './config.js'
 import { callLLM } from './llm.js'
 import { buildSystemPrompt, buildContextBlock, combinePromptForPreview } from './prompt.js'
@@ -39,9 +41,8 @@ import { dispatchSocialMessage } from './social/dispatch.js'
 import { startSocialConnectors } from './social/index.js'
 import { getFeishuStatusBlock } from './social/feishu-ws.js'
 import { collectSystemInfo, getSystemInfoBlock, getBatteryBlock, getDesktopPath } from './system-info.js'
-import { collectDesktopInfo, getDesktopBlock } from './desktop-scanner.js'
-import { collectInstalledSoftware, getInstalledSoftwareBlock } from './installed-software-scanner.js'
-import { collectLocalResources } from './local-resources-scanner.js'
+import { getDesktopBlock } from './desktop-scanner.js'
+import { getInstalledSoftwareBlock } from './installed-software-scanner.js'
 import { collectGeoWeather, getCountryCode, getGeoWeatherBlock } from './geo-weather.js'
 import { collectTrending } from './trending.js'
 import { collectAgents, buildAgentContextBlock, buildDelegationDiscoveryContext } from './agents/registry.js'
@@ -103,17 +104,53 @@ reportStartupProgress('resources', 'done', '工作区已准备', '工作区已�
 reportStartupProgress('environment', 'running', '系统、桌面、软件与本地资源', '正在扫描本机环境')
 await collectSystemInfo()
 
-// Scan the user's desktop (shortcuts cached by mtime, regular files scanned every time)
-collectDesktopInfo(getDesktopPath())
-
-// Scan installed software once so software/app/proxy questions can use local evidence.
-collectInstalledSoftware()
-
-// Scan the user's local resources (ssh hosts, keys, known_hosts, git identity)
-// for the "Self-Sufficient Execution" prompt — so the agent already knows what
-// the user has before being asked "上服务器看看".
-collectLocalResources()
+// [macOS 适配] 桌面 / 已装软件 / 本地资源 三项扫描原本是主进程内同步调用，在 macOS 上若
+// 遇到某些目录（iCloud 桌面、外接盘等）的 readdirSync 阻塞，会冻结事件循环、导致 startAPI
+// 永不执行、激活页打不开。改为在独立子进程中后台执行（scripts/scan-local-env.mjs 写缓存
+// 文件），主进程不阻塞、API 立即可用；首次启动环境信息块可能稍晚就绪，下次启动直接命中缓存。
+// 桌面路径由主进程传入：getDesktopPath() 依赖 collectSystemInfo() 填充的进程内 _cached，主进程
+// 已在上一行 collectSystemInfo() 后拿到正确值；worker 是独立进程、其 _cached 为空无法自行取得，
+// 故必须由主进程把桌面路径传过去（见 runLocalEnvScanInBackground）。
+runLocalEnvScanInBackground(getDesktopPath())
 reportStartupProgress('environment', 'done', '本机环境已扫描', '本机环境已扫描')
+
+// 在独立子进程中后台执行本地环境扫描，主进程不阻塞（避免 macOS 上同步扫描冻结事件循环）。
+// 脚本路径用「模块相对路径」(import.meta.url) 解析，而非 process.cwd()——这样无论是开发模式
+// (node src/index.js，cwd=项目根) 还是打包后的 Electron 模式 (脚本位于 app.asar 内，cwd 不固定)，
+// 都能正确定位 worker。
+//
+// electron 模式的特殊性：后端(src/index.js)是被 electron/main.cjs 经 import() 加载到 electron 主进程
+// 内的，因此本函数里 process.execPath 指向 App 二进制。若像 node 模式那样 spawn(process.execPath,
+// [scriptPath])，electron 永远加载 package.json 的 main(electron/main.cjs)，传入的脚本路径被忽略，
+// 会错误地拉起「完整 App 副本」。故 electron 模式改用 --bailongma-scan-worker 标志，由 main.cjs 识别后
+// 仅执行扫描并退出（不抢单实例锁、不创建窗口）。
+function runLocalEnvScanInBackground(desktopPath) {
+  try {
+    const env = { ...process.env, BAILONGMA_DESKTOP_PATH: desktopPath || '' }
+    const isElectron = typeof process.versions.electron !== 'undefined'
+    let child
+    if (isElectron) {
+      // 打包/桌面模式：App 二进制 + 专用标志，main.cjs 识别后仅运行扫描并退出。
+      child = spawn(process.execPath, ['--bailongma-scan-worker'], {
+        detached: true,
+        stdio: 'ignore',
+        env,
+      })
+    } else {
+      // 纯 node 后端模式：直接以脚本路径启动子进程。
+      const scriptPath = fileURLToPath(new URL('../scripts/scan-local-env.mjs', import.meta.url))
+      child = spawn(process.execPath, [scriptPath], {
+        detached: true,
+        stdio: 'ignore',
+        env,
+      })
+    }
+    child.unref()
+    console.log('[startup] 本地环境扫描已在后台子进程启动')
+  } catch (e) {
+    console.warn('[startup] 本地环境扫描子进程启动失败(忽略):', e?.message || e)
+  }
+}
 
 // Collect geo-location + live weather (refresh on IP change or after 7 days; weather refreshed every time)
 reportStartupProgress('geo', 'running', '读取缓存或请求实时天气', '正在刷新天气位置')
