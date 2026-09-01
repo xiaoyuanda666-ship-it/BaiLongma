@@ -34,6 +34,21 @@ const { bundledBrowserRoot, configureBundledNodeRuntime } = require('./playwrigh
 const { createTrustedWindowSenderGuard } = require('./trusted-window-senders.cjs')
 const { hasPackagedUpdaterConfig } = require('./updater-config.cjs')
 
+// 本地环境扫描 worker：以 --bailongma-scan-worker 启动时，仅 import 并执行扫描脚本后退出，
+// 不抢单实例锁、不启动后端/UI。electron 打包模式下，src/index.js 经由 bootstrapBackend() 被
+// import 进同一 electron 主进程，其后台扫描子进程若直接 spawn App 二进制会错误地拉起「完整 App 副本」，
+// 故改用此标志让 main.cjs 在最早阶段接管（见 src/index.js 的 runLocalEnvScanInBackground）。
+// 注：识别后调用 process.exit()，本文件后续代码（含单实例锁、窗口创建）均不会执行。
+const IS_SCAN_WORKER = process.argv.includes('--bailongma-scan-worker')
+if (IS_SCAN_WORKER) {
+  import(pathToFileURL(path.join(__dirname, '..', 'scripts', 'scan-local-env.mjs')).href)
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('[scan-worker] 本地环境扫描失败:', err?.stack || err?.message || err)
+      process.exit(1)
+    })
+}
+
 // The ESM backend is imported into this Electron main process. Expose the
 // main-process-only permission API without requiring ESM modules to import the
 // special Electron built-in module themselves.

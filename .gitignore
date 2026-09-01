@@ -102,6 +102,9 @@ web_modules/
 llm/*.json
 !llm/*.example.json
 
+# local runtime config (contains personal API keys / provider prefs)
+config.json
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
