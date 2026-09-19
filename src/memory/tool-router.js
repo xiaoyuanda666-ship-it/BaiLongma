@@ -66,6 +66,12 @@ const STARTUP_SELF_CHECK_TOOLS = [
   'browser_snapshot',
   'browser_close',
   'hotspot_mode',
+  'worldcup_mode',
+  'typhoon_mode',
+  'open_doc_panel',
+  'person_card_mode',
+  'knowledge_cortex_mode',
+  'media_mode',
 ]
 // 人物卡片不再从消息文本做关键词或正则分类。只在能展示本机 UI 的真实用户轮
 // 暴露 schema，由主模型理解完整语义后决定是否调用。

@@ -71,7 +71,7 @@ export function createWakeFlow(core) {
 
     const speaking = frame.ttsActive || rawSk === 'speaking';
     const level = speaking ? (frame.ttsVol || 0) : (vol || 0);
-    let sk = rawSk === 'idle' ? 'listening' : rawSk; // 唤醒球在场即「在听」,静默也显白
+    const sk = rawSk === 'idle' ? 'listening' : rawSk; // 唤醒球在场即「在听」,静默也显白
 
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (sk !== lastSk || now - lastFrameTs >= FRAME_MIN_MS) {

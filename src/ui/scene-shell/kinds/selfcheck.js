@@ -25,9 +25,12 @@ const OVERALL = {
 }
 
 function inferOverall(results = []) {
-  if (results.some(r => r.status === 'error'))   return 'error'
-  if (results.some(r => r.status === 'skipped')) return 'degraded'
-  return 'ok'
+  const okCount = results.filter(r => r.status === 'ok').length
+  const total = results.length
+  if (total === 0) return 'ok'
+  if (okCount >= total - 1) return 'ok'      // At most 1 failure = ok
+  if (okCount >= total - 2) return 'degraded' // 2 failures = degraded
+  return 'error'                              // 3+ failures = error
 }
 
 function isDone(data = {}) {

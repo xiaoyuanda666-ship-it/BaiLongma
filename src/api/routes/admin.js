@@ -23,6 +23,8 @@ function getAdminContext(context = {}) {
     restartApp: contextFunction(source, 'restartApp'),
     exitProcess: contextFunction(source, 'exitProcess'),
     restartDelayMs: source.restartDelayMs ?? 500,
+    ensureStartupSelfCheckState: contextFunction(source, 'ensureStartupSelfCheckState'),
+    triggerImmediateTick: contextFunction(source, 'triggerImmediateTick'),
   }
 }
 
@@ -113,6 +115,24 @@ export async function handleAdminRoutes(req, res, url, context = {}) {
     clearSandboxFiles(admin.sandboxPath)
     admin.emitEvent('admin', { action: 'reset-files' })
     jsonResponse(res, 200, { ok: true })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/admin/self-check') {
+    try {
+      const ensureFn = admin.ensureStartupSelfCheckState
+      const triggerFn = admin.triggerImmediateTick
+      if (!ensureFn || !triggerFn) {
+        jsonResponse(res, 503, { ok: false, error: 'Self-check not available' })
+        return true
+      }
+      ensureFn()
+      admin.emitEvent('admin', { action: 'self-check-triggered' })
+      triggerFn()
+      jsonResponse(res, 200, { ok: true, message: 'Self-check started' })
+    } catch (err) {
+      jsonResponse(res, 500, { ok: false, error: err.message })
+    }
     return true
   }
 

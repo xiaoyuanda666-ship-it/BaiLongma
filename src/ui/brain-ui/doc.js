@@ -212,6 +212,7 @@ export function toggleDocPanel(topicId = null) {
 // ── 内联配置表单 ───────────────────────────────────────────────────────────────
 
 const ASR_PROVIDER_DEFS = [
+  { id: 'whisper', label: '本地 Whisper（推荐）' },
   { id: 'local', label: '本机识别（macOS）' },
   { id: 'aliyun',  label: '阿里云百炼' },
   { id: 'volcengine', label: '火山豆包' },
@@ -220,6 +221,7 @@ const ASR_PROVIDER_DEFS = [
 ]
 
 const ASR_FIELDS = {
+  whisper: [],
   local: [],
   aliyun:  [{ key: 'aliyunApiKey',   label: 'API Key',   type: 'password', ph: 'sk-xxxxxxxx...' }],
   volcengine: [
@@ -262,7 +264,7 @@ const TTS_FIELDS = {
   ],
 }
 
-let cfgAsrProvider = 'aliyun'
+let cfgAsrProvider = 'whisper'
 let cfgTtsProvider = 'doubao'
 let cfgVoiceState  = {}
 let cfgTtsState    = {}

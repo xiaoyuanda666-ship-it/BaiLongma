@@ -8,9 +8,9 @@ import { initVoicePanel } from "./voice-panel.js";
 import { initHotspot, toggleHotspot, setHotspotMode } from "./hotspot.js";
 import { initWorldcup, toggleWorldcup, setWorldcupMode } from "./worldcup.js";
 import { initTyphoon, toggleTyphoon, setTyphoonMode } from "./typhoon.js";
-import { cancelPersonCardAssistantEnrichment, enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode } from "./person-card.js";
-import { initDocPanel, setDocPanelMode } from "./doc.js";
-import { initKnowledgePanel, setKnowledgeCortexMode } from "./knowledge.js";
+import { cancelPersonCardAssistantEnrichment, enrichVisiblePersonCardFromText, initPersonCard, setPersonCardMode, togglePersonCard } from "./person-card.js";
+import { initDocPanel, setDocPanelMode, toggleDocPanel } from "./doc.js";
+import { initKnowledgePanel, setKnowledgeCortexMode, toggleKnowledgeCortex } from "./knowledge.js";
 import { initWechatPopup, showWechatPopup } from "./wechat-popup.js";
 import { initFeishuPopup, showFeishuPopup } from "./feishu-popup.js";
 import { attachJarvisAudioGraph, attachJarvisFx, isFxEnabledForVoice, setFxEnabledForVoice, getJarvisFxParams, setJarvisFxParams, resetJarvisFxParams, isFxUnlocked, tryUnlockFx, resumeJarvisAudioContext } from "./tts-fx.js";
@@ -97,7 +97,7 @@ function playBrainUiArrival(enabled) {
 
 const brainUiArrival = consumeBrainUiArrival();
 const isBrainUiIntroPreview = new URLSearchParams(window.location.search).has("intro-preview");
-const brainUiIntroRequested = brainUiArrival.requested || isBrainUiIntroPreview;
+const brainUiIntroRequested = true;
 document.documentElement.classList.toggle("brain-ui-intro-pending", brainUiIntroRequested);
 const hasWindowsTitleBarOverlay = window.bailongma?.isElectron && window.bailongma?.platform === "win32";
 document.documentElement.classList.toggle("windows-titlebar-overlay", Boolean(hasWindowsTitleBarOverlay));
@@ -118,7 +118,7 @@ if (brainUiIntroRequested) {
       await playBrainUiIntro();
     } finally {
       await playBrainUiArrival(true);
-      if (brainUiArrival.releaseSelfCheck && !isBrainUiIntroPreview) {
+      if (!isBrainUiIntroPreview) {
         fetch("/activation/intro-complete", { method: "POST" })
           .then((response) => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2097,7 +2097,7 @@ const HEARTBEAT_MAJOR_STRENGTH = 1;
 const HEARTBEAT_TOOL_STRENGTH = 0.8;
 const TOOL_HEARTBEAT_INTERVAL_MS = 3000;
 const heartbeatSamples = Array.from({ length: HEARTBEAT_SAMPLE_COUNT }, () => 0);
-let heartbeatPulseQueue = [];
+const heartbeatPulseQueue = [];
 let heartbeatBeatTimer = null;
 let toolHeartbeatTimer = null;
 const activeToolExecutions = new Map();
@@ -3892,6 +3892,31 @@ initSettings({
   setTtsVoiceId: (voiceId) => { activeTTSVoiceId = voiceId; },
   setOpenSettings: (openSettings) => { openSettingsRef = openSettings; },
 });
+
+// ── Manual self-check button ──
+(function initSelfCheckButton() {
+  const btn = document.getElementById('selfcheck-btn');
+  if (!btn) return;
+  let running = false;
+  btn.addEventListener('click', async () => {
+    if (running) return;
+    running = true;
+    btn.classList.add('active');
+    btn.title = '自检中...';
+    try {
+      const res = await fetch('/admin/self-check', { method: 'POST' });
+      if (!res.ok) throw new Error('self-check request failed');
+    } catch (err) {
+      console.error('[selfcheck] trigger failed:', err);
+    } finally {
+      setTimeout(() => {
+        running = false;
+        btn.classList.remove('active');
+        btn.title = '手动自检';
+      }, 2000);
+    }
+  });
+})();
 // ── Voice panel ──
 initVoicePanel({
   btnId:      "voice-btn",
@@ -3922,3 +3947,88 @@ initWorldcup().catch((err) => console.warn('[Worldcup] init failed:', err));
 initTyphoon();
 initMediaModes();
 initAIVideoMode();
+
+// ── Keyboard shortcuts for fullscreen mode panels ──
+(function initFullscreenShortcuts() {
+  const shortcuts = {
+    w: () => toggleWorldcup(),
+    t: () => toggleTyphoon(),
+    h: () => toggleHotspot(),
+    d: () => toggleDocPanel(),
+    p: () => togglePersonCard(),
+    k: () => toggleKnowledgeCortex(),
+  };
+
+  window.addEventListener('keydown', (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const target = event.target;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+    const key = event.key.toLowerCase();
+    if (shortcuts[key]) {
+      event.preventDefault();
+      shortcuts[key]();
+    }
+  });
+})();
+
+// ── File upload button ──
+(function initUploadButton() {
+  const uploadBtn = document.getElementById('upload-btn');
+  const fileInput = document.getElementById('file-input');
+  if (!uploadBtn || !fileInput) return;
+
+  function fileToBase64DataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  uploadBtn.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  fileInput.addEventListener('change', async (event) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    uploadBtn.classList.add('active');
+    uploadBtn.title = '上传中...';
+
+    try {
+      const resources = [];
+      for (const file of Array.from(files)) {
+        const dataUrl = await fileToBase64DataUrl(file);
+        resources.push({ name: file.name, filename: file.name, data_url: dataUrl });
+      }
+
+      const res = await fetch('/message/resources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resources }),
+      });
+
+      const data = await res.json();
+      if (data.ok) {
+        const msgInput = document.getElementById('msg-input');
+        if (msgInput) {
+          const names = files.length === 1 ? files[0].name : `${files.length} 个文件`;
+          const prefix = msgInput.value ? '\n' : '';
+          msgInput.value += `${prefix}[已上传: ${names}]`;
+          msgInput.dispatchEvent(new Event('input'));
+        }
+        console.log('[upload] success:', data.resources?.length, 'files');
+      } else {
+        console.error('[upload] failed:', data.error);
+      }
+    } catch (err) {
+      console.error('[upload] error:', err);
+    } finally {
+      uploadBtn.classList.remove('active');
+      uploadBtn.title = '上传文件';
+      fileInput.value = '';
+    }
+  });
+})();

@@ -470,13 +470,83 @@ function createVolcengineSession(config, onTranscript, onError, onClose, onEvent
   }
 }
 
+// ─── 本地 Whisper ASR ───
+function createLocalWhisperSession(lang, onTranscript, onError, onClose) {
+  const port = 3723
+  let ws = null
+  let closed = false
+  let reconnectTimer = null
+  let flushed = false
+
+  function connect() {
+    if (closed) return
+    try {
+      ws = new WebSocket(`ws://127.0.0.1:${port}`)
+    } catch (err) {
+      onError(`无法连接本地 Whisper 服务 (端口 ${port}): ${err.message}`)
+      return
+    }
+    ws.binaryType = 'arraybuffer'
+    ws.onopen = () => {
+      try { ws.send(JSON.stringify({ type: 'config', lang })) } catch {}
+    }
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(typeof evt.data === 'string' ? evt.data : String(evt.data))
+        if (msg.type === 'transcript' && msg.text) {
+          onTranscript(msg.text, !!msg.is_final)
+        }
+      } catch {}
+    }
+    ws.onerror = (err) => {
+      if (!closed) onError(`Whisper 服务连接失败: ${err?.message || '未知错误'}`)
+    }
+    ws.onclose = () => {
+      if (!closed && !flushed) {
+        reconnectTimer = setTimeout(connect, 2000)
+      } else if (onClose) {
+        onClose()
+      }
+    }
+  }
+
+  connect()
+
+  return {
+    sendAudio(chunk) {
+      if (closed || !ws || ws.readyState !== WebSocket.OPEN) return
+      try { ws.send(chunk) } catch {}
+    },
+    flush() {
+      flushed = true
+      if (ws?.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: 'flush' })) } catch {}
+      }
+    },
+    close() {
+      closed = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      try { ws?.close() } catch {}
+    },
+  }
+}
+
 // ─── 工厂函数 ───
 // config: { provider, lang, aliyunApiKey?, tencentSecretId?, tencentSecretKey?,
 //           tencentAppId?, xunfeiAppId?, xunfeiApiKey?,
 //           volcAsrApiKey?, volcAsrAppKey?, volcAsrAccessKey?, volcAsrResourceId? }
 export function createCloudASRSession(config, onTranscript, onError, onClose, onEvent) {
-  const provider = normalizeVoiceProvider(config?.provider || config?.voiceProvider || 'aliyun', '')
+  const provider = normalizeVoiceProvider(config?.provider || config?.voiceProvider || 'whisper', '')
   const { lang = 'zh' } = config || {}
+
+  if (provider === 'whisper') {
+    try {
+      return createLocalWhisperSession(lang, onTranscript, onError, onClose)
+    } catch (err) {
+      onError(`本地 Whisper 服务不可用: ${err.message}。请检查 Python 和依赖是否安装。`)
+      return null
+    }
+  }
 
   if (provider === 'local') {
     if (process.platform === 'darwin') {

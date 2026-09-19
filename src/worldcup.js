@@ -37,7 +37,7 @@ const STORE_FILE = path.join(paths.dataDir, 'worldcup-matches.json')
 let cache = null            // { fetchedAtMs, matches, standings, ... }
 let inFlight = null
 let storeLoaded = false
-let matchStore = new Map()  // matchId → match
+const matchStore = new Map()  // matchId → match
 
 let panelActiveUntilMs = 0
 let panelState = {

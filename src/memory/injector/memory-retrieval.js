@@ -83,7 +83,7 @@ export function retrieveRecallMemories(prevRecall) {
   const query = prevRecall
   console.log(`[注入器] 处理 RECALL: ${query}`)
 
-  let hits = searchMemories(query, 5)
+  const hits = searchMemories(query, 5)
 
   if (hits.length === 0) {
     const keywords = extractKeywords(query)

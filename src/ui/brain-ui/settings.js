@@ -427,7 +427,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   let cachedMinimax = { configured: false };
 
   function syncContextWindowControls(changed = "load") {
-    let chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
+    const chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
     let toolCallLimit = Math.min(40, Math.max(0, Number(toolContextSlider?.value) || 0));
     if (toolCallLimit >= chatMessageLimit) {
       toolCallLimit = Math.max(0, chatMessageLimit - 1);
@@ -1405,7 +1405,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       el.style.color = "var(--warm)";
       return;
     }
-    const provider = voice?.voiceProvider || "aliyun";
+    const provider = voice?.voiceProvider || "whisper";
     const definitions = {
       local: { label: t("voice.localMac"), keys: [] },
       aliyun: { label: t("voice.aliyunAsr"), keys: ["aliyunApiKey"] },
@@ -1549,7 +1549,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     await loadMicrophoneDevices();
     await loadOutputDevices();
 
-    let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "aliyun";
+    let savedProvider = localStorage.getItem(VOICE_PROVIDER_KEY) || "whisper";
     try {
       const resp = await fetch(`${API}/settings/voice`);
       const data = await resp.json().catch(() => ({}));
@@ -1585,7 +1585,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     const autoMic = document.getElementById("voice-auto-mic")?.checked ?? false;
     const spacePtt = document.getElementById("voice-space-ptt")?.checked ?? true;
     const threshold = parseFloat(voiceThreshSlider?.value ?? "0.008");
-    const provider = voiceProviderSelect?.value || "aliyun";
+    const provider = voiceProviderSelect?.value || "whisper";
     const micDeviceId = voiceMicSelect?.value || "";
 
     localStorage.setItem(VOICE_LANG_KEY, lang);

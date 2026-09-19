@@ -12,27 +12,47 @@ import {
 } from './voice/tts-defaults.js'
 import { buildResponsesRequest } from './llm-responses.js'
 
+/** @description DeepSeek 提供商标识 */
 export const DEEPSEEK_PROVIDER = 'deepseek'
+/** @description MiniMax 提供商标识 */
 export const MINIMAX_PROVIDER = 'minimax'
+/** @description OpenAI 提供商标识 */
 export const OPENAI_PROVIDER = 'openai'
+/** @description 通义千问提供商标识 */
 export const QWEN_PROVIDER = 'qwen'
+/** @description Moonshot（月之暗面）提供商标识 */
 export const MOONSHOT_PROVIDER = 'moonshot'
+/** @description 智谱 AI 提供商标识 */
 export const ZHIPU_PROVIDER = 'zhipu'
+/** @description 小米 MiMo 提供商标识 */
 export const MIMO_PROVIDER = 'mimo'
+/** @description 当前使用的 LLM API 格式（responses） */
 export const LLM_API_FORMAT = 'responses'
 
+/** @description DeepSeek 默认模型 */
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-pro'
+/** @description MiniMax 默认模型 */
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
+/** @description OpenAI 默认模型 */
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
+/** @description 通义千问默认模型 */
 export const DEFAULT_QWEN_MODEL = 'qwen-turbo'
+/** @description Moonshot 默认模型 */
 export const DEFAULT_MOONSHOT_MODEL = 'kimi-k2.6'
+/** @description 智谱 AI 默认模型 */
 export const DEFAULT_ZHIPU_MODEL = 'glm-5.1'
+/** @description 小米 MiMo 默认模型 */
 export const DEFAULT_MIMO_MODEL = 'mimo-v2.5-pro'
 
+/** @description 上下文聊天消息条数下限 */
 export const CONTEXT_MESSAGE_LIMIT_MIN = 1
+/** @description 上下文聊天消息条数上限 */
 export const CONTEXT_MESSAGE_LIMIT_MAX = 40
+/** @description 默认上下文聊天消息条数 */
 export const DEFAULT_CONTEXT_MESSAGE_LIMIT = 20
+/** @description 上下文工具调用条数下限 */
 export const CONTEXT_TOOL_LIMIT_MIN = 0
+/** @description 默认上下文工具调用条数 */
 export const DEFAULT_CONTEXT_TOOL_LIMIT = 5
 
 const BAILONGMA_CHROME_BROWSER_TOOLS = Object.freeze([
@@ -87,6 +107,7 @@ const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
   ],
 })
 
+/** @description DeepSeek 可用模型列表 */
 export const DEEPSEEK_MODELS = [
   {
     id: 'deepseek-v4-flash',
@@ -110,6 +131,7 @@ export const DEEPSEEK_MODELS = [
   },
 ]
 
+/** @description MiniMax 可用模型列表 */
 export const MINIMAX_MODELS = [
   {
     id: 'MiniMax-M2.7',
@@ -123,6 +145,7 @@ export const MINIMAX_MODELS = [
   },
 ]
 
+/** @description OpenAI 可用模型列表 */
 export const OPENAI_MODELS = [
   {
     id: 'gpt-5.5',
@@ -236,6 +259,7 @@ export const OPENAI_MODELS = [
   },
 ]
 
+/** @description 通义千问可用模型列表 */
 export const QWEN_MODELS = [
   {
     id: 'qwen-turbo',
@@ -249,6 +273,7 @@ export const QWEN_MODELS = [
   },
 ]
 
+/** @description Moonshot 可用模型列表 */
 export const MOONSHOT_MODELS = [
   {
     id: 'kimi-k2.7-code',
@@ -307,6 +332,7 @@ export const MOONSHOT_MODELS = [
   },
 ]
 
+/** @description 智谱 AI 可用模型列表 */
 export const ZHIPU_MODELS = [
   {
     id: 'glm-5.1',
@@ -375,6 +401,7 @@ export const ZHIPU_MODELS = [
   },
 ]
 
+/** @description 小米 MiMo 可用模型列表 */
 export const MIMO_MODELS = [
   {
     id: 'mimo-v2.5-pro',
@@ -476,6 +503,14 @@ function isMoonshotKimiModel(model) {
   return String(model || '').trim().toLowerCase().startsWith('kimi-')
 }
 
+/**
+ * 判断给定 provider/model 组合是否应省略 sampling 参数。
+ * OpenAI GPT-5+ 和 Moonshot Kimi 系列会自动省略。
+ *
+ * @param {string} provider - LLM 提供商
+ * @param {string} model - 模型 ID
+ * @returns {boolean} 是否应省略 sampling
+ */
 export function shouldOmitSamplingForProviderModel(provider, model) {
   if (provider === OPENAI_PROVIDER && isOpenAIDefaultSamplingModel(model)) return true
   return provider === MOONSHOT_PROVIDER && isMoonshotKimiModel(model)
@@ -486,6 +521,14 @@ function isOpenAIDefaultSamplingModel(model) {
   return value.startsWith('gpt-5') || /^o\d/.test(value)
 }
 
+/**
+ * 获取指定 provider/model 的回退模型链。
+ * MiMo 会按列表顺序尝试多个模型，其它 provider 返回单元素数组。
+ *
+ * @param {string} provider - LLM 提供商
+ * @param {string} model - 首选模型 ID
+ * @returns {string[]} 回退模型列表
+ */
 export function getProviderModelFallbacks(provider, model) {
   const pConfig = PROVIDER_CONFIG[provider]
   if (!pConfig) return String(model || '').trim() ? [String(model).trim()] : []
@@ -751,9 +794,12 @@ const VOICE_PROVIDER_ALIASES = {
   doubao: 'volcengine',
   bytedance: 'volcengine',
   iflytek: 'xunfei',
+  'local-whisper': 'whisper',
+  whisperlocal: 'whisper',
 }
-const VOICE_PROVIDERS = new Set(['local', 'aliyun', 'volcengine', 'tencent', 'xunfei'])
+const VOICE_PROVIDERS = new Set(['whisper', 'local', 'aliyun', 'volcengine', 'tencent', 'xunfei'])
 const VOICE_PROVIDER_KEYS = {
+  whisper: [],
   local: ['lang', 'macosRecognitionMode'],
   aliyun: ['aliyunApiKey', 'aliyunAsrModel'],
   tencent: ['tencentSecretId', 'tencentSecretKey', 'tencentAppId'],
@@ -768,7 +814,15 @@ const VOICE_KEY_PROVIDER = new Map(
   Object.entries(VOICE_PROVIDER_KEYS).flatMap(([provider, keys]) => keys.map((key) => [key, provider]))
 )
 
-export function normalizeVoiceProvider(provider, fallback = 'aliyun') {
+/**
+ * 将语音提供商标识归一化为标准值。
+ * 支持别名映射（如 macos→local, cloud→aliyun）。
+ *
+ * @param {string} provider - 原始提供商标识
+ * @param {string} [fallback='whisper'] - 无法识别时的回退值
+ * @returns {string} 归一化后的提供商标识
+ */
+export function normalizeVoiceProvider(provider, fallback = 'whisper') {
   const raw = String(provider || '').trim().toLowerCase()
   const normalized = VOICE_PROVIDER_ALIASES[raw] || raw
   return VOICE_PROVIDERS.has(normalized) ? normalized : fallback
@@ -819,7 +873,7 @@ function writeVoiceProviderConfig(provider, record) {
 }
 
 function writeActiveVoiceProvider(provider) {
-  const p = normalizeVoiceProvider(provider, 'aliyun')
+  const p = normalizeVoiceProvider(provider, 'whisper')
   writeJsonObjectFile(getVoiceActiveFile(), {
     provider: p,
     updatedAt: new Date().toISOString(),
@@ -831,7 +885,7 @@ function readLegacyVoiceBlock(cfg = readExistingStoredConfig()) {
   return (cfg?.voice && typeof cfg.voice === 'object') ? cfg.voice : {}
 }
 
-function readActiveVoiceProvider(fallback = 'aliyun') {
+function readActiveVoiceProvider(fallback = 'whisper') {
   const active = readJsonObjectFile(getVoiceActiveFile())
   if (active?.provider) return normalizeVoiceProvider(active.provider, fallback)
   const legacy = readLegacyVoiceBlock()
@@ -845,7 +899,7 @@ function stripLegacyVoiceBlock(cfg) {
 
 function persistLegacyVoiceBlock(legacy) {
   if (!legacy || typeof legacy !== 'object') return
-  const activeProvider = writeActiveVoiceProvider(legacy.voiceProvider || legacy.provider || 'aliyun')
+  const activeProvider = writeActiveVoiceProvider(legacy.voiceProvider || legacy.provider || 'whisper')
   const buckets = new Map()
   for (const [key, value] of Object.entries(legacy)) {
     if (key === 'voiceProvider' || key === 'provider') continue
@@ -1013,6 +1067,10 @@ function runConfigMigrations() {
   }
 }
 
+/**
+ * 全局运行时配置对象，包含 LLM、安全、网络、心跳等配置。
+ * 启动时从 config.json 加载并合并默认值。
+ */
 export const config = {
   tickInterval: 20 * 60 * 1000, // default idle heartbeat: 20 minutes
   heartbeat: {
@@ -1117,7 +1175,7 @@ if (storedLlm) {
 }
 
 // At startup, copy social credentials from the config file into process.env so connectors can read them
-;(function loadSocialEnv() {
+(function loadSocialEnv() {
   try {
     const raw = fs.readFileSync(paths.configFile, 'utf-8')
     const social = JSON.parse(raw)?.social || {}
@@ -1129,6 +1187,17 @@ if (storedLlm) {
   } catch {}
 })()
 
+/**
+ * 准备 LLM 激活流程：验证 API 密钥并探测可用模型。
+ * 返回预备激活信息，需配合 commitPreparedActivation 提交。
+ *
+ * @param {Object} params - 激活参数
+ * @param {string} [params.provider='auto'] - 提供商标识或 'auto' 自动检测
+ * @param {string} params.apiKey - API 密钥
+ * @param {string} [params.model] - 指定模型（可选）
+ * @param {string} [params.baseURL] - 自定义端点地址（custom provider 时必填）
+ * @returns {Promise<{provider: string, apiKey: string, model: string, models: Array}>} 预备激活结果
+ */
 export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, model, baseURL }) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
 
@@ -1212,6 +1281,12 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
   }
 }
 
+/**
+ * 提交预备激活，将 LLM 配置持久化并生效。
+ *
+ * @param {Object} prepared - prepareActivation 返回的预备结果
+ * @returns {{ provider: string, model: string, models: Array }} 激活后的配置
+ */
 export function commitPreparedActivation(prepared) {
   const p = String(prepared?.provider || '').toLowerCase()
 
@@ -1265,11 +1340,26 @@ export function commitPreparedActivation(prepared) {
   }
 }
 
+/**
+ * 一步完成 LLM 激活：探测密钥并持久化配置。
+ *
+ * @param {Object} params - 激活参数
+ * @param {string} [params.provider='auto'] - 提供商标识
+ * @param {string} params.apiKey - API 密钥
+ * @param {string} [params.model] - 指定模型
+ * @param {string} [params.baseURL] - 自定义端点地址
+ * @returns {Promise<{provider: string, model: string, models: Array}>} 激活结果
+ */
 export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL }) {
   const prepared = await prepareActivation({ provider, apiKey, model, baseURL })
   return commitPreparedActivation(prepared)
 }
 
+/**
+ * 获取当前 LLM 激活状态，包括 provider、model、可用模型列表等。
+ *
+ * @returns {{ activated: boolean, provider: string|null, model: string|null, models: Array, defaultModel: string }} 激活状态
+ */
 export function getActivationStatus() {
   const pConfig = config.provider && config.provider !== 'custom' ? PROVIDER_CONFIG[config.provider] : null
   const customModels = config.model ? [{ id: config.model, label: config.model, deprecated: false }] : DEEPSEEK_MODELS
@@ -1284,6 +1374,11 @@ export function getActivationStatus() {
   }
 }
 
+/**
+ * 获取所有 LLM 提供商的配置摘要（含已配置状态、模型列表）。
+ *
+ * @returns {Object} 以 provider 名称为键的摘要对象
+ */
 export function getProviderSummaries() {
   const result = Object.fromEntries(Object.entries(PROVIDER_CONFIG).map(([name, pConfig]) => [
     name,
@@ -1314,6 +1409,9 @@ export function getProviderSummaries() {
   return result
 }
 
+/**
+ * 停用 LLM 配置，删除 config.json 并重置为未激活状态。
+ */
 export function deactivate() {
   try {
     if (fs.existsSync(paths.configFile)) fs.unlinkSync(paths.configFile)
@@ -1325,6 +1423,12 @@ export function deactivate() {
   config.needsActivation = true
 }
 
+/**
+ * 切换当前 LLM 使用的模型，不改变 provider。
+ *
+ * @param {string} model - 目标模型 ID
+ * @returns {{ provider: string, model: string }} 切换后的配置
+ */
 export function switchModel(model) {
   if (!config.apiKey) throw new Error('Not activated — cannot switch model')
   if (config.provider === 'custom') {
@@ -1351,6 +1455,14 @@ export function switchModel(model) {
   return { provider: config.provider, model: normalized }
 }
 
+/**
+ * 切换到另一个已保存的 LLM 提供商配置。
+ *
+ * @param {Object} [opts] - 切换选项
+ * @param {string} [opts.provider] - 目标提供商标识
+ * @param {string} [opts.model] - 目标模型 ID（可选）
+ * @returns {{ provider: string, model: string, models: Array }} 切换后的配置
+ */
 export function switchProviderConfig({ provider, model } = {}) {
   const p = resolveProviderId(provider)
   if (p === AUTO_PROVIDER) throw new Error('Auto-detect requires an API key')
@@ -1394,6 +1506,17 @@ export function switchProviderConfig({ provider, model } = {}) {
   }
 }
 
+/**
+ * 保存 LLM 设置（含密钥验证和激活）。
+ * 根据 provider 类型自动选择激活或切换流程。
+ *
+ * @param {Object} [params] - 设置参数
+ * @param {string} [params.provider='auto'] - 提供商标识
+ * @param {string} [params.apiKey] - API 密钥
+ * @param {string} [params.model] - 模型 ID
+ * @param {string} [params.baseURL] - 自定义端点地址
+ * @returns {Promise<{provider: string, model: string, models: Array}>} 保存结果
+ */
 export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model, baseURL } = {}) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
@@ -1425,6 +1548,12 @@ export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model,
   return switchProviderConfig({ provider: p, model })
 }
 
+/**
+ * 设置 LLM 生成温度（0-2 范围）。
+ *
+ * @param {number} t - 温度值
+ * @returns {{ temperature: number }} 设置后的温度
+ */
 export function setTemperature(t) {
   const v = Math.min(2, Math.max(0, Number(t) || 0.5))
   config.temperature = v
@@ -1432,6 +1561,12 @@ export function setTemperature(t) {
   return { temperature: v }
 }
 
+/**
+ * 启用或关闭 LLM reasoning（思考链）模式。
+ *
+ * @param {boolean} enabled - 是否启用
+ * @returns {{ thinking: boolean }} 设置后的状态
+ */
 export function setThinking(enabled) {
   const v = !!enabled
   config.thinking = v
@@ -1439,6 +1574,11 @@ export function setThinking(enabled) {
   return { thinking: v }
 }
 
+/**
+ * 获取上下文窗口配置（聊天消息条数和工具调用条数上限）。
+ *
+ * @returns {{ chatMessageLimit: number, toolCallLimit: number }} 当前配置
+ */
 export function getContextWindowConfig() {
   return {
     chatMessageLimit: config.contextWindow.chatMessageLimit,
@@ -1446,6 +1586,14 @@ export function getContextWindowConfig() {
   }
 }
 
+/**
+ * 更新上下文窗口配置。工具调用条数必须小于聊天消息条数。
+ *
+ * @param {Object} [updates] - 更新内容
+ * @param {number} [updates.chatMessageLimit] - 聊天消息条数
+ * @param {number} [updates.toolCallLimit] - 工具调用条数
+ * @returns {{ chatMessageLimit: number, toolCallLimit: number }} 更新后的配置
+ */
 export function setContextWindowConfig(updates = {}) {
   const current = getContextWindowConfig()
   const next = {
@@ -1469,6 +1617,11 @@ export function setContextWindowConfig(updates = {}) {
   return getContextWindowConfig()
 }
 
+/**
+ * 获取心跳配置（是否启用、默认间隔等）。
+ *
+ * @returns {{ enabled: boolean, defaultIntervalMinutes: number, defaultIntervalMs: number, updatedAt: string|null }} 心跳配置
+ */
 export function getHeartbeatConfig() {
   return {
     enabled: config.heartbeat.enabled !== false,
@@ -1478,6 +1631,14 @@ export function getHeartbeatConfig() {
   }
 }
 
+/**
+ * 更新心跳配置（启用状态和间隔）。
+ *
+ * @param {Object} [updates] - 更新内容
+ * @param {boolean} [updates.enabled] - 是否启用心跳
+ * @param {number} [updates.defaultIntervalMinutes] - 默认间隔（分钟，1-1440）
+ * @returns {{ enabled: boolean, defaultIntervalMinutes: number, defaultIntervalMs: number }} 更新后的配置
+ */
 export function setHeartbeatConfig(updates = {}) {
   const before = getHeartbeatConfig()
   const next = {
@@ -1507,6 +1668,11 @@ export function setHeartbeatConfig(updates = {}) {
   return getHeartbeatConfig()
 }
 
+/**
+ * 获取安全配置（沙盒开关、浏览器私有网络、禁用工具列表）。
+ *
+ * @returns {{ fileSandbox: boolean, execSandbox: boolean, browserPrivateNetwork: boolean, blockedTools: string[], updatedAt: string|null }}
+ */
 export function getSecurity() {
   return {
     fileSandbox: config.security.fileSandbox,
@@ -1523,6 +1689,16 @@ function normalizeBlockedTools(values = []) {
     .flatMap(value => LEGACY_BLOCKED_TOOL_MIGRATIONS[value] || [value]))]
 }
 
+/**
+ * 更新安全配置。支持增量更新指定字段。
+ *
+ * @param {Object} updates - 更新内容
+ * @param {boolean} [updates.fileSandbox] - 文件沙盒开关
+ * @param {boolean} [updates.execSandbox] - 执行沙盒开关
+ * @param {boolean} [updates.browserPrivateNetwork] - 浏览器私有网络访问开关
+ * @param {string[]} [updates.blockedTools] - 禁用工具列表
+ * @returns {{ fileSandbox: boolean, execSandbox: boolean, browserPrivateNetwork: boolean, blockedTools: string[] }} 更新后的安全配置
+ */
 export function setSecurity(updates) {
   const before = getSecurity()
   if (typeof updates.fileSandbox === 'boolean') config.security.fileSandbox = updates.fileSandbox
@@ -1540,6 +1716,13 @@ export function setSecurity(updates) {
   return getSecurity()
 }
 
+/**
+ * 获取局域网访问令牌。ensure=true 时若不存在则自动生成。
+ *
+ * @param {Object} [opts] - 选项
+ * @param {boolean} [opts.ensure=false] - 不存在时是否自动生成
+ * @returns {string} 访问令牌
+ */
 export function getLanAccessToken({ ensure = false } = {}) {
   const envToken = String(globalThis.process?.env?.BAILONGMA_API_TOKEN || '').trim()
   if (envToken) return envToken
@@ -1551,6 +1734,11 @@ export function getLanAccessToken({ ensure = false } = {}) {
   return config.network.accessToken
 }
 
+/**
+ * 获取网络配置（局域网访问开关、HTTPS 状态、访问入口列表）。
+ *
+ * @returns {{ allowLanAccess: boolean, accessToken: string, httpsEnabled: boolean, accessEntries: Array, preferredAccessUrl: string }} 网络配置
+ */
 export function getNetworkConfig() {
   const allowLanAccess = !!config.network.allowLanAccess
     || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.BAILONGMA_ALLOW_LAN || '').trim())
@@ -1578,6 +1766,13 @@ export function getNetworkConfig() {
   }
 }
 
+/**
+ * 更新网络配置。变更 allowLanAccess 需要重启生效。
+ *
+ * @param {Object} updates - 更新内容
+ * @param {boolean} [updates.allowLanAccess] - 是否允许局域网访问
+ * @returns {{ allowLanAccess: boolean, ..., restartRequired: boolean }} 更新后的网络配置
+ */
 export function setNetworkConfig(updates) {
   const before = getNetworkConfig()
   if (typeof updates.allowLanAccess === 'boolean') {
@@ -1593,6 +1788,11 @@ export function setNetworkConfig(updates) {
   }
 }
 
+/**
+ * 获取 MiniMax API 密钥（从 config.json 读取）。
+ *
+ * @returns {string|null} MiniMax 密钥或 null
+ */
 export function getMinimaxKey() {
   try {
     const raw = fs.readFileSync(paths.configFile, 'utf-8')
@@ -1601,6 +1801,11 @@ export function getMinimaxKey() {
   } catch { return null }
 }
 
+/**
+ * 设置 MiniMax API 密钥。空值会删除已有密钥。
+ *
+ * @param {string} key - MiniMax 密钥
+ */
 export function setMinimaxKey(key) {
   const trimmed = String(key || '').trim()
   if (trimmed) {
@@ -1647,6 +1852,12 @@ function migrateLegacySeedance() {
   }
 }
 
+/**
+ * 获取 Seedance AI 视频生成配置（火山方舟 Ark）。
+ * 环境变量 ARK_API_KEY 优先于本地存储。
+ *
+ * @returns {{ apiKey: string, model: string, baseURL: string, configured: boolean }} Seedance 配置
+ */
 export function getSeedanceConfig() {
   // 环境变量优先（ARK_API_KEY），方便开发/部署注入
   const envKey = String(process.env.ARK_API_KEY || process.env.SEEDANCE_API_KEY || '').trim()
@@ -1661,10 +1872,24 @@ export function getSeedanceConfig() {
   }
 }
 
+/**
+ * 检查 Seedance 是否已配置（存在有效密钥）。
+ *
+ * @returns {boolean} 是否已配置
+ */
 export function isSeedanceConfigured() {
   return getSeedanceConfig().configured
 }
 
+/**
+ * 更新 Seedance 配置。无密钥时删除独立配置文件。
+ *
+ * @param {Object} [params] - 配置参数
+ * @param {string} [params.apiKey] - Ark API 密钥
+ * @param {string} [params.model] - 模型 ID
+ * @param {string} [params.baseURL] - 接入点地址
+ * @returns {{ apiKey: string, model: string, baseURL: string, configured: boolean }} 更新后的配置
+ */
 export function setSeedanceConfig({ apiKey, model, baseURL } = {}) {
   migrateLegacySeedance()
   const next = { ...readSeedanceFile() }
@@ -1691,6 +1916,11 @@ const SOCIAL_ENV_KEYS = [
 
 // ── WeChat ClawBot credentials (written automatically after QR scan, not exposed in SOCIAL_ENV_KEYS) ──
 
+/**
+ * 获取微信 ClawBot 凭据（QR 扫码后自动写入）。
+ *
+ * @returns {{ accountId: string, botToken: string, baseUrl: string }|null} 凭据或 null
+ */
 export function getClawbotCredentials() {
   try {
     const stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))
@@ -1699,15 +1929,31 @@ export function getClawbotCredentials() {
   } catch { return null }
 }
 
+/**
+ * 保存微信 ClawBot 凭据。
+ *
+ * @param {Object} params - 凭据参数
+ * @param {string} params.accountId - 账号 ID
+ * @param {string} params.botToken - 机器人令牌
+ * @param {string} params.baseUrl - 接入地址
+ */
 export function setClawbotCredentials({ accountId, botToken, baseUrl }) {
   patchConfig({ clawbot: { accountId, botToken, baseUrl } })
 }
 
+/**
+ * 清除微信 ClawBot 凭据。
+ */
 export function clearClawbotCredentials() {
   const { clawbot: _, ...rest } = readExistingStoredConfig()
   writeStoredConfig(rest)
 }
 
+/**
+ * 获取社交媒体平台配置状态（各平台密钥是否已配置）。
+ *
+ * @returns {Object} 以环境变量名为键的配置状态对象
+ */
 export function getSocialConfig() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.social || {} } catch {}
@@ -1719,6 +1965,11 @@ export function getSocialConfig() {
   return result
 }
 
+/**
+ * 更新社交媒体平台凭据，立即生效到 process.env。
+ *
+ * @param {Object} updates - 以环境变量名为键的凭据对象
+ */
 export function setSocialConfig(updates) {
   const existing = readExistingStoredConfig()
   const current = existing.social || {}
@@ -1750,8 +2001,13 @@ const CHAT_PROVIDERS_WITH_AMBIGUOUS_SK_KEYS = new Set([
   MIMO_PROVIDER,
 ])
 
+/**
+ * 获取语音识别配置状态（各厂商密钥是否已配置、格式校验等）。
+ *
+ * @returns {{ voiceProvider: string, [key: string]: { configured: boolean } }} 语音配置状态
+ */
 export function getVoiceConfig() {
-  const result = { voiceProvider: readActiveVoiceProvider('aliyun') }
+  const result = { voiceProvider: readActiveVoiceProvider('whisper') }
   for (const key of VOICE_CONFIG_KEYS) {
     if (key === 'voiceProvider') continue
     const provider = VOICE_KEY_PROVIDER.get(key) || result.voiceProvider
@@ -1772,8 +2028,14 @@ export function getVoiceConfig() {
   return result
 }
 
+/**
+ * 获取语音运行时配置（含厂商密钥等明文，供后端 ASR 模块使用）。
+ *
+ * @param {string|null} [providerHint=null] - 提示提供商标识
+ * @returns {Object} 完整语音配置
+ */
 export function getVoiceRuntimeConfig(providerHint = null) {
-  const provider = readActiveVoiceProvider(providerHint || 'aliyun')
+  const provider = readActiveVoiceProvider(providerHint || 'whisper')
   const stored = readVoiceProviderConfig(provider)
   return {
     ...stored,
@@ -1782,10 +2044,15 @@ export function getVoiceRuntimeConfig(providerHint = null) {
   }
 }
 
+/**
+ * 更新语音识别配置（按厂商分文件存储，自动过滤无效密钥）。
+ *
+ * @param {Object} updates - 语音配置键值对
+ */
 export function setVoiceConfig(updates) {
   const existing = readExistingStoredConfig()
   const { voice: legacyVoice, ...baseConfig } = existing
-  let activeProvider = readActiveVoiceProvider(legacyVoice?.voiceProvider || legacyVoice?.provider || 'aliyun')
+  let activeProvider = readActiveVoiceProvider(legacyVoice?.voiceProvider || legacyVoice?.provider || 'whisper')
   const requestedProvider = updates?.voiceProvider ?? updates?.provider
   if (requestedProvider !== undefined) {
     activeProvider = normalizeVoiceProvider(requestedProvider, activeProvider)
@@ -1838,6 +2105,11 @@ const TTS_CONFIG_KEYS = [
   'volcanoAppId', 'volcanoToken',
 ]
 
+/**
+ * 获取 TTS 配置状态（各厂商密钥是否已配置）。
+ *
+ * @returns {{ ttsProvider: string, [key: string]: { configured: boolean } }} TTS 配置状态
+ */
 export function getTTSConfig() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
@@ -1857,6 +2129,11 @@ export function getTTSConfig() {
 }
 
 // Read plaintext TTS credentials (backend use only — not exposed to frontend)
+/**
+ * 获取 TTS 明文凭据（仅后端使用，不暴露给前端）。
+ *
+ * @returns {{ provider: string, voiceId: string, [key: string]: string }} TTS 凭据
+ */
 export function getTTSCredentials() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
@@ -1877,6 +2154,11 @@ export function getTTSCredentials() {
   }
 }
 
+/**
+ * 更新 TTS 配置（按键过滤，仅保留有效字段）。
+ *
+ * @param {Object} updates - TTS 配置键值对
+ */
 export function setTTSConfig(updates) {
   const existing = readExistingStoredConfig()
   const current = existing.tts || {}
@@ -1911,6 +2193,7 @@ function resolveLocalModel(stored) {
 }
 
 // 仅保留 local 预设（云端 provider 已移除）。供 api 的 /settings/embedding 视图使用。
+/** @description 本地嵌入模型预设（仅支持本地离线推理） */
 export const EMBEDDING_PROVIDER_PRESETS = {
   local: { baseURL: '', defaultModel: LOCAL_DEFAULT_MODEL, defaultDims: LOCAL_DEFAULT_DIMS, local: true },
 }
@@ -1947,6 +2230,11 @@ function readEmbeddingBlock() {
 }
 
 // 前端可见视图。provider 恒为 'local'，model 缺省走默认，永远 configured=true（零配置）。
+/**
+ * 获取嵌入模型配置（前端视图，provider 恒为 'local'，零配置即用）。
+ *
+ * @returns {{ provider: string, model: string, dimensions: number, timeoutMs: number|null, configured: boolean }}
+ */
 export function getEmbeddingConfig() {
   const stored = readEmbeddingBlock()
   const model = resolveLocalModel(stored)
@@ -1955,6 +2243,11 @@ export function getEmbeddingConfig() {
 }
 
 // Backend-only：供 src/embedding.js 内部用。强制本地，忽略任何残留的云端字段。
+/**
+ * 获取嵌入模型凭据（仅后端使用，强制本地模型）。
+ *
+ * @returns {{ provider: string, model: string, apiKey: string, baseURL: string, dimensions: number, timeoutMs: number|null }}
+ */
 export function getEmbeddingCredentials() {
   const stored = readEmbeddingBlock()
   const model = resolveLocalModel(stored)
@@ -1968,6 +2261,13 @@ export function getEmbeddingCredentials() {
   }
 }
 
+/**
+ * 更新嵌入模型配置（仅 model 和 timeoutMs 可配置）。
+ *
+ * @param {Object} [updates] - 更新内容
+ * @param {string} [updates.model] - 本地 ONNX 模型 HF 仓库 ID
+ * @param {number} [updates.timeoutMs] - 向量召回超时（毫秒）
+ */
 export function setEmbeddingConfig(updates) {
   const existing = readExistingStoredConfig()
   const current = existing.embedding || {}
@@ -1987,6 +2287,7 @@ export function setEmbeddingConfig(updates) {
   writeStoredConfig({ ...existing, embedding: next })
 }
 
+/** @description 内部导出，供测试和高级集成使用 */
 export const __internals = {
   DEEPSEEK_MODELS,
   MINIMAX_MODELS,

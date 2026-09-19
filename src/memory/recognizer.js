@@ -262,7 +262,7 @@ export async function runRecognizerBatch(turns) {
   // 任何环节失败（模块导入、API、db）都吞掉，不影响主流程。
   if (writtenMemories.length > 0) {
     // 用 IIFE 隔离 async 作用域，不阻塞 outer 函数 return
-    ;(async () => {
+    (async () => {
       try {
         const { computeEmbedding, isEmbeddingConfigured } = await import('../embedding.js')
         const { updateMemoryEmbedding } = await import('../db.js')

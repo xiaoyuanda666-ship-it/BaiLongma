@@ -109,7 +109,7 @@ function compileExecute(name, code, permissions = {}, { legacyUnsafeGlobals = fa
   let fn
   try {
     // AsyncFunction 构造器接受参数名列表 + 函数体
-    // eslint-disable-next-line no-new-func
+     
     fn = legacyUnsafeGlobals
       ? new Function('args', 'helpers', `"use strict";\nreturn (async () => {\n${code}\n})()`)
       : new Function(

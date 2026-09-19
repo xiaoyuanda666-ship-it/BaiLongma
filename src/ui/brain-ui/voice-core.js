@@ -150,7 +150,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   // ─── 渲染状态 ───
   let sk = 'idle';
   let modelThinking = false;
-  let animState = {
+  const animState = {
     amp: STATE_CFG.idle.amp, spd: STATE_CFG.idle.spd,
     col: [STATE_CFG.idle.r, STATE_CFG.idle.g, STATE_CFG.idle.b],
     t: 0, rotY: 0, rotX: 0.25,
@@ -688,7 +688,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onopen = () => {
       if (cloudWs !== ws) return;
-      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'whisper';
       const lang = getLang?.()?.split('-')[0] || 'zh';
       ws.send(JSON.stringify({ type: 'config', provider, lang }));
       setStatus('listening');
@@ -929,7 +929,7 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       cloudWs = bargeinWs;
       bargeinWs.onopen = () => {
         if (cloudWs !== bargeinWs) return;
-        const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+        const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'whisper';
         const lang = getLang?.()?.split('-')[0] || 'zh';
         bargeinWs.send(JSON.stringify({ type: 'config', provider, lang }));
         lastInboundTs = Date.now(); // 看门狗：打断重连后给新鲜起点

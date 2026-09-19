@@ -69,6 +69,7 @@ import { startTyphoonAlertMonitor } from './typhoon-alert-monitor.js'
 import { scheduleSceneSurfaceRemoval } from './scene/transient-surfaces.js'
 import { createAwakeningManager } from './awakening.js'
 import { createTaskManager } from './task-manager.js'
+import { startVoiceServer, getVoiceStatus as getVoiceServerStatus } from './voice/manager.js'
 
 function reportStartupProgress(id, status, detail, message) {
   try {
@@ -385,6 +386,16 @@ function deliverFallbackReply(msg, content, timestamp) {
   }
 }
 
+/**
+ * 构建工具执行上下文，包含当前目标 ID、允许的可见 ID 列表。
+ * 供 LLM 工具调用层（如 send_message）确定可投递的目标范围。
+ *
+ * @param {Object} [opts] - 构建选项
+ * @param {string|null} [opts.currentTargetId=null] - 当前对话目标 ID
+ * @param {Array} [opts.conversationWindow=[]] - 当前对话窗口消息列表
+ * @param {boolean} [opts.includeRecentPartners=false] - 是否包含近期对话伙伴（TICK 场景）
+ * @returns {{ currentTargetId: string|null, allowedTargetIds: string[], visibleTargetIds: string[] }}
+ */
 export function buildToolContext({ currentTargetId = null, conversationWindow = [], includeRecentPartners = false } = {}) {
   const visibleTargetIds = [
     currentTargetId,
@@ -731,7 +742,7 @@ async function runTurn(input, label, msg = null) {
   const fastUserPath = isFastUserMessage(msg)
   const controller = new AbortController()
   let llmResult = null
-  let toolCallLog = []
+  const toolCallLog = []
   let voiceTurn = false
   let localReply = false
   let terminalEmitted = false
@@ -1820,9 +1831,23 @@ async function main() {
       deferConsciousnessUntilActivationIntro()
     },
     onActivationIntroComplete: () => releaseConsciousnessAfterActivationIntro('completed'),
+    ensureStartupSelfCheckState: awakeningManager.ensureStartupSelfCheckState,
+    triggerImmediateTick: consciousnessLoop.triggerImmediateTick,
   })
   // 仅在配置了正式预警 API 与目标地区时启用；避免把普通路径数据当作安全预警。
   startTyphoonAlertMonitor()
+
+  // 启动本地 Whisper 语音识别服务（无需 API Key，离线运行）
+  try {
+    const voiceStatus = getVoiceServerStatus()
+    if (voiceStatus.status === 'stopped') {
+      startVoiceServer({ model: 'small' })
+      console.log('[voice] 本地 Whisper 语音识别服务已启动')
+    }
+  } catch (err) {
+    console.warn('[voice] 本地 Whisper 服务启动失败（语音输入将不可用）:', err.message)
+  }
+
   reportStartupProgress('api', 'running', `等待 ${apiProtocol}://127.0.0.1:${apiPort} 就绪`, '正在等待本地 API 就绪')
   startSocialConnectors({ pushMessage, emitEvent }).catch(err => console.warn('[social] startup failed:', err.message))
 
@@ -1838,7 +1863,11 @@ async function main() {
   }
 
   console.log('Type a message and press Enter to send it to Jarvis\n')
-  await startConsciousnessLoop()
+  // Always defer consciousness loop until intro animation completes
+  deferConsciousnessUntilActivationIntro()
+  // Also start immediately as fallback in case intro doesn't trigger completion
+  startConsciousnessLoop({ runImmediateTick: true })
+    .catch(err => console.error('[system] Main loop failed to start:', err))
 }
 
 main()

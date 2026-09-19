@@ -44,7 +44,7 @@ export async function runBackfill({ batchSize = 20, throttleMs = 100, force = fa
   // 配置自检：未配置 embedding 直接跳过
   let isEmbeddingConfigured
   try {
-    ;({ isEmbeddingConfigured } = await import('../embedding.js'))
+    ({ isEmbeddingConfigured } = await import('../embedding.js'))
   } catch (err) {
     return { error: `import embedding module failed: ${err.message}` }
   }

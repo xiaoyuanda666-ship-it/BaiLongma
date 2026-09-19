@@ -18,7 +18,7 @@ function reportState(visible, source = 'brain-ui') {
   fetch(apiUrl('/typhoon-state'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !!visible, source }) }).catch(() => {})
 }
 function consoleEngaged() { const area = $('chat-area'); return !!area && (area.classList.contains('chat-pinned') || area.matches(':hover') || area.contains(document.activeElement)) }
-function expandConsole() { if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null }; $('chat-area')?.classList.remove('ty-collapsed') }
+function expandConsole() { if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null } $('chat-area')?.classList.remove('ty-collapsed') }
 function scheduleConsoleCollapse(delay = COLLAPSE_DELAY_MS) {
   if (!active || $('chat-area')?.classList.contains('chat-pinned')) return
   if (collapseTimer) clearTimeout(collapseTimer)

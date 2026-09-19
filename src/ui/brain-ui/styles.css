@@ -221,9 +221,12 @@ body {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow: none;
-  /* The dashboard cards provide their own surface and shadow. Keep the
-     transparent rail from clipping those shadows at its outer bounds. */
-  overflow: visible;
+  /* Allow horizontal overflow for card shadows, but scroll vertically when content exceeds viewport */
+  overflow-x: visible;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 /* One-shot handoff from the activation film into the real cognitive surface. */
@@ -290,7 +293,7 @@ body {
 }
 
 #panel-l2 .heartbeat-stats {
-  gap: 12px;
+  gap: 8px 12px;
   padding: 0 0 12px;
   margin-bottom: 12px;
 }
@@ -330,11 +333,15 @@ body {
   font-weight: 600;
   color: var(--ink);
   letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .panel-stats {
   display: flex;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   align-items: center;
   justify-content: space-between;
   padding-bottom: 14px;
@@ -342,7 +349,7 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
-.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 
 .stat-label {
   font-size: 9px;
@@ -350,6 +357,7 @@ body {
   letter-spacing: 0.15em;
   text-transform: uppercase;
   font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
 }
 
 .stat-value {
@@ -360,6 +368,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .stat-value.live { color: var(--warm); }
@@ -1237,20 +1246,31 @@ body {
 }
 
 .panel-actions {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
 }
 
+.panel-actions .reset-view {
+  flex-shrink: 0;
+}
+
+.panel-actions .physics-control {
+  flex: 1;
+  min-width: 120px;
+}
+
 .stream::-webkit-scrollbar,
-.panel::-webkit-scrollbar { width: 6px; }
+.panel::-webkit-scrollbar,
+#panel-l2::-webkit-scrollbar { width: 6px; }
 
 .stream::-webkit-scrollbar-thumb,
-.panel::-webkit-scrollbar-thumb {
+.panel::-webkit-scrollbar-thumb,
+#panel-l2::-webkit-scrollbar-thumb {
   background: var(--line-strong);
   border-radius: 999px;
 }
@@ -2168,6 +2188,39 @@ body {
   box-shadow: 0 14px 30px color-mix(in srgb, var(--warm) 36%, transparent);
 }
 #send-btn:active { transform: translateY(0); opacity: 0.85; }
+
+/* ── Upload button ── */
+.upload-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-raised) 60%, transparent);
+  color: var(--dim);
+  font-size: 16px;
+  font-weight: 300;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+.upload-btn:hover {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--warm) 32%, var(--line-strong));
+  background: color-mix(in srgb, var(--warm) 8%, var(--panel-raised));
+}
+.upload-btn.active {
+  color: var(--warm);
+  border-color: color-mix(in srgb, var(--warm) 58%, transparent);
+  background: color-mix(in srgb, var(--warm) 12%, transparent);
+  animation: pulse-warm 1.2s ease-in-out infinite;
+}
+@keyframes pulse-warm {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warm) 30%, transparent); }
+  50% { box-shadow: 0 0 12px 2px color-mix(in srgb, var(--warm) 30%, transparent); }
+}
 
 #tip {
   position: fixed;

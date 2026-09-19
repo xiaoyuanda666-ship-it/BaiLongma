@@ -39,7 +39,7 @@ const LOCATION_PREFIX_RE = /^(?:呃|嗯|啊|那个|帮我|麻烦|请|给我|打�
 const LOCATION_NOISE_RE = /^(?:今天|明天|后天|现在|当前|实时|本地|当地|这里|我这边|附近|周边|未来|最近|怎么样|如何|咋样|怎样|好吗|好不好)+$/u
 
 function normalizeWeatherLocation(location = '') {
-  let loc = String(location || '')
+  const loc = String(location || '')
     .replace(/[，。？！；、,.!?;:]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

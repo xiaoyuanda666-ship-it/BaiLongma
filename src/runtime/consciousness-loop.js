@@ -226,7 +226,7 @@ export function createConsciousnessLoop({
     if (!isRunning()) return
     if (currentTimer) { clearTimeout(currentTimer); currentTimer = null }
     // 异步启动一轮，不等结果
-    ;(async () => {
+    (async () => {
       try {
         await onTick()
       } catch (err) {

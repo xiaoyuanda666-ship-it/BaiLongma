@@ -2,7 +2,7 @@ import { apiUrl } from './api-client.js'
 import { t } from './i18n/index.js'
 
 let active = false
-let state = { regionId: '', query: '', documentId: '' }
+const state = { regionId: '', query: '', documentId: '' }
 const $ = (id) => document.getElementById(id)
 
 function request(path) {
@@ -205,6 +205,10 @@ export function setKnowledgeCortexMode(visible, { source = 'brain-ui', regionId,
   panel?.setAttribute('aria-hidden', String(!active))
   if (active) refresh()
   report(source)
+}
+
+export function toggleKnowledgeCortex(source = 'brain-ui') {
+  setKnowledgeCortexMode(!active, { source })
 }
 
 export function initKnowledgePanel() {

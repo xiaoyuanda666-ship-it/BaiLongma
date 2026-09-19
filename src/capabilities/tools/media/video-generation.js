@@ -53,7 +53,7 @@ function notifyAgentVideoDone({ prompt = '', mode = 'text', ok = true, reason = 
 // 前端面板实时同步 { open, prompt } 到后端（POST /aivideo/draft）。注入器每轮把它贴进
 // agent 上下文，让 agent 直接看到「面板开/关」「用户正在框里编辑的提示词草稿」。
 // 这样用户说「帮我优化提示词」时，agent 无需追问内容，直接基于草稿改写。
-let aivideoPanelState = { open: false, prompt: '', updatedAt: 0 }
+const aivideoPanelState = { open: false, prompt: '', updatedAt: 0 }
 export function setAIVideoPanelState({ open, prompt } = {}) {
   if (typeof open === 'boolean') aivideoPanelState.open = open
   if (typeof prompt === 'string') aivideoPanelState.prompt = prompt
@@ -338,7 +338,7 @@ export function saveGeneratedVideo(jobId) {
 // 让重启前正在生成的视频仍能自动落盘 / 在面板播放（而不是永远卡“生成中”）。
 // 由 index.js 在后端启动后调用一次。
 export function resumePendingVideoJobs() {
-  let list = readPending()
+  const list = readPending()
   if (!list.length) return
   // 丢弃过期（>48h，火山已不可查）的条目
   const fresh = list.filter(e => e && e.taskId && (Date.now() - (e.createdAt || 0) < SEEDANCE_PENDING_TTL_MS))

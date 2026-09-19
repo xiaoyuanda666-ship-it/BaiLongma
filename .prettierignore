@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+data/
+sandbox/
+coverage/
+.nyc_output/
+*.min.js
+src/ui/brain-ui/vendor/
+**/vendor/
+package-lock.json
