@@ -6,8 +6,8 @@ const IS_LINUX = PLATFORM === 'linux'
 // Windows: 把控制台代码页切到 UTF-8，避免中文 stdout 显示为乱码。
 // 用 stdio:'ignore'+windowsHide：绝不能用 stdio:'inherit' —— 在 Electron 主进程启动最早期
 // 让 chcp 子进程继承 stdout 句柄，会搅乱本进程的 stdout，导致后续 console.log 写到一定量后
-// 阻塞、整个后端 bootstrap 卡死（实测）。控制台中文显示的可靠修复在 npm 的 start/dev/
-// start:backend 脚本里（启动前 `chcp 65001 >nul`，在真正显示输出的那个控制台里设码页）；
+// 阻塞、整个后端 bootstrap 卡死（实测）。npm 的 start/dev/start:backend 通过
+// scripts/start.mjs 在 Windows 启动前设置 UTF-8 代码页；
 // 这里只作无副作用的兜底。
 if (IS_WIN) {
   try {
@@ -15,7 +15,7 @@ if (IS_WIN) {
   } catch (_) {}
 }
 
-const { app, BaseWindow, BrowserWindow, WebContentsView, View, webContents, session, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
+const { app, BrowserWindow, session, shell, dialog, Menu, ipcMain, Tray, nativeImage, clipboard, systemPreferences } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const net = require('net')
@@ -26,11 +26,8 @@ const { pathToFileURL } = require('url')
 const { autoUpdater } = require('electron-updater')
 const wakeWord = require('./wake-word.cjs')
 const devLight = require('./dev-board-light.cjs')
-const { BROWSER_EMBED_PARTITION, createBrowserEmbedHost } = require('./browser-embed-host.cjs')
-const { createBrowserDataStore } = require('./browser-data.cjs')
 const { createSafeStorageNotice } = require('./safe-storage-notice.cjs')
-const { createBaiLongmaChromeManager } = require('./bailongma-chrome.cjs')
-const { bundledBrowserRoot, configureBundledNodeRuntime } = require('./playwright-runtime.cjs')
+const { configureBundledNodeRuntime } = require('./playwright-runtime.cjs')
 const { createTrustedWindowSenderGuard } = require('./trusted-window-senders.cjs')
 const { hasPackagedUpdaterConfig } = require('./updater-config.cjs')
 
@@ -128,8 +125,6 @@ function setNativeUiLanguage(locale) {
   return normalized
 }
 
-app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1')
-app.commandLine.appendSwitch('remote-debugging-port', '0')
 const CODE_ROOT = app.getAppPath()
 const RESOURCE_ROOT = CODE_ROOT
 const BACKEND_ENTRY = path.join(CODE_ROOT, 'src', 'index.js')
@@ -455,97 +450,6 @@ const safeStorageNotice = createSafeStorageNotice({
 globalThis.bailongmaRequestSafeStorageAccessSync = purpose => (
   safeStorageNotice.requestSync(purpose)
 )
-// The dedicated profile is deliberately under BaiLongma application data and
-// never reads, imports, or attaches to the user's daily Chrome profile.
-const bailongmaChrome = createBaiLongmaChromeManager({
-  userDataDir: USER_DIR,
-  bundledBrowserRoot: bundledBrowserRoot({
-    isPackaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    projectRoot: CODE_ROOT,
-  }),
-})
-const embeddedBrowserSession = () => session.fromPartition(BROWSER_EMBED_PARTITION)
-const browserDataStore = createBrowserDataStore({
-  historyFile: path.join(USER_DIR, 'browser', 'history.json'),
-  getSession: embeddedBrowserSession,
-})
-
-async function assertEmbeddedBrowserNavigationAllowed(url) {
-  const [{ assertWebUrlAllowed }, { config: runtimeConfig }] = await Promise.all([
-    import(pathToFileURL(path.join(CODE_ROOT, 'src', 'capabilities', 'tools', 'web', 'url-policy.js')).href),
-    import(pathToFileURL(path.join(CODE_ROOT, 'src', 'config.js')).href),
-  ])
-  return assertWebUrlAllowed(url, {
-    allowPrivateNetwork: () => runtimeConfig.security?.browserPrivateNetwork === true,
-  })
-}
-
-const browserEmbedHost = createBrowserEmbedHost({
-  WebContentsView,
-  View,
-  BrowserWindow,
-  BaseWindow,
-  // Browser downloads belong in the operating system's user-visible Downloads
-  // folder. app.getPath also respects localized/redirected platform folders.
-  downloadDirectory: app.getPath('downloads'),
-  isAppQuitting: () => app.isQuiting === true,
-  onNavigation: entry => browserDataStore.recordVisit(entry),
-  onDownload: event => {
-    if (app.isQuiting === true) return
-    try { globalThis.bailongmaBrowserDownloadEventSink?.(event) }
-    catch (error) { console.warn('[browser-embed] download notification failed:', error?.message || error) }
-  },
-  assertNavigationAllowed: assertEmbeddedBrowserNavigationAllowed,
-  nativeRequestGuard: true,
-})
-
-function readDevToolsActivePort() {
-  try {
-    const [line] = fs.readFileSync(path.join(USER_DIR, 'DevToolsActivePort'), 'utf8').split(/\r?\n/)
-    const port = Number(line)
-    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null
-  } catch {
-    return null
-  }
-}
-
-function readLocalJson(port, pathname) {
-  return new Promise((resolve, reject) => {
-    const request = http.get({ hostname: '127.0.0.1', port, path: pathname, timeout: 2_000 }, response => {
-      const chunks = []
-      response.on('data', chunk => chunks.push(chunk))
-      response.on('end', () => {
-        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))) }
-        catch (error) { reject(error) }
-      })
-    })
-    request.on('timeout', () => request.destroy(new Error('CDP target lookup timed out')))
-    request.on('error', reject)
-  })
-}
-
-async function resolveBrowserEmbedCdpTarget() {
-  const target = browserEmbedHost.getTarget()
-  if (!target) return null
-  const port = readDevToolsActivePort()
-  if (!port) return { ...target, cdpEndpoint: null, targetId: null }
-  const cdpEndpoint = `http://127.0.0.1:${port}`
-  try {
-    const targets = await readLocalJson(port, '/json/list')
-    const match = Array.isArray(targets)
-      ? targets.find(candidate => {
-          if (!candidate?.id) return false
-          try { return webContents.fromDevToolsTargetId(candidate.id)?.id === target.webContentsId }
-          catch { return false }
-        })
-      : null
-    return { ...target, cdpEndpoint, targetId: match?.id || null }
-  } catch (error) {
-    console.warn('[browser-embed] unable to resolve CDP target:', error?.message || error)
-    return { ...target, cdpEndpoint, targetId: null }
-  }
-}
 let backendPort = 0
 let tray = null
 let focusBannerWindow = null
@@ -560,34 +464,6 @@ global.focusBannerBridge = focusBannerBridge
 const terminalStreamBridge = new EventEmitter()
 global.terminalStreamBridge = terminalStreamBridge
 global.getBailongmaWindowLayoutSnapshot = getBailongmaWindowLayoutSnapshot
-globalThis.bailongmaChromeBridge = Object.freeze({
-  ensureEndpoint: async () => {
-    if (!browserEmbedHost.getTarget() && mainWindow && !mainWindow.isDestroyed()) {
-      await browserEmbedHost.prime(mainWindow)
-    }
-    const target = await resolveBrowserEmbedCdpTarget()
-    if (!target?.cdpEndpoint || !target?.targetId) {
-      throw new Error('BaiLongma live browser DevTools target is unavailable')
-    }
-    return target.cdpEndpoint
-  },
-  getTarget: async () => resolveBrowserEmbedCdpTarget(),
-  closePage: () => browserEmbedHost.closePage(),
-  recoverPage: async () => {
-    browserEmbedHost.closePage()
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      throw new Error('BaiLongma main window is unavailable for browser recovery')
-    }
-    await browserEmbedHost.prime(mainWindow)
-    return resolveBrowserEmbedCdpTarget()
-  },
-  clearData: options => browserDataStore.clearData(options),
-  getState: () => browserEmbedHost.getState(mainWindow),
-  getDownloads: () => browserEmbedHost.getDownloads(),
-  waitForDownloadChange: options => browserEmbedHost.waitForDownloadChange(options),
-  controlDownload: (downloadId, action) => browserEmbedHost.controlDownload(downloadId, action),
-  setDownloadNotificationContext: context => browserEmbedHost.setDownloadNotificationContext(context),
-})
 global.bailongmaAppControl = {
   restart() {
     console.log('[main] restart requested')
@@ -856,7 +732,6 @@ async function createWindow({
 
   window.on('closed', () => {
     if (window === mainWindow) {
-      browserEmbedHost.releaseWindow(window)
       mainWindow = null
     }
   })
@@ -896,7 +771,6 @@ async function replaceStartupWithMainApp() {
     )
 
     const shouldShow = !hasStartupWindow || startupWindow.isVisible()
-    if (hasStartupWindow) browserEmbedHost.transferMainWindow(startupWindow, readyWindow)
     mainWindow = readyWindow
     browserEmbedSenderGuard.revokeReplacement(readyWindow)
     if (wasFullScreen) readyWindow.setFullScreen(true)
@@ -992,9 +866,7 @@ function createFocusBannerWindow({ task = '', current_step = '', tasks = [] } = 
     return false
   })
 
-  focusBannerWindow.loadFile(path.join(RESOURCE_ROOT, 'focus-banner.html'), {
-    query: { lang: getNativeUiLanguage() },
-  })
+  focusBannerWindow.loadURL(backendUrl(backendPort, `/focus-banner.html?lang=${encodeURIComponent(getNativeUiLanguage())}`))
 
   focusBannerWindow.webContents.once('did-finish-load', () => {
     if (!focusBannerWindow || focusBannerWindow.isDestroyed()) return
@@ -1626,6 +1498,16 @@ function setupAutoUpdater() {
 }
 
 ipcMain.handle('app:get-version', () => app.getVersion())
+ipcMain.handle('voice:open-microphone-settings', async (event) => {
+  browserEmbedSenderGuard.requireTrustedSender(event)
+  // 固定系统设置地址，不接受渲染进程传入任意 URL。
+  const url = process.platform === 'darwin'
+    ? 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+    : process.platform === 'win32' ? 'ms-settings:privacy-microphone' : null
+  if (!url) return { opened: false }
+  await shell.openExternal(url)
+  return { opened: true }
+})
 ipcMain.handle('ui:set-language', (_event, locale) => ({ locale: setNativeUiLanguage(locale) }))
 ipcMain.handle('startup:get-progress', () => cloneStartupProgressState())
 ipcMain.handle('window:is-full-screen', (event) => {
@@ -1640,20 +1522,6 @@ ipcMain.handle('window:set-title-bar-theme', (event, theme) => {
   targetWindow.setTitleBarOverlay(windowsTitleBarOverlay(normalizedTheme))
   return true
 })
-
-function requireMainWindowSender(event) {
-  return browserEmbedSenderGuard.requireTrustedSender(event)
-}
-
-ipcMain.handle('browser-embed:update', (event, options) => (
-  browserEmbedHost.update(requireMainWindowSender(event), options)
-))
-ipcMain.handle('browser-embed:hide', event => (
-  browserEmbedHost.hide(requireMainWindowSender(event))
-))
-ipcMain.handle('browser-embed:get-state', event => (
-  browserEmbedHost.getState(requireMainWindowSender(event))
-))
 
 ipcMain.handle('system-screenshot:get-latest', async (_event, options = {}) => {
   const maxAgeMs = Number(options?.maxAgeMs || 15 * 60 * 1000)
@@ -1767,16 +1635,13 @@ let browserShutdownComplete = false
 app.on('before-quit', (event) => {
   app.isQuiting = true
   if (browserShutdownComplete) {
-    browserEmbedHost.destroyAll()
     return
   }
   const shutdowns = [
     globalThis.shutdownBailongmaMcpClients,
-    () => bailongmaChrome.stopOwnedChrome(),
   ].filter(shutdown => typeof shutdown === 'function')
   if (shutdowns.length === 0) {
     browserShutdownComplete = true
-    browserEmbedHost.destroyAll()
     return
   }
   event.preventDefault()
@@ -1786,7 +1651,7 @@ app.on('before-quit', (event) => {
   let browserShutdownTimer
   browserShutdownBeforeQuit = Promise.race([
     Promise.allSettled(shutdowns.map(shutdown => Promise.resolve().then(() => shutdown()))),
-    new Promise(resolve => { browserShutdownTimer = setTimeout(resolve, 5_000) }),
+    new Promise(resolve => { browserShutdownTimer = setTimeout(resolve, 45_000) }),
   ]).finally(() => {
     clearTimeout(browserShutdownTimer)
     browserShutdownComplete = true

@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { emitEvent } from './events.js'
+import { emitEvent } from './runtime/events.js'
 import { getConfig, setConfig } from './db.js'
 import { projectBrowserDownloadJobToScene } from './capabilities/tools/browser-download-task-scene.js'
 

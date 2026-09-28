@@ -40,9 +40,9 @@ function makeState() {
 }
 
 // 白盒造线索（绕开 token 切分偶然性）
-function addThread(state, topic, { lastEventAgoMs = 0, foreground = false, conclusions = [] } = {}) {
+function addThread(state, topic, { lastEventAgoMs = 0, foreground = false, conclusions = [], signature = null } = {}) {
   const ts = ensureThreadState(state)
-  const t = makeThread(topic)
+  const t = makeThread(topic, { signature })
   t.lastEventAt = new Date(Date.now() - lastEventAgoMs).toISOString()
   t.createdAt = new Date(Date.now() - lastEventAgoMs - 60000).toISOString()
   t.conclusions = conclusions
@@ -106,6 +106,29 @@ console.log('— Bug2 回归：指代性问询路由到开放承诺 —')
   // 明示压过暗示：进度句式但显式点名另一条线索（重叠≥2）→ 不抢路由
   const r2 = attributeUserMessage(state, '火星 科幻 那个故事进展如何了')
   assert(r2.thread !== evening, '显式点名其他线索时进度路由让位')
+}
+
+console.log('— 真实下载话术回归：不被旧版本线索抢占 —')
+{
+  const state = makeState()
+  const oldVersion = addThread(state, ['你现', '新版', '版本'], {
+    signature: ['你现', '新版', '版本', '表现'],
+  })
+  const download = addThread(state, ['下载', 'capcut', '安装包'], {
+    signature: ['下载', 'CapCut', '安装包'],
+  })
+  addThread(state, ['当前', '普通', '闲聊'], { foreground: true })
+
+  const started = attributeUserMessage(state, '你现在再次帮我下载capcut，看看你这个新版本表现怎么样')
+  assert(started.event === 'resumed' && started.thread === download,
+    '真实下载请求回到下载线索，而不是旧“版本”线索')
+  assert(started.thread !== oldVersion, '评价新版本的尾句不参与主任务归属')
+  assert(isIndexicalProgressQuery('什么情况'), '“什么情况”识别为当前任务追问')
+  const status = attributeUserMessage(state, '什么情况')
+  assert(status.thread === download && status.event === 'continued', '“什么情况”留在下载线索')
+  assert(isIndexicalProgressQuery('你是不是在后台进行工作'), '后台工作问句识别为当前任务追问')
+  const background = attributeUserMessage(state, '你是不是在后台进行工作')
+  assert(background.thread === download && background.event === 'continued', '后台工作问句留在下载线索')
 }
 
 console.log('— Bug3 回归：单关键词不误切换 —')

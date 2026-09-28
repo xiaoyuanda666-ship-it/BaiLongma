@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.130",
+  "version": "2.2.147",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -9,12 +9,12 @@
     "name": "xiaoyuanda666-ship-it"
   },
   "scripts": {
-    "start": "chcp 65001 >nul && electron .",
+    "start": "node scripts/start.mjs app",
     "start:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 app",
-    "start:backend": "chcp 65001 >nul && node --env-file=.env src/index.js",
+    "start:backend": "node scripts/start.mjs backend",
     "start:backend:lan": "powershell -ExecutionPolicy Bypass -File scripts/start-lan.ps1 backend",
-    "dev": "chcp 65001 >nul && node --env-file=.env --watch src/index.js",
-    "build": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
+    "dev": "node scripts/start.mjs dev",
+    "build": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
     "build:win": "node scripts/build-win.mjs",
     "build:win:release": "node scripts/build-win.mjs --require-signing",
     "build:linux": "node scripts/build-linux.mjs",
@@ -34,7 +34,7 @@
     "upload:linux": "node scripts/publish-linux-updates.mjs",
     "upload:linux:dry-run": "node scripts/publish-linux-updates.mjs --dry-run --skip-smoke",
     "release:linux": "node scripts/build-linux.mjs && node scripts/publish-linux-updates.mjs",
-    "publish": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-playwright-browsers.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
+    "publish": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js --publish always",
     "postinstall": "node ./node_modules/electron-builder/cli.js install-app-deps",
     "test:rule-context": "electron ./src/test-rule-context.js",
     "test:i18n": "node ./src/test-i18n.js",
@@ -80,12 +80,14 @@
     "test:multi-client-chat": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-multi-client-chat.js\"",
     "test:web-access": "node ./src/test-web-read.js && node ./src/test-web-search.js",
     "test:chrome-devtools": "node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs",
-    "test:browser-packaging": "node ./scripts/test-playwright-packaging.mjs",
+    "test:browser-packaging": "node --test src/test-browser-real-chrome.js",
     "test:windows-build": "node ./scripts/test-windows-build.mjs",
     "test:linux-build": "node ./scripts/test-linux-build.mjs",
     "test:update-publish": "node ./scripts/test-macos-updater-config.mjs && node ./scripts/test-publish-updates.mjs",
     "test:native-deps": "node ./scripts/test-native-dependency-versions.mjs",
-    "test:browser-core": "node ./src/test-web-url-policy.js && node ./src/mcp/test-chrome-devtools-server.js && node ./electron/test-bailongma-chrome.cjs && node ./electron/test-browser-embed-host.cjs && node ./src/test-background-job-manager.js && node ./src/test-browser-lease.js && node ./src/test-browser-download-task-runner.js && node ./src/test-browser-download-context.js && node ./src/test-browser-download-events.js && node ./src/test-browser-display.js && node ./src/test-browser-agent-integration.js && node ./src/test-browser-challenge-guard.js && node ./src/test-web-read.js && node ./src/test-web-search.js",
+    "test:browserskill": "node --test src/mcp/test-browserskill.js",
+    "smoke:browserskill": "node scripts/smoke-browserskill.mjs",
+    "test:browser-core": "node --test src/mcp/test-browserskill*.js src/test-browser-real-chrome.js && node src/test-web-url-policy.js && node src/test-browser-challenge-guard.js",
     "test:background-browser-download": "node ./src/test-background-job-manager.js && node ./src/test-browser-lease.js && node ./src/test-browser-download-task-runner.js && node ./src/test-browser-download-context.js && node ./src/test-browser-download-events.js && node ./src/test-action-contract.js && node ./src/test-browser-agent-integration.js",
     "test:network-audit": "node ./electron/test-network-audit-utils.cjs && node ./electron/test-network-diagnostics.cjs && node ./scripts/test-compare-network-captures.mjs",
     "test:network-audit:real": "electron ./electron/test-network-diagnostics-real.cjs",
@@ -103,15 +105,16 @@
     "smoke:tool-factory-web": "node scripts/smoke-tool-factory-web-e2e.mjs",
     "smoke:brain-ui": "node scripts/smoke-brain-ui.mjs",
     "smoke:social": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-social.mjs\"",
-    "smoke:feishu-ws": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-feishu-ws.mjs\""
+    "smoke:feishu-ws": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\scripts\\smoke-feishu-ws.mjs\"",
+    "test:agent-layers": "node --test src/test-agent-layers.js src/test-filesystem-layers.js src/test-model-transport.js scripts/test-agent-layer-boundaries.mjs scripts/test-agent-layer-packaging.mjs",
+    "check:agent-layers": "node scripts/check-agent-layers.mjs",
+    "test:agent-layers:integration": "node scripts/test-agent-layer-integration.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@playwright/mcp": "0.0.78",
     "better-sqlite3": "12.8.0",
-    "chrome-devtools-mcp": "1.6.0",
     "d3": "^7.9.0",
     "electron-updater": "^6.3.9",
     "node-forge": "^1.4.0",
@@ -126,7 +129,9 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "electron": "33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "@playwright/mcp": "0.0.78",
+    "chrome-devtools-mcp": "1.6.0"
   },
   "build": {
     "appId": "com.xiaoyuanda.bailongma",
@@ -138,7 +143,6 @@
     },
     "asarUnpack": [
       "**/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
-      "**/node_modules/chrome-devtools-mcp/**",
       "**/node_modules/@huggingface/transformers/**",
       "**/node_modules/sharp/**",
       "**/node_modules/@img/sharp-*/**",
@@ -152,13 +156,6 @@
       "src/voice/**"
     ],
     "extraResources": [
-      {
-        "from": "build/playwright-browsers/${os}-${arch}",
-        "to": "playwright-browsers",
-        "filter": [
-          "**/*"
-        ]
-      },
       {
         "from": "build/node-runtime/${os}-${arch}",
         "to": "node-runtime",
@@ -202,7 +199,13 @@
       "!**/node_modules/better-sqlite3/build/Release/test_extension.node",
       "!**/node_modules/.cache",
       "!**/.vscode",
-      "!data/**/*"
+      "!data/**/*",
+      "!electron/browser-embed-host.cjs",
+      "!electron/bailongma-chrome.cjs",
+      "!electron/browser-data.cjs",
+      "!electron/browser-session-cookies.cjs",
+      "!src/mcp/embedded-playwright*",
+      "!src/mcp/playwright-*"
     ],
     "directories": {
       "buildResources": "build",
@@ -250,11 +253,16 @@
         "!**/node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*",
         "!**/node_modules/sherpa-onnx-darwin-*/**/*",
         "!**/node_modules/sherpa-onnx-linux-*/**/*",
-        "!build/native-speech-recognizer"
+        "!build/native-speech-recognizer",
+        "!electron/browser-embed-host.cjs",
+        "!electron/bailongma-chrome.cjs",
+        "!electron/browser-data.cjs",
+        "!electron/browser-session-cookies.cjs",
+        "!src/mcp/embedded-playwright*",
+        "!src/mcp/playwright-*"
       ],
       "asarUnpack": [
         "**/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
-        "**/node_modules/chrome-devtools-mcp/**",
         "**/node_modules/@huggingface/transformers/**",
         "**/node_modules/sharp/**",
         "**/node_modules/@img/sharp-win32-x64/**",
@@ -293,9 +301,6 @@
       "timestamp": "http://timestamp.apple.com/ts01",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "signIgnore": [
-        "playwright-browsers/.+\\.(pak|dat|bin|strings)$"
-      ],
       "binaries": [
         "Contents/Resources/app.asar.unpacked/build/native-speech-recognizer",
         "Contents/Resources/node-runtime/node"
@@ -332,11 +337,16 @@
         "!**/node_modules/onnxruntime-node/bin/napi-v3/win32/**/*",
         "!**/node_modules/sherpa-onnx-darwin-*/**/*",
         "!**/node_modules/sherpa-onnx-win-*/**/*",
-        "!build/native-speech-recognizer"
+        "!build/native-speech-recognizer",
+        "!electron/browser-embed-host.cjs",
+        "!electron/bailongma-chrome.cjs",
+        "!electron/browser-data.cjs",
+        "!electron/browser-session-cookies.cjs",
+        "!src/mcp/embedded-playwright*",
+        "!src/mcp/playwright-*"
       ],
       "asarUnpack": [
         "**/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
-        "**/node_modules/chrome-devtools-mcp/**",
         "**/node_modules/@huggingface/transformers/**",
         "**/node_modules/sharp/**",
         "**/node_modules/@img/sharp-linux-x64/**",

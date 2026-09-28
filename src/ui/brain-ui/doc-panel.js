@@ -1,53 +1,26 @@
 export const createDocPanel = () => `
-<div class="doc-panel" id="doc-panel">
-
-  <!-- 顶部标题栏 -->
-  <div class="dp-header">
+<aside class="doc-panel" id="doc-panel" aria-label="白龙马使用说明" aria-hidden="true" inert>
+  <header class="dp-header">
     <div class="dp-header-left">
-      <span class="dp-icon" id="dp-icon">⚙️</span>
+      <span class="dp-icon" id="dp-icon">◈</span>
       <div class="dp-titles">
-        <div class="dp-title" id="dp-title">配置说明</div>
-        <div class="dp-subtitle" id="dp-subtitle">语音配置指南</div>
+        <div class="dp-eyebrow">BAILONGMA / HANDBOOK</div>
+        <div class="dp-title" id="dp-title">使用说明</div>
+        <div class="dp-subtitle" id="dp-subtitle">从这里，开始得心应手</div>
       </div>
     </div>
-    <div class="dp-header-right">
-      <!-- Tab 由 doc.js 的 renderTabs() 从 /docs 数据化生成并按意图分组 -->
-      <div class="dp-tabs" id="dp-tabs"></div>
-      <button class="dp-close-btn" id="dp-close-btn" type="button" title="关闭文档面板">×</button>
-    </div>
-  </div>
-
-  <!-- 摘要栏 -->
-  <div class="dp-summary" id="dp-summary">正在加载文档...</div>
-
-  <!-- 主体内容区 -->
+    <button class="dp-close-btn" id="dp-close-btn" type="button" aria-label="关闭使用说明" title="关闭使用说明（Esc）">×</button>
+  </header>
+  <nav class="dp-tabs" id="dp-tabs" aria-label="说明主题"></nav>
+  <div class="dp-summary" id="dp-summary">正在加载使用说明…</div>
   <div class="dp-body" id="dp-body">
-
-    <!-- 左：章节导航 -->
-    <div class="dp-nav" id="dp-nav">
-      <!-- JS 动态填充 -->
-    </div>
-
-    <!-- 右：内容详情 -->
-    <div class="dp-content" id="dp-content">
-      <!-- JS 动态填充 -->
-    </div>
-
+    <nav class="dp-nav" id="dp-nav" aria-label="章节目录"></nav>
+    <article class="dp-content" id="dp-content" aria-live="polite"></article>
   </div>
-
-  <!-- 底部：服务商快速链接 -->
-  <div class="dp-providers" id="dp-providers">
-    <!-- JS 动态填充 -->
-  </div>
-
-  <!-- 内联配置区 -->
-  <div class="dp-config" id="dp-config"></div>
-
-  <!-- 底部状态栏 -->
-  <div class="dp-footer">
-    <span class="dp-footer-note" id="dp-footer-note">● 文档已注入上下文 · 可直接告诉 Agent 你遇到的问题</span>
-    <span class="dp-footer-ttl" id="dp-footer-ttl">上下文有效期 30 分钟</span>
-  </div>
-
-</div>
+  <div class="dp-providers" id="dp-providers"></div>
+  <footer class="dp-footer">
+    <span class="dp-footer-note" id="dp-footer-note">使用说明 · 配置请前往程序「设置」</span>
+    <span class="dp-footer-ttl" id="dp-footer-ttl">Esc 关闭</span>
+  </footer>
+</aside>
 `;

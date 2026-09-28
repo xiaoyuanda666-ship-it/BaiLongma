@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { emitEvent } from '../../../events.js'
+import { emitEvent } from '../../../runtime/events.js'
 import { pushMessage } from '../../../inbound-message.js'
 import { getSeedanceConfig } from '../../../config.js'
 import { PRIMARY_USER_ID } from '../../../identity.js'

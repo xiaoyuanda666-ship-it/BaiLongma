@@ -9,6 +9,7 @@ export const BUILTIN_CHROME_DEVTOOLS_ID = 'builtin_chrome_devtools'
 // names directly to agents and existing skills.
 export const BUILTIN_BROWSER_ALLOWED_TOOLS = Object.freeze([
   'browser_close',
+  'browser_scroll',
   'browser_resize',
   'browser_console_messages',
   'browser_handle_dialog',
@@ -33,7 +34,7 @@ export const BUILTIN_BROWSER_ALLOWED_TOOLS = Object.freeze([
 const require = createRequire(import.meta.url)
 const ALLOWED = new Set(BUILTIN_BROWSER_ALLOWED_TOOLS)
 const MUTATING = new Set([
-  'browser_close', 'browser_resize', 'browser_handle_dialog', 'browser_fill_form',
+  'browser_scroll', 'browser_close', 'browser_resize', 'browser_handle_dialog', 'browser_fill_form',
   'browser_press_key', 'browser_type', 'browser_navigate', 'browser_navigate_back',
   'browser_navigate_forward', 'browser_reload', 'browser_click', 'browser_drag',
   'browser_hover', 'browser_select_option', 'browser_tabs',
@@ -51,6 +52,7 @@ const boolean = description => ({ type: 'boolean', description })
 const uid = 'The uid from the latest browser_snapshot accessibility snapshot.'
 
 const DESCRIPTORS = Object.freeze({
+  browser_scroll: { description: 'Scroll the selected real Chrome page with native wheel input.', schema: objectSchema({ delta_y: number('Vertical wheel pixels, -10000 to 10000.') }, ['delta_y']) },
   browser_navigate: {
     description: 'Navigate the active page in BaiLongma built-in Chromium. Returns a fresh accessibility snapshot.',
     schema: objectSchema({ url: string('An HTTP(S) URL to open in BaiLongma dedicated Chrome.') }, ['url']),
@@ -58,7 +60,7 @@ const DESCRIPTORS = Object.freeze({
   browser_navigate_back: { description: 'Go back in the active BaiLongma Chrome tab and return a fresh snapshot.', schema: objectSchema() },
   browser_navigate_forward: { description: 'Go forward in the active BaiLongma Chrome tab and return a fresh snapshot.', schema: objectSchema() },
   browser_reload: { description: 'Reload the active BaiLongma Chrome tab and return a fresh snapshot.', schema: objectSchema({ ignore_cache: boolean('Ignore cached resources when reloading.') }) },
-  browser_snapshot: { description: 'Read the active BaiLongma Chrome page as an accessibility snapshot. Prefer this over screenshots.', schema: objectSchema({ verbose: boolean('Include additional accessibility-tree details.') }) },
+  browser_snapshot: { description: 'Read the active BaiLongma Chrome page as an accessibility snapshot. If pagination.has_more is true, call browser_snapshot with pagination.next_cursor until complete; truncation is not evidence of lazy loading. A cursor reads saved text without reloading the page; omit it for a fresh live snapshot.', schema: objectSchema({ verbose: boolean('Include additional accessibility-tree details.'), cursor: string('Opaque pagination.next_cursor from a previous browser result; omit for a fresh snapshot.') }) },
   browser_find: { description: 'Find text in the current BaiLongma Chrome page without navigating. Returns structured query, found, total_matches, and current_match fields counted from the current rendered page text.', schema: objectSchema({ text: string('Exact text to find and count in the current rendered page.') }, ['text']) },
   browser_click: { description: 'Click an element in BaiLongma dedicated Chrome. For a browser-search submission only, when the accessibility snapshot exposes a search field but no submit-button uid, call this once with search_submit=true and element="search submit"; BaiLongma submits the focused field\'s real form. Never use this for accounts.google.com, X login, CAPTCHA, MFA, or OAuth consent; the user operates those personally.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.'), search_submit: boolean('True only for the one search-submit click when the current search form has no exposed submit-button uid.') }) },
   browser_type: { description: 'Focus an element and type ordinary non-authentication text. Set replace=true to replace an existing field value instead of appending; browser search contracts set this automatically. Account credentials, MFA, CAPTCHA and OAuth flows are user-only.', schema: objectSchema({ uid: string(uid), target: string(uid), ref: string(uid), element: string('Human-readable element description.'), text: string('Text to type.'), replace: boolean('Replace the field\'s current value with text.') }, ['text']) },
@@ -69,7 +71,7 @@ const DESCRIPTORS = Object.freeze({
   browser_drag: { description: 'Drag one snapshot element onto another.', schema: objectSchema({ from_uid: string(uid), to_uid: string(uid), source: string(uid), target: string(uid) }) },
   browser_wait_for: { description: 'Wait for text to appear on the active page and return a snapshot.', schema: objectSchema({ text: string('Text to wait for.'), timeout: number('Optional timeout in milliseconds.') }, ['text']) },
   browser_handle_dialog: { description: 'Handle a non-authentication browser dialog.', schema: objectSchema({ action: { type: 'string', enum: ['accept', 'dismiss'] }, prompt_text: string('Optional prompt text.') }, ['action']) },
-  browser_tabs: { description: 'List the one live page managed by BaiLongma. Multiple simultaneous managed tabs are not supported; use browser_navigate to replace the current page.', schema: objectSchema({ action: { type: 'string', enum: ['list'] } }) },
+  browser_tabs: { description: 'List, create, select or close task-owned Chrome tabs. Never operates unrelated user tabs.', schema: objectSchema({ action: { type: 'string', enum: ['list', 'create', 'select', 'close'] }, tab_id: number('Observed task-owned tab ID for select/close.') }) },
   browser_take_screenshot: { description: 'Capture the active BaiLongma Chrome page. The result includes a persisted image_path; if the user asked to receive or see the image, immediately deliver that path with send_message(image_path=...). Capture alone is not delivery.', schema: objectSchema({ full_page: boolean('Capture the entire page.'), type: { type: 'string', enum: ['png', 'jpeg', 'webp'] } }) },
   browser_console_messages: { description: 'List console messages from the active BaiLongma Chrome page.', schema: objectSchema({ page_size: number('Maximum number of messages.') }) },
   browser_resize: { description: 'Resize the active BaiLongma Chrome window viewport.', schema: objectSchema({ width: number('Viewport width.'), height: number('Viewport height.') }, ['width', 'height']) },

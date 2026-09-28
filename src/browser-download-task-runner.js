@@ -1,6 +1,6 @@
 import { callLLM } from './llm.js'
 import { config } from './config.js'
-import { emitEvent } from './events.js'
+import { emitEvent } from './runtime/events.js'
 import { isVoiceChannel, PRIMARY_USER_ID } from './identity.js'
 import { getBackgroundJobManager } from './background-job-manager.js'
 import { browserLeaseManager } from './runtime/browser-lease.js'

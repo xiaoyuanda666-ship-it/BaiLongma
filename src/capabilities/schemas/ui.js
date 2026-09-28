@@ -6,7 +6,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'start_browser_download_task',
-      description: 'Start an independent background task that uses BaiLongma\'s visible built-in browser to find an official software/file download and click the native download entry. This returns immediately with a job_id. Call it once for a new download request, then give only one short acknowledgement; do not wait, navigate, click, report progress, or call it again for the same request. Ordinary progress is shown by the background task UI. Completion/failure/user-decision events notify the Agent separately.',
+      description: 'Unavailable with BrowserSkill. Background download jobs are not integrated. Explain the limitation instead of promising a download.',
       parameters: {
         type: 'object',
         properties: {
@@ -24,7 +24,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'browser_clear_data',
-      description: 'Destructively clear selected data from BaiLongma dedicated Google Chrome only. It never accesses the user\'s computer/default Chrome profile. This tool is forbidden unless the CURRENT user message explicitly asks to delete/clear Bailongma\'s, the Agent\'s, or "your" browser data. Never call it when closing the browser, switching sizes, recovering from an error, signing out of a website, or doing routine cleanup. browser_close does not delete profile data. Dedicated-Chrome deletion is all-time only; ask a clarifying question when the requested data types or time range are ambiguous.',
+      description: 'Unavailable with BrowserSkill. Browser data clearing is not integrated; do not read or delete user Chrome profiles. Closing a session does not clear site data.',
       parameters: {
         type: 'object',
         properties: {
@@ -64,7 +64,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'system_browser_open',
-      description: 'Open an HTTP(S) URL in the browser installed on the user\'s computer (the macOS/Windows/Linux default browser). This user-owned surface is completely separate from BaiLongma\'s managed live WebContentsView in card/window mode. Use it only when the user explicitly says "用我电脑上的浏览器", "电脑浏览器", "系统/默认浏览器", or an equivalent phrase. Bailongma cannot inspect, click, or continue controlling that external browser after opening it, and their cookies/history are not shared. Do not use browser_navigate or browser_set_display_mode as a substitute for this explicit request.',
+      description: 'Compatibility alias for browser_navigate: open the URL in the selected real Chrome Agent Window through BrowserSkill.',
       parameters: {
         type: 'object',
         properties: {
@@ -78,34 +78,11 @@ export const uiSchemas = {
     },
   },
 
-  browser_set_display_mode: {
-    type: 'function',
-    function: {
-      name: 'browser_set_display_mode',
-      description: 'Choose the presentation of BaiLongma\'s single live managed WebContentsView without navigating or reloading it. Ordinary browser work already defaults to card, so call this only when the user requests a particular size or when window is required for user takeover, account login, Google OAuth, QR login, CAPTCHA, video, or careful interaction. window means an independent large window, not operating-system fullscreen. URL, history, title, and webContents id remain continuous. Neither mode is the computer\'s default browser. The Agent must never enter credentials, MFA, CAPTCHA, or OAuth consent.',
-      parameters: {
-        type: 'object',
-        properties: {
-          mode: {
-            type: 'string',
-            enum: ['card', 'window'],
-            description: 'card embeds the live managed WebContentsView in Brain UI; window moves that same view into its native window.',
-          },
-          reason: {
-            type: 'string',
-            description: 'Optional short reason for switching presentation mode.',
-          },
-        },
-        required: ['mode'],
-      },
-    },
-  },
-
   browser_download_manage: {
     type: 'function',
     function: {
       name: 'browser_download_manage',
-      description: 'Control an existing BaiLongma built-in-browser download by its automatically injected download id. Supported actions are pause, resume, cancel, and retry. Use only when the CURRENT user explicitly requests that exact action. Do not call this tool to query status or progress: the live <browser-downloads> context already supplies state, progress, exact save path, and available_actions without a tool call. Only choose an action listed in that download record. retry creates a new attempt and may use a new collision-safe filename.',
+      description: 'Unavailable with BrowserSkill. Download job pause/resume/cancel/retry is not integrated. Report the limitation; never claim success or use an embedded browser fallback.',
       parameters: {
         type: 'object',
         properties: {
@@ -191,7 +168,7 @@ export const uiSchemas = {
     type: 'function',
     function: {
       name: 'open_doc_panel',
-      description: 'Control the configuration documentation panel. Open it when the user needs voice, model, WeChat, or social-platform configuration help, or explicitly asks to open documentation. Close it when it is open but the conversation is unrelated to any configuration topic. Panel contents are injected as context for 30 minutes.',
+      description: 'Control the read-only user handbook. Prefer opening when the user explicitly asks to read instructions. Usually answer directly; offer help when the user is unsure. Occasionally open when visual guidance clearly helps, never solely on keyword matches. Respect user dismissal and do not automatically switch or close when the conversation changes. Configuration is performed by the user in application Settings. Reference context lasts 30 minutes.',
       parameters: {
         type: 'object',
         properties: {

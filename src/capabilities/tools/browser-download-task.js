@@ -1,3 +1,6 @@
+import { browserBackend } from '../../mcp/browser-backend.js'
+import { extractBrowserDownloadTaskTarget } from '../capability-registry.js'
+
 let startBrowserDownloadTask = null
 
 function toolJson(payload) {
@@ -9,7 +12,12 @@ export function configureBrowserDownloadTaskStarter(starter) {
 }
 
 export async function execStartBrowserDownloadTask(args = {}, context = {}) {
-  const target = String(args.target || args.query || args.name || '').trim()
+  if (browserBackend() === 'browserskill') return JSON.stringify({ ok: false, code: 'BSK_TOOL_UNSUPPORTED', error: 'This feature has not been integrated with BrowserSkill. No embedded-browser fallback was started.' })
+  // Bind the job to the target deterministically recovered from the current
+  // user request. The model still supplies a schema-valid argument, but cannot
+  // accidentally include an evaluation/destination suffix or change products.
+  const inferredTarget = extractBrowserDownloadTaskTarget(context.currentUserMessage || '')
+  const target = inferredTarget || String(args.target || args.query || args.name || '').trim()
   if (!target || target.length > 300) {
     return toolJson({
       ok: false,

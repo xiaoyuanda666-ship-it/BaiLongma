@@ -82,6 +82,17 @@ assert.deepEqual(startResult, {
 })
 assert.equal(startedPayload.context.currentTargetId, 'ID:download-user')
 
+const naturalStartResult = JSON.parse(await execStartBrowserDownloadTask({
+  target: 'capcut，看看你这个新版本表现怎么样',
+}, {
+  currentTargetId: 'ID:download-user',
+  currentChannel: 'TUI',
+  currentUserMessage: '你现在再次帮我下载capcut，看看你这个新版本表现怎么样',
+}))
+assert.equal(naturalStartResult.target, 'capcut',
+  'the start tool overrides a noisy model argument with the deterministic current-request target')
+assert.equal(startedPayload.args.target, 'capcut')
+
 let jobSequence = 0
 const serialManager = new BackgroundJobManager({
   idFactory: () => `bg-serial-${++jobSequence}`,

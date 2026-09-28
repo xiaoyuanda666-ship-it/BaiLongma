@@ -164,8 +164,5 @@ Write-Host "Root certificate file: $($tls.RootCertificate)"
 Write-Host 'If the page does not open, allow Node/Electron through Windows Firewall for private networks.'
 Write-Host ''
 
-if ($Mode -eq 'backend') {
-  node --env-file=.env src/index.js
-} else {
-  electron .
-}
+node (Join-Path $PSScriptRoot 'start.mjs') $Mode
+exit $LASTEXITCODE

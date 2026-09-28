@@ -597,7 +597,7 @@ export function buildWorldcupRuntimeContext(message = '') {
   return `## Worldcup Context
 Source: worldcup mode (zhibo8.cc live feed), automatically collected by the system. Sender: SYSTEM. Times are Beijing time. Purpose: current World Cup status as background; this is not a user request.
 
-The scores, match minutes and event timelines above are real-time data the system just fetched — answer questions about these matches directly from this context, and do not browse again to re-check their current score, status or events. Use BaiLongma dedicated Chrome only for what is not covered here (lineups, detailed stats, history, other competitions). Do not proactively summarize this context when the user's message is unrelated to football.
+The scores, match minutes and event timelines above are real-time data the system just fetched — answer questions about these matches directly from this context, and do not browse again to re-check their current score, status or events. Use BrowserSkill real Chrome only for what is not covered here (lineups, detailed stats, history, other competitions). Do not proactively summarize this context when the user's message is unrelated to football.
 
 Fetched at: ${cache.fetchedAt}${cache.stale ? ' (stale cache, refresh failed)' : ''}
 

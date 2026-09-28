@@ -9,7 +9,7 @@ import {
   updateMusicLrc,
   deleteMusicTrack as dbDeleteMusicTrack,
 } from '../../../db.js'
-import { emitEvent } from '../../../events.js'
+import { emitEvent } from '../../../runtime/events.js'
 import { paths } from '../../../paths.js'
 import { SANDBOX_ROOT } from '../../sandbox.js'
 

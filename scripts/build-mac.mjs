@@ -67,11 +67,7 @@ function cleanRequestedArtifacts() {
 run('node', ['scripts/check-native-dependency-versions.mjs']);
 cleanRequestedArtifacts();
 run('node', ['scripts/prepare-macos-native-deps.mjs', ...archs]);
-run('node', [
-  'scripts/prepare-playwright-browsers.mjs',
-  '--platform=darwin',
-  ...archs.map((arch) => `--arch=${arch}`),
-]);
+
 run('node', [
   'scripts/prepare-node-runtime.mjs',
   '--platform=darwin',

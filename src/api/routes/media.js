@@ -67,7 +67,7 @@ export async function handleMediaRoutes(req, res, url) {
       upsertMediaHistory(body)
       jsonResponse(res, 200, { ok: true })
     } catch (e) {
-      jsonResponse(res, 400, { ok: false, error: e.message })
+      jsonResponse(res, e.statusCode === 413 ? 413 : 400, { ok: false, error: e.message })
     }
     return true
   }
@@ -112,7 +112,7 @@ export async function handleMediaRoutes(req, res, url) {
       const result = saveGeneratedVideo(body.jobId)
       jsonResponse(res, result.ok ? 200 : 400, result)
     } catch (e) {
-      jsonResponse(res, 400, { ok: false, error: e.message })
+      jsonResponse(res, e.statusCode === 413 ? 413 : 400, { ok: false, error: e.message })
     }
     return true
   }

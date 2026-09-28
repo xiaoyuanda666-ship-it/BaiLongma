@@ -337,7 +337,7 @@ export default Object.freeze({
   "static.exampleLocalModel": "如 llama3.2, qwen2.5, mistral",
   "static.twentyItems": "20 条",
   "static.fiveItems": "5 条",
-  "static.builtinBrowser": "白龙马内置浏览器",
+  "static.builtinBrowser": "真实 Chrome（BrowserSkill）",
 
   "dynamic.fxUnlocked": "已解锁 ✓ 现在可以开启机器人音效了",
   "dynamic.ttsConfigFailed": "语音合成配置保存失败",

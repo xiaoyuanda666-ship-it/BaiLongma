@@ -113,7 +113,6 @@ function main() {
   run(process.execPath, ['scripts/check-native-dependency-versions.mjs'])
   run(process.execPath, ['scripts/prebuild-clean.mjs'])
   validateLinuxNativeDependencies()
-  run(process.execPath, ['scripts/prepare-playwright-browsers.mjs', '--platform=linux', '--arch=x64'])
   run(process.execPath, ['scripts/prepare-node-runtime.mjs', '--platform=linux', '--arch=x64'])
   run(process.execPath, [
     './node_modules/@electron/rebuild/lib/cli.js',
@@ -131,7 +130,6 @@ function main() {
   }
   assertElfX64(path.join(projectRoot, 'dist', 'linux-unpacked', pkg.name), 'packaged Bailongma executable')
   run(process.execPath, ['scripts/smoke-linux-artifacts.mjs'])
-  run(process.execPath, ['scripts/smoke-packaged-playwright.mjs'])
   console.log(`[build:linux] Bailongma ${pkg.version} Linux x64 build and smoke checks complete`)
 }
 

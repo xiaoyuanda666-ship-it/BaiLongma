@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertPrefetchTask, removePrefetchTask, listPrefetchTasks, setConfig as dbSetConfig, getRecentActionLogs } from '../db.js'
-import { emitEvent, setStickyEvent } from '../events.js'
+import { emitEvent, setStickyEvent } from '../runtime/events.js'
 import { getTerminalStreamSnapshot, recordTerminalStreamEvent } from '../terminal-stream.js'
 import { streamToolFileWriteExecutionPreview } from '../write-file-preview.js'
 import { stringifyJsonForTransport } from '../runtime/json-unicode.js'
@@ -13,7 +13,7 @@ import { setWorldcupPanelState, getWorldcupPanelState } from '../worldcup.js'
 import { setTyphoonPanelState, getTyphoonPanelState } from '../typhoon.js'
 import { setPersonCardPanelState, getPersonCardPanelState, getPersonCard } from '../person-cards.js'
 import { setKnowledgePanelState, getKnowledgePanelState } from '../knowledge/panel-state.js'
-import { setDocPanelState, getDocPanelState } from '../docs.js'
+import { DOC_TOPICS, setDocPanelState, getDocPanelState } from '../docs.js'
 import { setUserLocation } from '../weather.js'
 import { getAgentById, isDelegationAllowed } from '../agents/registry.js'
 import { installTool, uninstallTool, listInstalledTools, isInstalledTool, executeInstalledTool, getInstalledToolSchema } from './marketplace/index.js'
@@ -803,7 +803,7 @@ function execTyphoonMode(args = {}) {
 function execOpenDocPanel(args = {}) {
   const action = String(args.action || 'open').trim().toLowerCase()
   const nextActive = action !== 'close'
-  const validTopics = ['voice_asr', 'voice_tts', 'voice_config']
+  const validTopics = Object.keys(DOC_TOPICS)
 
   // 打开时 topic 必填；关闭时 topic 可省略（沿用当前面板已有的 topicId）
   let topic = args.topic ? String(args.topic).trim() : null
@@ -813,6 +813,7 @@ function execOpenDocPanel(args = {}) {
     else topic = 'voice_config'
   }
 
+  if (nextActive && !topic) topic = getDocPanelState().topicId || 'voice_config'
   const state = setDocPanelState({ active: nextActive, topicId: topic, source: 'agent_tool' })
 
   const effectiveTopic = topic || state.topicId

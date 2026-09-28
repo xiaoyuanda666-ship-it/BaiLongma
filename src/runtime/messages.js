@@ -212,7 +212,7 @@ function buildTickContinuityCheck({ conversationWindow = [], recentActions = [],
     'Heartbeat continuity check — do this privately before choosing any tool call or send_message:',
     '1. Treat the recent conversation, Recent assistant actions, Recent tool/action log, previous tool result, and verified outbound snapshot as the freshest evidence. They outrank generic memories for deciding what has already happened in this ongoing situation.',
     '2. Identify the exact next state you would create. If that state, result, message, or investigation is already present in the fresh evidence, do not repeat it.',
-    '3. Repeat an action only when there is a concrete reason in current evidence: a changed input, an explicit retry after a failure, a scheduled/due trigger, or a task step that genuinely still requires new work. Time passing by itself is not new evidence.',
+    '3. Repeat an action only when there is a concrete reason in current evidence: a changed input, an explicit retry after a failure, a scheduled/due trigger, or a task step that genuinely still requires new work. Elapsed time alone does not justify repeating an action or notification; crossing an agreed time, a recorded review time, a deadline, or an evidence-based waiting window can warrant reassessment. A review becoming due is not itself a reason to send another unanswered message.',
     '4. If no such delta exists, conclude silently. Silence after a completed or already-reported action is correct heartbeat behavior, not an unfinished response.',
   ].join('\n')
 }

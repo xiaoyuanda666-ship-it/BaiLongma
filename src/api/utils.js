@@ -52,34 +52,70 @@ export function decodeRequestBody(buffer, contentType = '') {
   }
 }
 
-export function readRawBody(req, { maxBytes = 0 } = {}) {
+// Ordinary JSON requests are small; media routes opt in to a larger finite limit.
+export const DEFAULT_REQUEST_BODY_MAX_BYTES = 1024 * 1024
+
+export function readRawBody(req, { maxBytes = DEFAULT_REQUEST_BODY_MAX_BYTES } = {}) {
   return new Promise((resolve, reject) => {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+      reject(new RangeError('maxBytes must be a positive safe integer'))
+      return
+    }
     const chunks = []
     let size = 0
     let done = false
+    const cleanup = () => {
+      req.removeListener('data', onData)
+      req.removeListener('end', onEnd)
+      req.removeListener('aborted', onAborted)
+      req.removeListener('error', onError)
+      req.removeListener('close', onClose)
+    }
     const fail = (err) => {
       if (done) return
       done = true
+      chunks.length = 0
+      req.removeListener('data', onData)
       reject(err)
+      // Drain without retaining bytes. Destroying the request here also destroys
+      // its socket before the route can send a useful HTTP 413 response.
+      req.resume()
     }
-    req.on('data', chunk => {
-      if (done) return
+    const tooLarge = () => {
+      const err = new Error(`request body too large (maximum ${maxBytes} bytes)`)
+      err.statusCode = 413
+      fail(err)
+    }
+    const onData = chunk => {
       size += chunk.length
-      if (maxBytes > 0 && size > maxBytes) {
-        const err = new Error('request body too large')
-        err.statusCode = 413
-        fail(err)
-        try { req.destroy() } catch {}
-        return
-      }
+      if (size > maxBytes) return tooLarge()
       chunks.push(chunk)
-    })
-    req.on('end', () => {
-      if (done) return
+    }
+    const onEnd = () => {
+      if (done) return cleanup()
       done = true
-      resolve(Buffer.concat(chunks))
-    })
-    req.on('error', fail)
+      cleanup()
+      const buffer = Buffer.concat(chunks, size)
+      chunks.length = 0
+      resolve(buffer)
+    }
+    const onAborted = () => {
+      const err = new Error('request body aborted')
+      err.statusCode = 400
+      fail(err)
+    }
+    const onError = err => fail(err)
+    const onClose = () => {
+      if (!done) onAborted()
+      cleanup()
+    }
+    req.on('data', onData)
+    req.on('end', onEnd)
+    req.on('aborted', onAborted)
+    req.on('error', onError)
+    req.on('close', onClose)
+    if (req.aborted || req.destroyed) onClose()
+    else if (Number(req.headers?.['content-length']) > maxBytes) tooLarge()
   })
 }
 

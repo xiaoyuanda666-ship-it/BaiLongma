@@ -1,6 +1,6 @@
 import { nowTimestamp } from '../../time.js'
 import { createReminder, findMergeableOneOffReminder, appendReminderTask, listPendingReminders, getReminderById, cancelReminder, normalizeConversationPartyId } from '../../db.js'
-import { emitEvent } from '../../events.js'
+import { emitEvent } from '../../runtime/events.js'
 import { PRIMARY_USER_ID } from '../../identity.js'
 
 function parseReminderDueAt(value) {

@@ -8,7 +8,7 @@ import {
   updateConversationDeliveryStatus,
   findUnansweredDeliveredOutbound,
 } from '../db.js'
-import { emitEvent } from '../events.js'
+import { emitEvent } from './events.js'
 import { dispatchSocialMessage } from '../social/dispatch.js'
 import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel } from '../identity.js'
 import { sanitizeAssistantReplyForDelivery } from './markers.js'

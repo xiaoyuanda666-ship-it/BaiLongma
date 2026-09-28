@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { nowTimestamp } from '../../../time.js'
-import { emitEvent } from '../../../events.js'
+import { emitEvent } from '../../../runtime/events.js'
 import { callCapability } from '../../../providers/registry.js'
 import { isDailyLimitReached } from '../../../quota.js'
 import { SANDBOX_ROOT } from '../../sandbox.js'

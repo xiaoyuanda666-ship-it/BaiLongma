@@ -2,6 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { Writable } from 'stream'
+import vm from 'node:vm'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-browser-display-'))
 process.env.BAILONGMA_USER_DIR = tmp
@@ -51,6 +52,35 @@ class CaptureResponse extends Writable {
 }
 
 try {
+  // Exercise actual renderer payloads with a stale challenge URL. Neither
+  // geometry synchronization nor enlargement may turn it into navigation.
+  const uiSource = fs.readFileSync(new URL('./ui/brain-ui/app.js', import.meta.url), 'utf8')
+  const extractFunction = (name, nextName) => uiSource.slice(
+    uiSource.indexOf(`function ${name}(`), uiSource.indexOf(`function ${nextName}(`),
+  ).replace(/async\s*$/, '')
+  const updates = []
+  const ui = vm.createContext({
+    browserEmbedBridge: {}, browserPreviewActive: true, browserPreviewEl: { hidden: false },
+    document: { visibilityState: 'visible' },
+    browserPreviewNativeSlotEl: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 500, height: 300 }) },
+    getComputedStyle: () => ({ borderTopLeftRadius: '12' }), window: {},
+    browserPreviewNativeUrl: 'https://example.org/challenge',
+    browserPreviewHostTransitioning: false, browserPreviewHostTransitionTarget: '',
+    browserPreviewDisplayMode: 'card', browserPreviewHostTransitionToken: 0,
+    browserPreviewLoadToken: 0, browserPreviewPending: false, browserEmbedFrameRequest: 0,
+    lastBrowserEmbedGeometry: '', browserPreviewTransitionDuration: () => 0,
+    callBrowserEmbed: async (_method, payload) => { updates.push(payload) },
+    concealBrowserPreviewSurface: () => {}, finalizeBrowserPreviewHidden: () => {},
+  })
+  vm.runInContext(extractFunction('browserEmbedPayload', 'syncNativeBrowserEmbed'), ui)
+  const payload = vm.runInContext('browserEmbedPayload()', ui)
+  assert(payload.mode === 'card' && !('url' in payload),
+    'card geometry never replays a stale challenge URL')
+  vm.runInContext('async ' + extractFunction('showNativeBrowserWindow', 'loadBrowserPreviewImage'), ui)
+  await vm.runInContext('showNativeBrowserWindow({ url: "https://example.org/challenge" })', ui)
+  assert(updates[0]?.mode === 'window' && !('url' in updates[0]),
+    'enlarging the live page never replays a stale preview URL')
+
   assert(inferBrowserDisplayMode('帮我查一下 Playwright MCP 最新资料') === 'card',
     'small information lookup uses the compact browser card')
   assert(inferBrowserDisplayMode('在百度搜索 bailongma') === 'card',

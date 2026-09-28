@@ -181,7 +181,9 @@ const continuityMessages = buildLLMMessages({
 const continuityContext = continuityMessages.find(message => String(message.content || '').includes('Heartbeat continuity check'))?.content || ''
 assert(continuityContext.includes('freshest evidence'), 'Tick prioritizes recent conversation and execution evidence')
 assert(continuityContext.includes('do not repeat it'), 'Tick continuity check blocks already-completed work')
-assert(continuityContext.includes('Time passing by itself is not new evidence'), 'Tick does not treat elapsed time as a retry trigger')
+assert(continuityContext.includes('Elapsed time alone does not justify repeating an action or notification'), 'Tick does not treat elapsed time as a retry trigger')
+assert(continuityContext.includes('crossing an agreed time, a recorded review time, a deadline'), 'Tick recognizes meaningful temporal boundaries')
+assert(continuityContext.includes('A review becoming due is not itself a reason to send another unanswered message'), 'review timing does not bypass unanswered-message boundaries')
 
 const scheduledMessages = buildLLMMessages({
   systemPrompt: 'SYS',

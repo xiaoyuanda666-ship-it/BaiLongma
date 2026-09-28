@@ -58,7 +58,9 @@ assert.equal(pkg.build.nsis.createStartMenuShortcut, true)
 assert.equal(pkg.build.nsis.createDesktopShortcut, false)
 assert.doesNotMatch(winBuild, /build-macos-speech/)
 assert.match(winBuild, /'-a', 'x64'/)
-assert.ok(winBuild.indexOf('smoke-win-artifacts.mjs') < winBuild.indexOf('smoke-packaged-playwright.mjs'))
+// Real Chrome replaced packaged Playwright; retain the Windows artifact check.
+assert.match(winBuild, /run\(process\.execPath, \['scripts\/smoke-win-artifacts\.mjs'\]\)/)
+assert.doesNotMatch(winBuild, /prepare-playwright-browsers\.mjs|smoke-packaged-playwright\.mjs/)
 
 const licenseRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'bailongma-node-license-'))
 try {

@@ -78,7 +78,7 @@ export async function handleTTSRoutes(req, res, url) {
       })
     } catch (err) {
       console.warn('[TTS] Streaming synthesis failed:', err.message)
-      if (!res.headersSent) jsonResponse(res, 500, { ok: false, error: err.message })
+      if (!res.headersSent) jsonResponse(res, err.statusCode === 413 ? 413 : 500, { ok: false, error: err.message })
       else try { res.end() } catch {}
     }
     return true
@@ -96,7 +96,7 @@ export async function handleTTSRoutes(req, res, url) {
       emitEvent('tts_interrupted', { spokenContent })
       jsonResponse(res, 200, { ok: true, updated })
     } catch (e) {
-      jsonResponse(res, 500, { error: e.message })
+      jsonResponse(res, e.statusCode === 413 ? 413 : 500, { error: e.message })
     }
     return true
   }

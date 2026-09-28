@@ -1,4 +1,4 @@
-import { emitEvent } from '../../../events.js'
+import { emitEvent } from '../../../runtime/events.js'
 import { getCountryCode } from '../../../geo-weather.js'
 
 export function execMediaMode(args = {}) {

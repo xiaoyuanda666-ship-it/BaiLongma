@@ -1,3 +1,4 @@
+import { browserBackend } from '../../mcp/browser-backend.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from '../../mcp/browser-data-intent.js'
 import { shutdownBuiltInChrome } from '../../mcp/client-manager.js'
 
@@ -55,6 +56,7 @@ function normalizeArguments(args = {}) {
 }
 
 export async function execBrowserClearData(args = {}, context = {}) {
+  if (browserBackend() === 'browserskill') return JSON.stringify({ ok: false, code: 'BSK_TOOL_UNSUPPORTED', error: 'This feature has not been integrated with BrowserSkill. No embedded-browser fallback was started.' })
   if (!isExplicitAgentBrowserDataDeletionRequest(context.currentUserMessage || '')) {
     return failure(
       'EXPLICIT_USER_REQUEST_REQUIRED',

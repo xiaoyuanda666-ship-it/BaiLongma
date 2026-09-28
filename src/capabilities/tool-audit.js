@@ -1,5 +1,5 @@
 import { insertActionLog } from '../db.js'
-import { emitEvent } from '../events.js'
+import { emitEvent } from '../runtime/events.js'
 import { classifyTool } from './tool-policy.js'
 import { previewValue, safeJsonStringify } from './tool-utils.js'
 

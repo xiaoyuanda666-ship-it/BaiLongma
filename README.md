@@ -41,6 +41,8 @@ data/                  本地运行数据，打包时不会带入安装包
 
 ## 运行方式
 
+建议使用 Node.js 22.12 或更高的 LTS 版本（`@electron/rebuild` 要求 Node.js ≥22.12）。`npm start`、`npm run start:backend` 和 `npm run dev` 支持 Windows、macOS 和 Linux；后端启动时会加载项目根目录中存在的 `.env`，没有该文件也可启动。
+
 先安装依赖：
 
 ```bash
@@ -53,7 +55,7 @@ npm install
 npm start
 ```
 
-需要从 iPad、手机或另一台电脑访问时，使用安全局域网模式：
+Windows 上需要从 iPad、手机或另一台电脑访问时，可使用安全局域网脚本（依赖 Windows PowerShell 证书工具）：
 
 ```bash
 npm run start:lan
@@ -82,7 +84,7 @@ npm run start:backend
 npm run dev
 ```
 
-需要局域网访问时，可以使用仓库里已有的启动脚本：
+Windows 上也可以用以下脚本启动局域网桌面端或后端；macOS/Linux 请使用桌面端“设置 → 安全 → 局域网访问”：
 
 ```bash
 npm run start:lan
@@ -106,7 +108,7 @@ MINIMAX_API_KEY=your_key
 - 嵌入、网页搜索和安全开关。
 - Agent 名称、UI 行为和媒体相关偏好。
 
-配置会持久化到本地数据目录。敏感设置接口默认只允许本机访问；需要远程访问时应结合环境变量开启局域网访问或设置 API Token。
+配置会持久化到本地数据目录。局域网业务接口需要配对口令；浏览器通过配对链接建立短期 HttpOnly 会话，以访问聊天、实时消息和媒体。原生 API 客户端使用 `Authorization: Bearer <口令>`，并需开启局域网访问。页面和配对证书等启动资源可以匿名加载；跨源页面及 `Origin: null` 请求不能调用业务接口。
 
 ## Web 入口
 
@@ -161,6 +163,8 @@ http://127.0.0.1:3721
 | `POST` | `/admin/reset-files` | 清空沙箱文件 |
 
 部分接口还用于 Brain UI 内部面板，例如热点、文档、人物卡片、媒体历史、AI 视频面板、ACUI 和云端语音识别。
+
+普通 JSON 请求体默认限制为 1 MiB，超限返回 HTTP 413。聊天 `/message` 的完整请求体限制为 30 MiB，以兼容 base64 图片；文件资源、知识导入和视频接口使用各自的有限上传上限。
 
 ## 数据与持久化
 
@@ -239,7 +243,7 @@ npm run build:win
 ```
 
 Windows 构建目前只支持 x64，必须在 x64 Windows Node 进程中执行。构建脚本会检查
-Windows 版 Sharp、Sherpa ONNX、ONNX Runtime、better-sqlite3、内置 Chromium 和 Node
+Windows 版 Sharp、Sherpa ONNX、ONNX Runtime、better-sqlite3 和 Node
 runtime，并在打包后运行真实产物 smoke test。正式发布时使用
 `npm run build:win:release`；该命令要求最终 NSIS 安装器具有有效的 Authenticode 签名。
 
@@ -261,3 +265,7 @@ npm run publish
 ## License
 
 [MIT License](./LICENSE)
+
+## 浏览器架构
+
+网页操作统一通过腾讯 BrowserSkill 操作用户选择的真实 Chrome Agent Window。Electron 仅显示应用界面，不再内嵌网页。请在 Brain UI 的“Chrome 浏览器任务”中配置 CLI 路径、选择 Chrome 实例和接管/恢复会话。详见 [接入、能力与生命周期说明](docs/browserskill-backend.md)。

@@ -115,7 +115,8 @@ export async function handleMessageRoutes(req, res, url) {
 
   let claim = null
   try {
-    const body = await readJsonBody(req)
+    // Allow base64 chat images while bounding the complete JSON envelope.
+    const body = await readJsonBody(req, { maxBytes: 30 * 1024 * 1024 })
     const { from_id = 'ID:000001', content = '', channel = 'API' } = body
     const trimmed = String(content || '').trim()
     const enhanced = appendInboundChatMediaMarkdown(trimmed, body)
@@ -186,7 +187,7 @@ export async function handleMessageRoutes(req, res, url) {
     })
   } catch (e) {
     if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
-    jsonResponse(res, 400, { error: e.message })
+    jsonResponse(res, e.statusCode === 413 ? 413 : 400, { error: e.message })
   }
   return true
 }

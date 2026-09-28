@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import { openModelStream } from './composition/model-services.js'
 import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, switchModel } from './config.js'
 import { executeTool } from './capabilities/executor.js'
 import { getToolSchemas } from './capabilities/schemas.js'
@@ -63,21 +63,6 @@ function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null, to
       }
     }
   } catch { /* 非 JSON 结果（如错误串）忽略 */ }
-}
-
-// 延迟创建 OpenAI 客户端：激活流程把 key 写入 config 后再调用这里，
-// 避免模块加载阶段就锁死尚未填入的 apiKey/baseURL。
-let client = null
-let clientKey = null
-function getClient() {
-  const signature = `${config.provider}|${config.baseURL}|${config.apiKey}`
-  if (client && clientKey === signature) return client
-  if (!config.apiKey) {
-    throw new Error('LLM 尚未激活，请先通过激活页填入 API Key')
-  }
-  client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseURL })
-  clientKey = signature
-  return client
 }
 
 function normalizeTemperatureForProvider(temperature, model = config.model) {
@@ -229,7 +214,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   try {
   // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
-  const stream = await getClient().responses.create(requestParams, { signal: reqController.signal })
+  const stream = await openModelStream({ protocol: 'responses', params: requestParams, signal: reqController.signal })
   for await (const event of stream) {
     armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break

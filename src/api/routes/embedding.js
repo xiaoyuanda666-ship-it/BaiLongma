@@ -50,11 +50,13 @@ export async function handleEmbeddingRoutes(req, res, url) {
       try {
         const body = await readJsonBody(req)
         force = !!body.force
-      } catch {}
+      } catch (err) {
+        if (err.statusCode === 413 || req.aborted) throw err
+      }
       runBackfill({ batchSize: 20, throttleMs: 200, force }).catch(() => {})
       jsonResponse(res, 200, { ok: true, started: true, force, status: getBackfillStatus() })
     } catch (err) {
-      jsonResponse(res, 500, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 500, { ok: false, error: err.message })
     }
     return true
   }

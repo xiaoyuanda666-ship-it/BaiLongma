@@ -85,4 +85,40 @@ const streamStart = {
   assert.equal(failed.text, '尚未播放。')
 }
 
+// A tool acknowledgement must not consume playback permission for its result.
+for (const streamingEnabled of [false, true]) {
+  const coordinator = createVoiceReplyCoordinator(clientA)
+  const ack = coordinator.finalMessage(
+    { ...streamStart, conversation_id: 101 }, '我看一下～',
+  )
+  assert.equal(coordinator.markFallbackStarted(ack.turn), true)
+  if (streamingEnabled) coordinator.streamStart(streamStart)
+  const result = coordinator.finalMessage(
+    { ...streamStart, conversation_id: 102 }, '通了，密钥没问题。',
+  )
+  assert.notEqual(result.turn, ack.turn)
+  assert.equal(result.action, streamingEnabled ? 'finalize_stream' : 'play_full')
+  if (!streamingEnabled) assert.equal(coordinator.markFallbackStarted(result.turn), true)
+  assert.equal(coordinator.finalMessage(
+    { ...streamStart, conversation_id: 102 }, '通了，密钥没问题。',
+  ).reason, 'duplicate-message')
+}
+
+// A failed earlier stream must not remove characters from the next reply.
+{
+  const coordinator = createVoiceReplyCoordinator(clientA)
+  coordinator.streamStart(streamStart)
+  coordinator.streamFailed(streamStart, { spokenPrefix: '已经播放。' })
+  const first = coordinator.finalMessage(
+    { ...streamStart, conversation_id: 103 }, '已经播放。剩余内容。',
+  )
+  coordinator.markFallbackStarted(first.turn)
+  const next = coordinator.finalMessage(
+    { ...streamStart, conversation_id: 104 }, '新的完整结果。',
+  )
+  assert.equal(next.action, 'play_full')
+  assert.equal(next.text, '新的完整结果。')
+  assert.equal(coordinator.markFallbackStarted(next.turn), true)
+}
+
 console.log('Voice reply routing and fallback tests passed')

@@ -92,7 +92,7 @@ export function isBrowserAccessBlockedAfterChallenge(toolName) {
   return name.startsWith('browser_') || BLOCKED_WEB_TOOLS.has(name)
 }
 
-const STOP_INSTRUCTION = 'Stop all automated web access for this user turn. Do not navigate to another provider, click, type, inspect repeatedly, solve the challenge, or close the page. Leave it available for the user; browser_set_display_mode may only expose the same page for manual takeover.'
+const STOP_INSTRUCTION = 'Stop all automated web access for this user turn. Do not navigate to another provider, click, type, inspect repeatedly, solve the challenge, or close the page. Leave it available for the user; The same real Chrome Agent Window remains available; use the browser task controls to take over and explicitly resume.'
 
 export function markBrowserChallengeResult(result, detection) {
   const guard = {

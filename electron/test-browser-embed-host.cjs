@@ -630,6 +630,10 @@ async function run() {
   assert.equal(FakeBaseWindow.instances[0].visible, true, 'the same large browser can be shown again')
   assert.equal(host.getState(mainWindow).webContentsId, windowState.webContentsId)
 
+  // Manual verification completes in the large window before a card update.
+  view.webContents.url = 'https://example.org/verified-results'
+  view.webContents.emit('did-navigate', {}, view.webContents.url)
+
   FakeBaseWindow.instances[0].setContentBounds({ x: 70, y: 55, width: 1080, height: 720 })
 
   await host.update(mainWindow, {
@@ -651,6 +655,8 @@ async function run() {
     animate: true,
   }, 'window-to-card transition shrinks to the final card screen rectangle')
   assert.equal(view.webContents.loadCalls.length, 3, 'reverse host switching also preserves the page')
+  assert.equal(host.getState(mainWindow).url, 'https://example.org/verified-results',
+    'returning to card preserves the destination reached by manual verification')
 
   await host.update(mainWindow, {
     mode: 'window',

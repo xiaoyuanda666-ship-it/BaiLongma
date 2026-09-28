@@ -53,8 +53,22 @@ export function createVoiceReplyCoordinator(uiClientId) {
     return turn;
   }
 
+  // One user turn may deliver an acknowledgement and a later result. Playback
+  // state belongs to each reply; keep routing permission across those replies.
+  function ensureReply(data = {}) {
+    const previous = ensureTurn(data);
+    if (!previous.finalData) return previous;
+    turns.delete(previous.id);
+    return ensureTurn({
+      turn_id: previous.id,
+      target_client_id: previous.targetClientId,
+      speak: previous.wantsSpeech,
+      ...data,
+    });
+  }
+
   function streamStart(data = {}, { streamingEnabled = true } = {}) {
-    const turn = ensureTurn(data);
+    const turn = ensureReply(data);
     const eligible = data.speak === true && turn.targetMatched;
     turn.wantsSpeech = turn.wantsSpeech || data.speak === true;
     turn.streamingSelected = Boolean(eligible && streamingEnabled);
@@ -111,7 +125,7 @@ export function createVoiceReplyCoordinator(uiClientId) {
     }
     if (key) handledMessages.add(key);
 
-    const turn = ensureTurn(data);
+    const turn = ensureReply(data);
     turn.finalData = data;
     turn.finalText = normalize(text);
     turn.wantsSpeech = turn.wantsSpeech || data.speak === true;

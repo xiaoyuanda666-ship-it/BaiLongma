@@ -17,6 +17,9 @@ export function shouldHandlePttKeyEvent(event, messageInput = null) {
   if (event?.isComposing) return false;
 
   const target = event?.target;
+  // 保留设置按钮等控件的原生空格键操作，避免误触发开麦。
+  if (['BUTTON', 'SELECT', 'A'].includes(target?.tagName)
+    || target?.closest?.('button, select, a[href], [role="button"]')) return false;
   const isTypingTarget = Boolean(
     target
     && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable),

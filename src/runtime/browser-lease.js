@@ -119,3 +119,19 @@ export class BrowserLeaseManager {
 }
 
 export const browserLeaseManager = new BrowserLeaseManager()
+
+// Keep ownership in a shared object: tool invocations shallow-copy their context.
+export function createBrowserTurnLeaseState() {
+  return { lease: null }
+}
+
+export function releaseBrowserTurnLease(context, reason = 'Agent turn finished') {
+  const state = context?.browserLeaseState
+  state?.lease?.release(reason)
+  if (state) state.lease = null
+  if (context?.browserLeaseOwnedByTurn) {
+    context.browserLease?.release(reason)
+    context.browserLease = null
+    context.browserLeaseOwnedByTurn = false
+  }
+}

@@ -136,3 +136,37 @@ export function apiWebSocketProtocols() {
   if (token) protocols.push(`bailongma.auth.${base64UrlEncode(token)}`);
   return protocols;
 }
+
+// Complete pairing before dependent modules open SSE, WebSocket or media URLs.
+async function renewApiSession() {
+  if (!getApiToken()) return;
+  try {
+    const response = await browserWindow.fetch(`${API}/auth/session`, { method: "POST" });
+    if (!response.ok) throw new Error("连接口令无效，请重新打开设备配对链接。");
+    browserWindow.document?.getElementById("api-pairing-error")?.remove();
+  } catch (error) {
+    // Desktop loopback access does not require a saved pairing token.
+    if (["localhost", "127.0.0.1", "[::1]"].includes(browserWindow.location.hostname)) return;
+    const showError = () => {
+      const doc = browserWindow.document;
+      if (!doc?.body || doc.getElementById("api-pairing-error")) return;
+      const notice = doc.createElement("div");
+      notice.id = "api-pairing-error";
+      notice.setAttribute("role", "alert");
+      notice.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;padding:12px;background:#7f1d1d;color:white;text-align:center";
+      notice.textContent = error.message || "连接失败，请检查网络后刷新页面。";
+      doc.body.appendChild(notice);
+    };
+    if (browserWindow.document?.body) showError();
+    else browserWindow.document?.addEventListener("DOMContentLoaded", showError, { once: true });
+  }
+}
+
+if (browserWindow?.fetch && HTTP_PROTOCOL.test(browserWindow.location.protocol)) {
+  await renewApiSession();
+  // Refresh before the 12-hour cookie expiry, including after laptop sleep.
+  const refreshTimer = setInterval(renewApiSession, 4 * 60 * 60 * 1000);
+  refreshTimer.unref?.();
+  browserWindow.addEventListener?.("focus", renewApiSession);
+  browserWindow.addEventListener?.("online", renewApiSession);
+}

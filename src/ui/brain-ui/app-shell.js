@@ -165,11 +165,7 @@ const createSecondaryPanel = () => `
           <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
         </div>
       </div>
-      <div class="browser-preview" id="browser-preview" data-state="idle" aria-label="Agent 正在操作浏览器" hidden>
-        <div class="browser-preview-viewport" id="browser-preview-native-slot">
-          <img class="browser-preview-image" id="browser-preview-image" alt="Agent 正在操作的实时网页" draggable="false">
-        </div>
-      </div>
+
     </section>
 
     <section class="l2-module cognition-module" aria-labelledby="cognition-title">
@@ -859,7 +855,7 @@ const createSettingsModal = () => `
             <div class="settings-section-label">工具黑名单</div>
             <p class="settings-hint">勾选后该工具将被拒绝执行，对话中 Agent 调用时会收到"已被安全策略禁用"错误。</p>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="run_command"> run_command &nbsp;<span style="color:var(--ink2);font-size:12px;">（执行 shell 命令）</span></label></div>
-            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="chrome_devtools_browser"> 白龙马内置浏览器 &nbsp;<span style="color:var(--ink2);font-size:12px;">（Chrome DevTools MCP 的全部网页搜索、读取与浏览器操作）</span></label></div>
+            <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="chrome_devtools_browser"> 真实 Chrome（BrowserSkill） &nbsp;<span style="color:var(--ink2);font-size:12px;">（所选 Chrome 的全部网页搜索、读取与浏览器操作）</span></label></div>
             <div class="settings-row"><label class="settings-label"><input type="checkbox" class="security-blocked-tool" value="ui_set"> ui_set &nbsp;<span style="color:var(--ink2);font-size:12px;">（投影声明式界面 surface）</span></label></div>
           </div>
           <div class="settings-section settings-section-action">

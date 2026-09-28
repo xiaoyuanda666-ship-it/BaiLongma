@@ -81,6 +81,8 @@ try {
   for (const phrase of [
     '下载 CapCut',
     '帮我下载豆包',
+    '你现在再次帮我下载capcut，看看你这个新版本表现怎么样',
+    '这次再帮我下载 CapCut',
     '帮我下载腾讯出的智能体马维斯',
     '下载 CapCut 并保存到下载目录',
     '用内置浏览器打开豆包官网并下载电脑版',
@@ -96,6 +98,8 @@ try {
     'a browser/software download destination is not a local file-creation request')
   assert.equal(classifyActionContract('下载到哪里了？'), null,
     'a status question reads automatically injected task context instead of starting another job')
+  assert.equal(classifyActionContract('你下载过什么'), null,
+    'a question about prior downloads is not mistaken for a new background task')
   let downloadStartRounds = 0
   const downloadStartCalls = []
   const downloadStartResult = await callLLM({

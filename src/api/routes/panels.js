@@ -52,7 +52,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         const state = setHotspotPanelState({ active, source: body.source || 'brain-ui' })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }
@@ -85,7 +85,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         const state = setWorldcupPanelState({ active, source: body.source || 'brain-ui' })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }
@@ -112,7 +112,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         const state = setTyphoonPanelState({ active: parseBooleanish(body.active), source: body.source || 'brain-ui' })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }
@@ -130,7 +130,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         const state = setDocPanelState({ active, topicId: body.topicId || null, source: body.source || 'brain-ui' })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }
@@ -176,7 +176,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }
@@ -199,7 +199,7 @@ export async function handlePanelRoutes(req, res, url, { getStateSnapshot = null
         })
         jsonResponse(res, 200, { ok: true, state })
       } catch (err) {
-        jsonResponse(res, 400, { ok: false, error: err.message })
+        jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
       }
       return true
     }

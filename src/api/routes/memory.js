@@ -73,7 +73,7 @@ async function handleMemories(req, res, url) {
       if (detail !== undefined) db.prepare('UPDATE memories SET detail = ? WHERE id = ?').run(detail, id)
       jsonResponse(res, 200, { ok: true })
     } catch (e) {
-      jsonResponse(res, 400, { error: e.message })
+      jsonResponse(res, e.statusCode === 413 ? 413 : 400, { error: e.message })
     }
     return true
   }

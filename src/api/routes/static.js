@@ -117,6 +117,11 @@ function serveAsset(req, res, assetRoot, relativePrefix) {
 }
 
 export async function handleStaticRoutes(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/focus-banner.html') {
+    serveHtml(res, path.join(paths.resourcesDir, 'focus-banner.html'), 'focus-banner.html not found')
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname === '/bailongma-lan-root-ca.cer') {
     const caPath = String(globalThis.process?.env?.BAILONGMA_LAN_CA_CERT || '').trim()
     if (!caPath) {

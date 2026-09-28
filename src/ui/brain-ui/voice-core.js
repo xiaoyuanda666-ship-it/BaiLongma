@@ -645,7 +645,12 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
   async function startMic() {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStatus('error');
+      if (transcript) transcript.textContent = '当前页面无法访问麦克风，请使用桌面应用或 HTTPS 页面。';
       return null;
+    }
+    if (transcript) {
+      transcript.removeAttribute('role');
+      transcript.replaceChildren();
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -663,10 +668,40 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
             audio: makeAudioConstraints(''),
           });
           return attachMicStream(fallbackStream);
-        } catch {}
+        } catch (fallbackError) { e = fallbackError; }
       }
-      // 权限拒绝时球体变红，不在 transcript 显示文字
+      diag('microphone-error', { name: e?.name, message: e?.message });
       setStatus('error');
+      if (transcript) {
+        const denied = e?.name === 'NotAllowedError' || e?.name === 'SecurityError';
+        const desktop = window.bailongma;
+        const canOpenSettings = denied && desktop?.openMicrophoneSettings
+          && ['darwin', 'win32'].includes(desktop.platform);
+        transcript.setAttribute('role', 'alert');
+        transcript.textContent = denied
+          ? (canOpenSettings
+            ? '麦克风权限未开启。请在系统设置中允许 Bailongma 使用麦克风，然后点击语音按钮重试；若仍无法录音，请退出并重新打开应用。'
+            : '麦克风访问被拒绝。请在浏览器的网站权限和系统设置中允许使用麦克风，然后重试。')
+          : e?.name === 'NotFoundError'
+            ? '未找到麦克风，请连接麦克风后点击语音按钮重试。'
+            : '无法启动麦克风，请检查设备是否可用或被其他应用占用，然后重试。';
+        if (canOpenSettings) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'voice-permission-settings';
+          button.textContent = '打开麦克风设置';
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+              const result = await desktop.openMicrophoneSettings();
+              if (!result?.opened) throw new Error('settings unavailable');
+            } catch {
+              button.textContent = '无法打开，请手动前往系统麦克风设置';
+            } finally { button.disabled = false; }
+          });
+          transcript.appendChild(button);
+        }
+      }
       return null;
     }
   }

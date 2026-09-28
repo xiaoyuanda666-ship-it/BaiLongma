@@ -1,3 +1,4 @@
+import { isTrustedRequestOrigin, hasValidSession } from './request-security.js'
 import crypto from 'crypto'
 import net from 'net'
 
@@ -58,17 +59,6 @@ export function selectWebSocketProtocol(protocols) {
   return protocols.has(WS_PUBLIC_PROTOCOL) ? WS_PUBLIC_PROTOCOL : false
 }
 
-function isAllowedWebSocketOrigin(origin, remoteIsLoopback, lanEnabled) {
-  // Native WebSocket clients commonly omit Origin. Browser file:// and Electron use null locally.
-  if (!origin) return true
-  if (origin === 'null') return remoteIsLoopback
-  try {
-    const hostname = new URL(origin).hostname
-    if (isLoopbackAddress(hostname)) return true
-    return lanEnabled && isPrivateLanAddress(hostname)
-  } catch { return false }
-}
-
 export function authorizeWebSocketUpgrade(req, {
   pathname,
   lanEnabled,
@@ -79,7 +69,7 @@ export function authorizeWebSocketUpgrade(req, {
 
   const remoteAddress = req.socket?.remoteAddress
   const remoteIsLoopback = isLoopbackAddress(remoteAddress)
-  if (!isAllowedWebSocketOrigin(req.headers?.origin, remoteIsLoopback, lanEnabled)) {
+  if (!isTrustedRequestOrigin(req)) {
     return { ok: false, status: 403, reason: 'forbidden_origin' }
   }
   if (remoteIsLoopback) return { ok: true }
@@ -88,7 +78,7 @@ export function authorizeWebSocketUpgrade(req, {
     return { ok: false, status: 403, reason: 'forbidden' }
   }
   const credential = getWebSocketCredential(req)
-  if (!timingSafeTokenEqual(credential, expectedToken)) {
+  if (!timingSafeTokenEqual(credential, expectedToken) && !hasValidSession(req, expectedToken)) {
     return { ok: false, status: 403, reason: 'forbidden' }
   }
   return { ok: true }

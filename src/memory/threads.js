@@ -38,19 +38,31 @@ const SIGNATURE_LIMIT = 8
 // ngram 抽取器会把功能词碎片（"这个""续把""帮我"）排上来，它们跨话题高频出现，
 // 用于归属匹配是纯噪声。匹配前过滤；展示 topic 也跟着干净。
 const NOISE_TOKEN_RE = /^(这个|那个|什么|怎么|为什|可以|我们|你们|他们|帮我|给我|一下|一个|继续|部分|现在|今天|明天|昨天|晚上|早上|然后|还是|就是|但是|因为|所以|如果|这样|那样|的话|时候|问题|事情|东西|网页|网站|网址|页面|链接|地址|文件|文档|内容)/
+const PRONOUN_FRAGMENT_RE = /^[你我他她它](?:现|在|要|想|能|会|是|不|还|正|刚|这|那|的|帮|给|下|看)/
+const META_EVALUATION_SUFFIX_RE = /[，,；;]\s*(?:再)?(?:看看|看下|试试|验证(?:一下)?)\s*(?:你|这个|这次|新版本|这个新版本).{0,24}(?:表现|效果|怎么样|如何)[。.!！?？]*$/i
+function normalizeAttributionToken(token) {
+  const value = String(token || '').trim()
+  return /^[a-z0-9_-]+$/i.test(value) ? value.toLowerCase() : value
+}
 function filterNoiseTokens(kws) {
   return (kws || []).filter(k => {
     const t = String(k || '').trim()
     if (!t) return false
     if (/^[a-z0-9_-]+$/i.test(t)) return t.length >= 3   // 英文/数字词：太短的丢掉
-    if (NOISE_TOKEN_RE.test(t)) return false
+    if (NOISE_TOKEN_RE.test(t) || PRONOUN_FRAGMENT_RE.test(t)) return false
     return t.length >= 2
-  })
+  }).map(normalizeAttributionToken)
+}
+
+function primaryAttributionText(text) {
+  return String(text || '').replace(META_EVALUATION_SUFFIX_RE, '')
 }
 
 // 抽取用于归属判定的关键词（统一入口：消息侧与线索签名侧同源）
 function extractAttributionKeywords(text) {
-  return filterNoiseTokens(extractKeywords(String(text || ''), KEYWORD_EXTRACT_BUDGET))
+  // “再做一次 X，看看这个版本表现如何”里的后半句是在评价当前动作，不能让“版本/表现”
+  // 把消息吸回一个旧版本话题。归属只取逗号前的主动作；原消息仍完整交给 Agent。
+  return filterNoiseTokens(extractKeywords(primaryAttributionText(text), KEYWORD_EXTRACT_BUDGET))
 }
 
 // 切换门槛不对称（DynamicMemoryPool.md 8.5）：
@@ -62,9 +74,10 @@ const BACKGROUND_RESUME_OVERLAP_MIN = 2
 // 一次性叶子（沿用 focus.js 的标定）：不该开线索的消息。
 const ONE_OFF_LEAF_RE = /天气|气温|温度|下雨|下雪|空气质量|AQI|几点|几号|星期几|汇率|股价|热搜|新闻|在吗|早上好|晚上好|谢谢|收到/i
 const SUSTAINED_RE = /分析|优化|修复|实现|修改|设计|写|做|排查|调试|构建|部署|项目|代码|文件|机制|方案|测试|review|debug|fix|implement|build/i
+const COMPACT_TARGETED_ACTION_RE = /(?:下载|安装|获取).{0,30}(?:[a-z][a-z0-9_-]{2,}|客户端|安装包|电脑版|桌面版)/i
 
 // 指代性进度问询：设计上不含主题词（"它"=我最近答应的事），靠句式识别，路由到开放承诺。
-const INDEXICAL_PROGRESS_RE = /(怎么样|咋样|如何了|进度|进展|搞定|好了吗|好了么|好了没|完成了吗|完成了没|弄完|做完|干完|干得|干的|还在弄|还在做|顺利|卡住|到哪|哪一步)/
+const INDEXICAL_PROGRESS_RE = /(什么情况|怎么回事|咋回事|怎么样|咋样|如何了|进度|进展|搞定|好了吗|好了么|好了没|完成了吗|完成了没|弄完|做完|干完|干得|干的|还在弄|还在做|顺利|卡住|到哪|哪一步|(?:是不是|是否|还在|有没有).{0,12}(?:后台|工作|处理|执行|进行))/
 
 export function isLikelyOneOffLeaf(body) {
   const text = String(body || '').trim()
@@ -112,13 +125,14 @@ const DEMONSTRATIVE_RE = /(这|那)(个|种|些|位|款|家|件|批|类|段|张|
 export function classifyReference(body) {
   const text = String(body || '').trim()
   if (!text) return { kind: 'none', substantive: [] }
-  const hasDemon = DEMONSTRATIVE_RE.test(text)
-  const actsOnGeneric = GENERIC_OBJECT_RE.test(text) && (OPERATION_VERB_RE.test(text) || hasDemon)
+  const attributionText = primaryAttributionText(text)
+  const hasDemon = DEMONSTRATIVE_RE.test(attributionText)
+  const actsOnGeneric = GENERIC_OBJECT_RE.test(attributionText) && (OPERATION_VERB_RE.test(attributionText) || hasDemon)
   // 句子自身的实质话题词：剥掉操作动词、泛称、指代后还剩什么
   const substantive = extractAttributionKeywords(text)
     .filter(k => !OPERATION_VERB_RE.test(k) && !GENERIC_OBJECT_RE.test(k))
   // 光杆操作动词（"放一下""下载""打开吧"）：宾语缺省 = 指代最近对话里的东西。
-  const bareOperation = OPERATION_VERB_RE.test(text) && substantive.length === 0
+  const bareOperation = OPERATION_VERB_RE.test(attributionText) && substantive.length === 0
   if (actsOnGeneric || bareOperation) return { kind: 'anaphora-recent', substantive }
   if (hasDemon && substantive.length === 0) return { kind: 'anaphora-recent', substantive }
   if (hasDemon && substantive.length > 0) return { kind: 'precise-callback', referentKws: substantive, substantive }
@@ -332,10 +346,10 @@ export function buildThreadView(state, { now = Date.now() } = {}) {
 // 含高频碎片，模糊后到处命中），净负收益，已撤回。回到精确匹配。
 function overlapCount(thread, kws) {
   if (!thread) return 0
-  const set = new Set([...(thread.signature || []), ...(thread.topic || [])])
+  const set = new Set([...(thread.signature || []), ...(thread.topic || [])].map(normalizeAttributionToken))
   if (set.size === 0) return 0
   let n = 0
-  for (const k of kws) if (set.has(k)) n++
+  for (const k of kws) if (set.has(normalizeAttributionToken(k))) n++
   return n
 }
 
@@ -435,7 +449,10 @@ export function attributeUserMessage(state, message, {
   // 2) 关键词稀薄的短消息：续前台（廉价、可自愈）。
   //    守卫：冷掉的前台不续命——这是专注栈时代"短问句给过期栈顶续命"的教训；
   //    冷判断是读时的纯函数，不需要任何清理动作配合。
-  if (kws.length < MIN_KEYWORDS_FOR_THREAD) {
+  // “下载 CapCut”只有两个高信息关键词，但它是明确的新动作，不能因为词少就无条件黏在
+  // 任意前台闲聊上。其余普通短句仍沿用廉价续前台策略。
+  const compactTargetedAction = kws.length >= 2 && COMPACT_TARGETED_ACTION_RE.test(body)
+  if (kws.length < MIN_KEYWORDS_FOR_THREAD && !compactTargetedAction) {
     if (foreground && !isThreadColdByAge(state, foreground)) {
       touchThread(state, foreground.id, { tick })
       return { event: 'continued', thread: foreground, switchedFrom: null }

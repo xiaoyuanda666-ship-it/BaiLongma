@@ -53,7 +53,7 @@ export async function handleActivationRoutes(req, res, url, {
         expiresAt: pending.expiresAt,
       })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -84,7 +84,7 @@ export async function handleActivationRoutes(req, res, url, {
       }
       jsonResponse(res, 200, { ok: true, ...info, agent_name: getAgentName() })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }

@@ -1,4 +1,4 @@
-import { emitEvent } from './events.js'
+import { emitEvent } from './runtime/events.js'
 
 const MAX_CHUNKS = 800
 const MAX_TOTAL_CHARS = 120_000

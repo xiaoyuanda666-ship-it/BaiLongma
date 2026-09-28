@@ -1,6 +1,6 @@
 import { pushMessage } from './inbound-message.js'
 import { publishInformationEventForMigration } from './information/activation-bridge.js'
-import { emitEvent } from './events.js'
+import { emitEvent } from './runtime/events.js'
 import { PRIMARY_USER_ID, isVoiceChannel } from './identity.js'
 import { getBackgroundJobManager } from './background-job-manager.js'
 

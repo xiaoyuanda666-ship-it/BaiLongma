@@ -131,7 +131,6 @@ function main() {
   run(process.execPath, ['scripts/check-native-dependency-versions.mjs'])
   run(process.execPath, ['scripts/prebuild-clean.mjs'])
   validateWindowsNativeDependencies()
-  run(process.execPath, ['scripts/prepare-playwright-browsers.mjs', '--platform=win32', '--arch=x64'])
   run(process.execPath, ['scripts/prepare-node-runtime.mjs', '--platform=win32', '--arch=x64'])
   run(process.execPath, [
     './node_modules/@electron/rebuild/lib/cli.js',
@@ -162,7 +161,6 @@ function main() {
   }
 
   run(process.execPath, ['scripts/smoke-win-artifacts.mjs'])
-  run(process.execPath, ['scripts/smoke-packaged-playwright.mjs'])
   console.log(`[build:win] Bailongma ${pkg.version} Windows x64 build and smoke checks complete`)
 }
 

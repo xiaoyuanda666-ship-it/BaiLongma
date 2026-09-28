@@ -6,7 +6,7 @@
 // - 每次成功完成的自主 TICK 后 ttl--；用户/后台消息和中断/失败不消耗
 // - 优先级低于"有消息(0)"和"429 限流"，高于"有任务(30s)"和"空闲默认"
 
-import { emitEvent } from './events.js'
+import { emitEvent } from './runtime/events.js'
 
 const MIN_SECONDS = 0
 const MAX_SECONDS = 36000

@@ -1,3 +1,4 @@
+import { browserBackend } from '../../mcp/browser-backend.js'
 import { getBackgroundJobManager } from '../../background-job-manager.js'
 
 const ALLOWED_ACTIONS = new Set(['pause', 'resume', 'cancel', 'retry'])
@@ -18,6 +19,7 @@ function failure(code, error, extra = {}) {
 }
 
 export async function execBrowserDownloadManage(args = {}, context = {}) {
+  if (browserBackend() === 'browserskill') return JSON.stringify({ ok: false, code: 'BSK_TOOL_UNSUPPORTED', error: 'BrowserSkill download management is not integrated yet.' })
   const downloadId = String(args.download_id || '').trim()
   const action = String(args.action || '').trim().toLowerCase()
   if (!downloadId || downloadId.length > 160) {

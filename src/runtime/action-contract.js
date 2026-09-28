@@ -5,10 +5,11 @@
 // agent to change state or retrieve fresh external/local evidence.
 
 import {
-  inferBrowserDisplayMode,
   isExplicitBrowserDisplayModeRequest,
   isSystemBrowserRequest,
 } from '../mcp/browser-display.js'
+import { isFileEditFollowup } from './file-edit-followup-intent.js'
+import { classifyBrowserScreenshotIntent } from './browser-screenshot-intent.js'
 import { explicitlyKeepsBrowserOpen } from './browser-intent-guards.js'
 import { filterStrictEvaluationTools } from './strict-evaluation.js'
 import { isBrowserDownloadTaskIntent } from '../capabilities/capability-registry.js'
@@ -19,7 +20,6 @@ const BROWSER_INFORMATION_ACTION_RE = /(?:搜索|查询|查找|浏览(?!器)|阅
 const BROWSER_OPEN_TARGET_RE = /(?:打开|访问|进入|前往|加载)\s*(?:一下\s*)?(?!这个(?:网页|页面)|当前(?:网页|页面)|刚才(?:的)?(?:网页|页面)|$)[\p{L}\p{N}]/iu
 const BROWSER_OPEN_TARGET_EN_RE = /(?:open|visit|go\s+to|navigate\s+to|load)\s+(?!(?:this|the current|the previous)\s+(?:page|webpage)\b)[a-z0-9]/i
 const BROWSER_CLOSE_RE = /(?:(?:关闭|关掉|退出).{0,12}(?:你的浏览器|白龙马浏览器|agent\s*浏览器|小窗口浏览器|大窗口浏览器|小浏览器|大浏览器|当前网页|当前页面|浏览器|网页|页面)|(?:你的浏览器|白龙马浏览器|agent\s*浏览器|小窗口浏览器|大窗口浏览器|小浏览器|大浏览器|浏览器).{0,8}(?:关一下|关了|关闭|关掉)|(?:close|quit|exit)\s+(?:your|the\s+bailongma|the\s+agent|the\s+current)?\s*(?:browser|webpage|page)\b)/i
-const BROWSER_SCREENSHOT_RE = /(?:(?:截|截图)(?:一?张|个)?(?:当前|现在|这个|网页|页面|浏览器|这一屏|整页)?.{0,16}(?:图|给我|发我|看看|看一下)?|(?:给我|发我|让我看看).{0,12}(?:截图|截屏)|take\s+(?:a\s+)?screenshot)/i
 const BROWSER_PAGE_SCOPE_RE = /(?:这个|当前|现在|本|这一个)(?:网页|页面)|(?:这|当前)页|(?:网页|页面)(?:里|内|中|上)|(?:this|current)\s+(?:page|webpage)/i
 const BROWSER_PAGE_FIND_ACTION_RE = /(?:有没有|有无|是否(?:有|包含)|包含|找(?:一下|一找)?|查找|搜(?:一下|索)?|出现(?:了)?(?:几|多少|\d+)?(?:次|处)?|几处|几次|多少次|find|look\s+for|contain|occur|how\s+many)/i
 const BROWSER_SEARCH_BOX_SUBMIT_RE = /(?:在\s*)?(?:(?:这个|当前)(?:网页|页面)?\s*)?搜索框(?:里|内|中)?\s*(?:输入|填入|键入)\s*[“‘'"]?(.{1,120}?)[”’'"]?\s*(?:并|然后|再)?\s*(?:点击\s*)?(?:搜索|查找|提交|搜一下)(?:按钮)?(?:一下)?[。.!！?？]*$/iu
@@ -47,8 +47,6 @@ const WEB_RESEARCH_REQUEST_RE = /(?:今天|今日|最近|近期|最新|刚刚|�
 const WEB_FRESH_FACT_REQUEST_RE = /(?:现在|目前|今天|今日|实时|最新).{0,18}(?:价格|报价|金价|油价|汇率|股价|大盘|指数|比分|排名|票房|天气|航班)|(?:比特币|btc|黄金|金价|油价|汇率|股价|股票|大盘|指数|票房|比分|排名|天气|航班|软件版本|系统版本).{0,18}(?:多少|什么价|怎么样|涨了|跌了|现在|目前|今天|实时|最新)/i
 const LOCAL_FILE_CREATE_RE = /(?:(?:做|写|建|创建|新建|生成|保存|存成|另存|导出).{0,48}(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b)|(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b).{0,40}(?:保存|写入|创建|生成))/i
 const LOCAL_FILE_EDIT_RE = /(?:(?:修改|编辑|更新|替换|追加|插入|改动).{0,40}(?:文件|文档|代码|脚本|配置|readme|网页|页面|主页|网站|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b)|(?:帮我|请).{0,24}(?:改|修|更新|编辑).{0,30}(?:代码|项目|脚本|网页|页面|主页|网站|文件)|(?:网页|页面|主页|网站|文件|文档|代码|脚本|配置|readme|\.md\b|\.txt\b|\.json\b|\.js\b|\.py\b|\.html?\b).{0,48}(?:改成|换成|加上|加一句|删掉|去掉|修改|编辑|追加))/i
-const LOCAL_FILE_EDIT_FOLLOWUP_RE = /(?:(?:把|将|再|顺便).{0,50}(?:改成|换成|加上|加一句|删掉|去掉|追加|修改|编辑)|(?:其他|其它|其余).{0,6}(?:别动|不动|不要改))/i
-const LOCAL_FILE_CONTEXT_RE = /(?:read_file|write_file|edit_file|absolute_path|artifact_path|(?:^|[\\/\s"'])(?:[^\\/\s"']+\.)?(?:md|markdown|txt|json|js|mjs|cjs|ts|tsx|jsx|py|html?|css|vue|svelte)(?:\b|["']))/i
 const NEGATED_ACTION_START_RE = /^(?:(?:但(?:是)?|不过|然而|而是|而要|然后|接着|同时|并且|也|再|先|请|务必|千万|我(?:要求|希望|让)你)\s*)*(?:不要|别|无需|不用|请勿|禁止|不得)(?:再)?/iu
 const NEGATED_ACTION_START_EN_RE = /^(?:(?:but|however|and|then|please|also)\s+)*(?:do\s+not|don't|never|must\s+not)\b/i
 
@@ -168,6 +166,8 @@ function resultUrl(parsed, evidence = {}) {
   const snapshot = resultSnapshot(parsed)
   return normalizedEvidenceUrl(
     parsed?.url
+    || parsed?.observation?.url
+    || parsed?.structured_content?.url
     || parsed?.final_url
     || parsed?.finalUrl
     || parsed?.browser_preview?.url
@@ -454,12 +454,6 @@ function hasRecentBrowserContext(conversationWindow = [], runtimeContext = '') {
     || /browser_(?:navigate|snapshot|find|click|type|reload|press_key|tabs|take_screenshot|set_display_mode|close)/i.test(String(runtimeContext || ''))
 }
 
-function hasRecentFileContext(conversationWindow = [], runtimeContext = '') {
-  return (Array.isArray(conversationWindow)
-    && conversationWindow.slice(-6).some(item => LOCAL_FILE_CONTEXT_RE.test(String(item?.content || ''))))
-    || LOCAL_FILE_CONTEXT_RE.test(String(runtimeContext || ''))
-}
-
 function hasRecentMusicContext(conversationWindow = []) {
   return Array.isArray(conversationWindow)
     && conversationWindow.slice(-6).some(item => MACOS_MUSIC_CONTEXT_RE.test(String(item?.content || '')))
@@ -583,15 +577,6 @@ function classifyDirectBrowserAction(text = '', { browserContinuity = false } = 
       expectedUrl: directUrl,
     }
   }
-  if (browserContinuity && /^(?:请\s*|帮我\s*)*(?:放大|放大一点|大一点)(?:吧|一下)?[。.!！?？]*$/i.test(value)) {
-    return {
-      ...base,
-      id: 'browser_display_mode',
-      label: '切换浏览器显示大小',
-      requiredTools: ['browser_set_display_mode'],
-      expectedBrowserDisplayMode: 'window',
-    }
-  }
   return null
 }
 
@@ -677,17 +662,11 @@ const CONTRACTS = [
     }),
   },
   {
-    id: 'browser_open_in_display_mode',
+    id: 'browser_open_url',
     label: '使用指定的白龙马浏览器打开网页',
-    // Navigation already runs through the display mode selected
-    // deterministically for this turn. Its browser_preview.mode is observable
-    // evidence that both the requested presentation and navigation happened;
-    // demanding an extra display-only call makes combined requests brittle.
     tools: ['browser_navigate'],
     match: isExplicitBrowserNavigationRequest,
-    resolve: (text) => ({
-      expectedBrowserDisplayMode: inferBrowserDisplayMode(text),
-    }),
+    resolve: () => ({}),
   },
   {
     id: 'browser_close',
@@ -703,31 +682,12 @@ const CONTRACTS = [
     },
   },
   {
-    id: 'browser_screenshot',
-    label: '截取并发送浏览器截图',
-    tools: ['browser_take_screenshot'],
-    match: text => BROWSER_SCREENSHOT_RE.test(text),
-    resolve: () => ({ directBrowserAction: true, restrictTools: true }),
-  },
-  {
     id: 'browser_page_find',
     label: '在当前浏览器页面中查找并计数文本',
     tools: ['browser_find'],
     match: text => isBrowserPageFindRequest(text) && !!extractBrowserPageFindQuery(text),
     resolve: text => ({
       query: extractBrowserPageFindQuery(text),
-      directBrowserAction: true,
-      restrictTools: true,
-      runtimeOwnedReply: true,
-    }),
-  },
-  {
-    id: 'browser_display_mode',
-    label: '切换浏览器显示大小',
-    tools: ['browser_set_display_mode'],
-    match: text => isExplicitBrowserDisplayModeRequest(text) || /(?:缩回|收回).{0,8}(?:小卡片|卡片|小窗口)/i.test(text),
-    resolve: text => ({
-      expectedBrowserDisplayMode: inferBrowserDisplayMode(text),
       directBrowserAction: true,
       restrictTools: true,
       runtimeOwnedReply: true,
@@ -842,8 +802,7 @@ export function classifyActionContract(message = '', { conversationWindow = [], 
     return browserInteractionContract('继续当前浏览器交互')
   }
 
-  if (LOCAL_FILE_EDIT_FOLLOWUP_RE.test(actionText)
-      && hasRecentFileContext(conversationWindow, runtimeContext)) {
+  if (isFileEditFollowup(actionText, { conversationWindow, runtimeContext })) {
     return {
       id: 'file_edit',
       label: '继续局部修改文件',
@@ -852,6 +811,9 @@ export function classifyActionContract(message = '', { conversationWindow = [], 
       requireAllTools: true,
     }
   }
+
+  const screenshotAction = classifyBrowserScreenshotIntent(actionText)
+  if (screenshotAction) return screenshotAction
 
   const directBrowserAction = classifyDirectBrowserAction(actionText, { browserContinuity })
   if (directBrowserAction) return directBrowserAction
@@ -937,16 +899,10 @@ export function actionContractToolSucceeded(contract, toolName, result, args = {
   try {
     const parsed = JSON.parse(text)
     if (parsed?.ok === false || parsed?.error) return false
-    if (contract.id === 'browser_open_in_display_mode') {
-      return parsed?.browser_preview?.mode === contract.expectedBrowserDisplayMode
-    }
     if (contract.id === 'browser_open_url' && contract.expectedUrl) {
       const actual = resultUrl(parsed, { args })
       const requested = normalizedEvidenceUrl(args?.url || '')
       return !!actual && requested === normalizedEvidenceUrl(contract.expectedUrl)
-    }
-    if (contract.id === 'browser_display_mode') {
-      return parsed?.browser_preview?.mode === contract.expectedBrowserDisplayMode
     }
     if (contract.id === 'browser_scroll') {
       return String(args?.key || '').toLowerCase() === String(contract.expectedKey || '').toLowerCase()
@@ -1099,35 +1055,15 @@ function browserScreenshotCompletionIssue(text = '', options = {}) {
   return ''
 }
 
-function browserDisplayModeCompletionIssue(contract, text = '') {
-  if (contract?.expectedBrowserDisplayMode === 'window' && /(?:全屏|全屏幕|full[ -]?screen)/i.test(String(text || ''))) {
-    return 'The tool proved only window mode (an independent large window), not operating-system fullscreen.'
-  }
-  return ''
-}
-
 export function actionContractCompletionIssue(contract, text = '', options = {}) {
   if (contract?.id === 'browser_screenshot') {
     return browserScreenshotCompletionIssue(text, options)
-  }
-  if (contract?.id === 'browser_display_mode') {
-    return browserDisplayModeCompletionIssue(contract, text)
   }
   if (contract?.id === 'browser_interaction') {
     return browserInteractionCompletionIssue(text, options)
   }
   if (contract?.id === 'web_research') {
     return webResearchCompletionIssue(contract, text, options)
-  }
-  if (contract?.id !== 'system_browser_open') return ''
-  const value = String(text || '').trim()
-  if (!value) return ''
-  if (/(?:\b(?:safari|chrome|edge|firefox|arc|opera|brave)\b|谷歌浏览器|苹果浏览器)/i.test(value)) {
-    return 'The tool verified only the computer default browser, not the browser application name.'
-  }
-  if (/(?:三个|三种).{0,16}浏览器.{0,20}(?:各自|彼此|互相|完全)?.{0,10}(?:独立|不共享|互不影响)/i.test(value)
-      || /(?:你的浏览器).{0,30}(?:我的浏览器).{0,30}(?:各自独立|彼此独立|互不影响|不共享)/i.test(value)) {
-    return 'Bailongma compact and large modes share one live page/profile; only the computer browser is separate.'
   }
   return ''
 }
@@ -1164,17 +1100,15 @@ export function verifiedActionContractReply(contract, evidence = {}, options = {
     if (contract.scrollDirection === 'end') return '已滚动到页面底部。'
     return '已向下翻了一屏。'
   }
-  if (contract?.id === 'browser_tabs_list') return '当前只有 1 个受控网页。'
+  if (contract?.id === 'browser_tabs_list') {
+    const tabs = safeJson(evidence?.result)?.structured_content?.tabs
+    return Array.isArray(tabs) ? `当前有 ${tabs.length} 个任务标签页。` : '已查询当前任务标签页。'
+  }
   if (contract?.id === 'browser_reopen' || contract?.id === 'browser_open_url') {
     const parsed = safeJson(evidence?.result)
     const url = String(parsed?.browser_preview?.url || parsed?.url || evidence?.args?.url || '').trim()
     if (contract.id === 'browser_open_url') return url ? `已打开 ${url}` : '已打开指定网页。'
     return url ? `已重新打开 ${url}` : '已重新打开指定网页。'
-  }
-  if (contract?.id === 'browser_display_mode') {
-    const parsed = safeJson(evidence?.result)
-    const mode = parsed?.browser_preview?.mode || contract.expectedBrowserDisplayMode
-    return mode === 'window' ? '已切换到独立大窗口。' : '已缩回小卡片。'
   }
   if (contract?.id === 'web_research') {
     const required = Math.max(1, Number(contract?.minimumVerifiedSources) || 3)
@@ -1195,7 +1129,7 @@ export function verifiedActionContractReply(contract, evidence = {}, options = {
     if (parsed?.url) url = String(parsed.url)
   } catch {}
   const target = url ? `链接 \`${url}\`` : '链接'
-  return `已将${target}交给电脑的系统默认浏览器打开。白龙马的“小窗口浏览器”和“大窗口浏览器”是同一个实时页面的两种显示形态；电脑浏览器与它们独立。`
+  return `已在选定的真实 Chrome Agent Window 中打开${target}。`
 }
 
 export function containsUnsupportedCompletionClaim(text = '', contract = null) {

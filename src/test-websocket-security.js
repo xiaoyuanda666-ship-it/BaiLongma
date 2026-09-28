@@ -25,7 +25,7 @@ async function test(name, fn) {
 }
 
 function mockRequest(remoteAddress, headers = {}) {
-  return { socket: { remoteAddress }, headers }
+  return { socket: { remoteAddress }, headers: { host: headers.origin && headers.origin !== 'null' ? new URL(headers.origin).host : '127.0.0.1:3721', ...headers } }
 }
 
 function authorize(pathname, remoteAddress, headers = {}, options = {}) {
@@ -116,6 +116,11 @@ async function main() {
       assert.equal(authorize('/voice/cloud', '192.168.1.20', {
         origin: 'https://evil.example', authorization: `Bearer ${TEST_TOKEN}`,
       }).reason, 'forbidden_origin')
+    })
+
+    await test('opaque browser origins are rejected even on loopback', async () => {
+      assert.equal(await rejectedStatus(`${fixture.url}/scene`, { origin: 'null' }), 403)
+      assert.equal(authorize('/scene', '127.0.0.1', { origin: 'http://localhost:8888', host: '127.0.0.1:3721' }).ok, false)
     })
 
     await test('non-loopback request without Token is rejected', () => {

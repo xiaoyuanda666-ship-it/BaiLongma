@@ -6,7 +6,7 @@ import {
   getMemoryByMemId,
   hideMemoryByMemId,
 } from '../../db.js'
-import { emitEvent } from '../../events.js'
+import { emitEvent } from '../../runtime/events.js'
 import { extractKeywords } from '../../memory/keywords.js'
 
 // search_memory：批量按关键词检索记忆。

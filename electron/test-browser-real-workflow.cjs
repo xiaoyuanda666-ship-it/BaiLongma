@@ -135,6 +135,8 @@ const fixtureServer = http.createServer((request, response) => {
 
 app.whenReady().then(async () => {
   let mainWindow
+  let browserTurnContext
+  let releaseTurnLease
   let host
   let clearDataCalls = 0
   const downloadEvents = []
@@ -197,8 +199,13 @@ app.whenReady().then(async () => {
       import(pathToFileURL(path.join(projectRoot, 'src', 'config.js')).href),
       import(pathToFileURL(path.join(projectRoot, 'src', 'capabilities', 'tool-policy.js')).href),
     ])
+    const leaseRuntime = await import(pathToFileURL(path.join(projectRoot, 'src/runtime/browser-lease.js')).href)
+    releaseTurnLease = leaseRuntime.releaseBrowserTurnLease
     config.security.browserPrivateNetwork = true
     const context = {
+      browserLeaseScope: 'turn',
+      browserLeaseOwnerId: 'real-browser-workflow-turn',
+      browserLeaseState: leaseRuntime.createBrowserTurnLeaseState(),
       browserDisplayMode: 'card',
       browserDisplayState: { mode: 'card' },
       currentTargetId: 'ID:real-browser-user',
@@ -206,7 +213,8 @@ app.whenReady().then(async () => {
       currentExternalPartyId: null,
       voiceReply: false,
     }
-    const call = async (name, args = {}) => JSON.parse(await executeBuiltInChromeTool(name, args, context))
+    browserTurnContext = context
+    const call = async (name, args = {}) => JSON.parse(await executeBuiltInChromeTool(name, args, { ...context }))
 
     const opened = await call('browser_navigate', { url: `${baseUrl}/one` })
     assert.equal(opened.ok, true, JSON.stringify(opened))
@@ -372,6 +380,7 @@ app.whenReady().then(async () => {
     }))
     await shutdownBuiltInChrome()
   } finally {
+    releaseTurnLease?.(browserTurnContext)
     try { host?.destroyAll() } catch {}
     try { mainWindow?.destroy() } catch {}
     await new Promise(resolve => fixtureServer.close(resolve))

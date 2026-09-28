@@ -60,6 +60,8 @@ function createCore() {
 
 async function run() {
   const messageInput = { tagName: 'TEXTAREA', value: '', disabled: false, readOnly: false };
+  assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: { tagName: 'BUTTON' } }, messageInput), false,
+    '麦克风设置按钮上的空格键应激活按钮，不能启动 PTT');
   assert.equal(shouldHandlePttKeyEvent({ code: 'Space', target: messageInput }, messageInput), true,
     '空消息框获得焦点时，按住空格必须启动 PTT');
   messageInput.value = '正在输入';

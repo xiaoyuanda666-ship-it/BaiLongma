@@ -26,17 +26,16 @@ import { handleKnowledgeRoutes } from './api/routes/knowledge.js'
 import { handleMessageRoutes } from './api/routes/message.js'
 import { handlePanelRoutes } from './api/routes/panels.js'
 import { handleSettingsRoutes } from './api/routes/settings.js'
+import { isSocialWebhookPath } from './social/webhooks.js'
+import { createSessionCookie, hasBearerToken, hasAuthorizedAccess, isTrustedRequestOrigin, isPublicBootstrapRequest } from './api/request-security.js'
 import { handleSocialRoutes } from './api/routes/social.js'
 import { handleStaticRoutes } from './api/routes/static.js'
 import { handleTTSRoutes } from './api/routes/tts.js'
 import {
   attachWebSocketIdleTimeout,
   authorizeWebSocketUpgrade,
-  isLoopbackAddress,
-  isPrivateLanAddress,
   rejectWebSocketUpgrade,
   selectWebSocketProtocol,
-  timingSafeTokenEqual,
 } from './api/websocket-security.js'
 
 export { emitEvent }
@@ -83,74 +82,18 @@ function isLanAccessEnabled() {
     || /^(1|true|yes|on)$/i.test(String(globalThis.process?.env?.BAILONGMA_ALLOW_LAN || '').trim())
 }
 
-function isLoopbackRequest(req) {
-  return isLoopbackAddress(req.socket?.remoteAddress)
-}
-
-function isLanRequest(req) {
-  return isLanAccessEnabled() && isPrivateLanAddress(req.socket?.remoteAddress)
-}
-
-function isLoopbackOrigin(origin = '') {
-  if (!origin || origin === 'null') return true
-  try {
-    const parsed = new URL(origin)
-    return ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
-  } catch {
-    return false
-  }
-}
-
-function isAllowedOrigin(origin = '') {
-  if (isLoopbackOrigin(origin)) return true
-  if (!isLanAccessEnabled()) return false
-  try {
-    const parsed = new URL(origin)
-    return isPrivateLanAddress(parsed.hostname)
-  } catch {
-    return false
-  }
-}
-
 function getAuthToken() {
   return getLanAccessToken({ ensure: isLanAccessEnabled() })
 }
 
-function hasValidAuthToken(req, url) {
-  const expected = getAuthToken()
-  if (!expected) return false
-  const header = req.headers.authorization || ''
-  const bearer = header.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
-  const queryToken = url.searchParams.get('token')
-  return timingSafeTokenEqual(bearer, expected) || timingSafeTokenEqual(queryToken, expected)
+function hasAllowedAccess(req) {
+  return hasAuthorizedAccess(req, { lanEnabled: isLanAccessEnabled(), expectedToken: getAuthToken() })
 }
 
-function requireLocalOrToken(req, res, url) {
-  if (isLoopbackRequest(req) || hasValidAuthToken(req, url)) return true
+function requireLocalOrToken(req, res) {
+  if (hasAllowedAccess(req)) return true
   jsonResponse(res, 403, { ok: false, error: 'forbidden' })
   return false
-}
-
-function hasAllowedAccess(req, url) {
-  return isLoopbackRequest(req) || hasValidAuthToken(req, url) || isLanRequest(req)
-}
-
-function isSensitivePath(pathname) {
-  return pathname === '/activate'
-    || pathname === '/activate/prepare'
-    || pathname === '/settings'
-    || pathname.startsWith('/settings/')
-    || pathname.startsWith('/admin/')
-    || pathname.startsWith('/memories/')
-    || pathname.startsWith('/knowledge/')
-}
-
-function setCorsHeaders(req, res, origin) {
-  if (isAllowedOrigin(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin || 'null')
-  }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 }
 
 async function dispatchHttpRoutes(req, res, url, context) {
@@ -440,28 +383,34 @@ export function startAPI(port = 3721, {
   const requestHandler = async (req, res) => {
     const base = `${protocol}://localhost:${port}`
     const url = new URL(req.url, base)
-    const origin = req.headers.origin
 
     try {
-      if (await handleSocialRoutes(req, res, url, { hasAllowedAccess, requireLocalOrToken })) return
-
-      if (origin && !isAllowedOrigin(origin)) {
+      // Provider callbacks authenticate using their own signature/token checks.
+      if (isSocialWebhookPath(url.pathname)) {
+        await handleSocialRoutes(req, res, url, routeContext)
+        return
+      }
+      if (!isTrustedRequestOrigin(req, { allowPublicNavigation: isPublicBootstrapRequest(req, url.pathname) })) {
         return jsonResponse(res, 403, { ok: false, error: 'forbidden origin' })
       }
-
-      if (!hasAllowedAccess(req, url)) {
+      if (req.method === 'POST' && url.pathname === '/auth/session') {
+        if (!hasAllowedAccess(req) || !hasBearerToken(req, getAuthToken())) {
+          return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
+        }
+        res.setHeader('Set-Cookie', createSessionCookie(getAuthToken(), req))
+        res.setHeader('Cache-Control', 'no-store')
+        return jsonResponse(res, 200, { ok: true })
+      }
+      if (!hasAllowedAccess(req) && !isPublicBootstrapRequest(req, url.pathname)) {
         return jsonResponse(res, 403, { ok: false, error: 'forbidden' })
       }
-
-      setCorsHeaders(req, res, origin)
-
-      if (req.method !== 'OPTIONS' && isSensitivePath(url.pathname) && !requireLocalOrToken(req, res, url)) return
-
+      res.setHeader('Referrer-Policy', 'same-origin')
       if (req.method === 'OPTIONS') {
         res.writeHead(204)
         res.end()
         return
       }
+      if (await handleSocialRoutes(req, res, url, routeContext)) return
 
       if (await dispatchHttpRoutes(req, res, url, routeContext)) return
       jsonResponse(res, 404, { error: 'not found' })

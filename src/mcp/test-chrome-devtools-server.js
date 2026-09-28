@@ -17,6 +17,7 @@ const {
   resolveStandaloneNodeModulePath,
 } = await import('./chrome-devtools-server.js')
 const {
+  __internal: clientManagerInternal,
   executeBuiltInChromeTool,
   shutdownBuiltInChrome,
   shutdownMcpClients,
@@ -40,6 +41,8 @@ let browserBackTarget = ''
 let hideManagedPage = false
 const clients = []
 const calls = []
+let abortNextSnapshot = false
+let notifyAbortSnapshotStarted = null
 const remoteTools = [
   'navigate_page', 'take_snapshot', 'list_pages', 'take_screenshot',
   'click', 'type_text', 'fill_form', 'fill', 'press_key', 'hover', 'drag',
@@ -65,7 +68,7 @@ class FakeClient {
   async connect() {}
   async close() { this.closed = true }
   async listTools() { return { tools: remoteTools } }
-  async callTool(request) {
+  async callTool(request, _resultSchema, options = {}) {
     calls.push(request)
     const name = request.name
     if (name === 'list_pages') return {
@@ -87,6 +90,19 @@ class FakeClient {
       }
       if (request.arguments?.type === 'url') pageUrl = request.arguments.url
       return { content: [{ type: 'text', text: `- Page URL: ${pageUrl}\n- Page Title: test page` }] }
+    }
+    if (name === 'take_snapshot' && abortNextSnapshot) {
+      abortNextSnapshot = false
+      notifyAbortSnapshotStarted?.()
+      return new Promise((resolve, reject) => {
+        const rejectAborted = () => {
+          const error = new Error(String(options.signal?.reason || 'Aborted'))
+          error.name = 'AbortError'
+          reject(error)
+        }
+        if (options.signal?.aborted) rejectAborted()
+        else options.signal?.addEventListener('abort', rejectAborted, { once: true })
+      })
     }
     if (name === 'take_snapshot') return { content: [{ type: 'text', text: `- Page URL: ${pageUrl}\n- Page Title: ${pageUrl.includes('x.com/home') ? 'X Home' : 'test page'}` }] }
     if (name === 'evaluate_script') {
@@ -355,6 +371,135 @@ try {
     && bridge.closeCalls === 1
     && calls.every(call => call.name !== 'new_page' && call.name !== 'close_page'),
   'browser_close destroys the managed live page without touching Bailongma UI targets', JSON.stringify(closedPage))
+
+  check(clientManagerInternal.BROWSER_MCP_OPERATION_TIMEOUT_MS === 45_000
+    && clientManagerInternal.mcpCallFailureCode(new Error('Request timed out'), null) === 'MCP_TIMEOUT',
+  'each browser operation has a hard total timeout and classifies timeout failures for recovery')
+  const interruptedClient = clients.at(-1)
+  const clientsBeforeInterrupt = clients.length
+  const interruptController = new AbortController()
+  let markSnapshotStarted
+  const snapshotStarted = new Promise(resolve => { markSnapshotStarted = resolve })
+  notifyAbortSnapshotStarted = markSnapshotStarted
+  abortNextSnapshot = true
+  const interruptedPromise = executeBuiltInChromeTool('browser_snapshot', {}, {
+    ...context,
+    signal: interruptController.signal,
+  })
+  await snapshotStarted
+  interruptController.abort('test user interruption')
+  const interrupted = parse(await interruptedPromise)
+  notifyAbortSnapshotStarted = null
+  check(interrupted?.ok === false && interrupted?.code === 'MCP_INTERRUPTED' && interruptedClient?.closed === true,
+    'aborting an in-flight Chrome MCP call closes and evicts the poisoned connection', JSON.stringify(interrupted))
+  const recoveredAfterInterrupt = parse(await executeBuiltInChromeTool('browser_snapshot', {}, context))
+  check(recoveredAfterInterrupt?.ok === true && clients.length === clientsBeforeInterrupt + 1,
+    'the browser action after an interruption reconnects instead of hanging behind the old MCP request',
+    JSON.stringify(recoveredAfterInterrupt))
+
+  // Ignore cancellation entirely, including during connection cleanup.
+  const stuckClient = clients.at(-1)
+  const originalCall = stuckClient.callTool.bind(stuckClient)
+  let snapshotEntered
+  const entered = new Promise(resolve => { snapshotEntered = resolve })
+  stuckClient.callTool = async (...args) => {
+    if (args[0].name === 'take_snapshot') {
+      snapshotEntered()
+      return new Promise(() => {})
+    }
+    return originalCall(...args)
+  }
+  stuckClient.close = () => new Promise(() => {})
+  const stuckController = new AbortController()
+  const stuck = executeBuiltInChromeTool('browser_snapshot', {}, { ...context, signal: stuckController.signal })
+  await entered
+  stuckController.abort('unresponsive MCP test')
+  const bounded = promise => {
+    let timer
+    return Promise.race([promise, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Browser recovery exceeded 1 second')), 1000)
+    })]).finally(() => clearTimeout(timer))
+  }
+  check(parse(await bounded(stuck)).code === 'MCP_INTERRUPTED',
+    'an MCP request and close that both ignore abort cannot trap the caller')
+  check(parse(await bounded(executeBuiltInChromeTool('browser_snapshot', {}, context))).ok === true,
+    'a fresh read succeeds while the abandoned request and close remain pending')
+
+  const originalEndpoint = bridge.ensureEndpoint
+  let endpointEntered, finishEndpoint
+  const endpointStarted = new Promise(resolve => { endpointEntered = resolve })
+  bridge.ensureEndpoint = () => { endpointEntered(); return new Promise(resolve => { finishEndpoint = resolve }) }
+  const endpointController = new AbortController()
+  const delayed = executeBuiltInChromeTool('browser_snapshot', {}, { ...context, signal: endpointController.signal })
+  await endpointStarted
+  endpointController.abort('endpoint interrupted')
+  check(parse(await bounded(delayed)).code === 'MCP_INTERRUPTED', 'endpoint discovery is cancellable')
+  bridge.ensureEndpoint = originalEndpoint
+  check(parse(await bounded(executeBuiltInChromeTool('browser_snapshot', {}, context))).ok === true,
+    'endpoint cancellation releases the browser queue')
+  const callsBeforeLateEndpoint = calls.length
+  finishEndpoint('http://127.0.0.1:9222')
+  await new Promise(resolve => setImmediate(resolve))
+  check(calls.length === callsBeforeLateEndpoint, 'late endpoint completion never resumes a cancelled browser action')
+
+  const { browserLeaseManager } = await import('../runtime/browser-lease.js')
+  const heldLease = await browserLeaseManager.acquire({ ownerId: 'test-other-browser-task' })
+  const waitingController = new AbortController()
+  const callsBeforeLeaseWait = calls.length
+  const waitingRead = executeBuiltInChromeTool('browser_snapshot', {}, { ...context, signal: waitingController.signal })
+  waitingController.abort('cancel queued reader')
+  check(parse(await bounded(waitingRead)).code === 'MCP_INTERRUPTED'
+    && browserLeaseManager.snapshot().holder.ownerId === 'test-other-browser-task'
+    && calls.length === callsBeforeLeaseWait,
+    'cancelling a lease waiter neither calls MCP nor releases another task’s lease')
+  heldLease.release()
+
+  const { createBrowserTurnLeaseState, releaseBrowserTurnLease } = await import('../runtime/browser-lease.js')
+  const turnContext = { ...context, browserLeaseScope: 'turn', browserLeaseOwnerId: 'copied-context-turn',
+    browserLeaseState: createBrowserTurnLeaseState() }
+  const toolSeries = [
+    ['browser_navigate', { url: 'https://example.com/' }],
+    ['browser_snapshot', {}],
+    ['browser_type', { uid: '1_1', text: 'query', replace: true }],
+    ['browser_type', { uid: '1_1', text: 'append' }],
+    ['browser_fill_form', { fields: [{ uid: '1_1', value: 'form' }] }],
+    ['browser_click', { uid: '1_2' }],
+    ['browser_press_key', { key: 'Enter' }],
+    ['browser_hover', { uid: '1_1' }],
+    ['browser_select_option', { uid: '1_1', value: 'option' }],
+    ['browser_tabs', {}],
+  ]
+  try {
+    for (const [name, args] of toolSeries) {
+      // Matches callLLM: every call receives a fresh shallow context copy.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort('same-turn lease deadlock'), 500)
+      try {
+        const result = parse(await executeBuiltInChromeTool(name, args, { ...turnContext, signal: controller.signal }))
+        check(result.ok === true, `same-turn copied context completes ${name}`, JSON.stringify(result))
+      } finally { clearTimeout(timer) }
+    }
+    check(browserLeaseManager.snapshot().holder?.ownerId === 'copied-context-turn'
+      && browserLeaseManager.snapshot().queued.length === 0,
+      'all tools reuse one turn lease without waiting on themselves')
+  } finally { releaseBrowserTurnLease(turnContext) }
+  check(browserLeaseManager.snapshot().holder === null,
+    'the original turn context releases ownership acquired through a tool context copy')
+  check(parse(await bounded(executeBuiltInChromeTool('browser_snapshot', {}, context))).ok === true,
+    'the next turn acquires the browser after prior turn cleanup')
+
+  // Exercise the actual production deadline, not just its constant or a cooperative fake.
+  const deadlineClient = clients.at(-1)
+  const deadlineCall = deadlineClient.callTool.bind(deadlineClient)
+  deadlineClient.callTool = (...args) => args[0].name === 'take_snapshot'
+    ? new Promise(() => {}) : deadlineCall(...args)
+  const deadlineStarted = Date.now()
+  const timedOut = parse(await executeBuiltInChromeTool('browser_snapshot', {}, context))
+  const deadlineElapsed = Date.now() - deadlineStarted
+  check(timedOut.code === 'MCP_TIMEOUT' && deadlineElapsed >= 44_000 && deadlineElapsed < 48_000,
+    'the production 45-second deadline ends a snapshot that ignores cancellation', JSON.stringify({ timedOut, deadlineElapsed }))
+  check(parse(await bounded(executeBuiltInChromeTool('browser_snapshot', {}, context))).ok === true,
+    'a read after the real deadline reconnects successfully')
 
   const firstClient = clients.at(-1)
   firstClient.onclose?.()

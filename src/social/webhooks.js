@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import { pushMessage } from '../inbound-message.js'
-import { emitEvent } from '../events.js'
+import { emitEvent } from '../runtime/events.js'
 import { jsonResponse, readBody, textResponse } from './http.js'
 import { escapeXml, parseSimpleXml } from './xml.js'
 import { env } from './utils.js'

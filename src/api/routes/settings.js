@@ -110,7 +110,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       emitEvent('agent_name_updated', { name })
       jsonResponse(res, 200, { ok: true, agent_name: name })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -124,7 +124,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       emitEvent('model_switched', result)
       jsonResponse(res, 200, { ok: true, ...result })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -135,7 +135,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const catalog = await getProviderModels({ provider, apiKey, baseURL, forceRefresh: forceRefresh === true })
       jsonResponse(res, 200, { ok: true, provider, ...catalog })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -146,7 +146,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const result = setTemperature(temperature)
       jsonResponse(res, 200, { ok: true, ...result })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -157,7 +157,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const result = setThinking(thinking)
       jsonResponse(res, 200, { ok: true, ...result })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -168,7 +168,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const contextWindow = setContextWindowConfig(updates)
       jsonResponse(res, 200, { ok: true, contextWindow })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -186,7 +186,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       emitEvent('heartbeat_settings_updated', heartbeat)
       jsonResponse(res, 200, { ok: true, heartbeat })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -214,7 +214,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       })
       jsonResponse(res, 200, { ok: true, mcp, status })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -239,7 +239,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       const map = setMapServiceSettings(body)
       jsonResponse(res, 200, { ok: true, map })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -258,7 +258,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
         network: network.allowLanAccess ? await getNetworkSettingsForUi() : network,
       })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -304,7 +304,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       }
       jsonResponse(res, 200, { ok: true, social: getSocialConfig() })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -318,7 +318,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       replaceProvider(new MinimaxProvider({ apiKey: trimmed }))
       jsonResponse(res, 200, { ok: true, configured: true })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -334,7 +334,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       setVoiceConfig(body)
       jsonResponse(res, 200, { ok: true, voice: getVoiceConfig() })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -350,7 +350,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       setTTSConfig(body)
       jsonResponse(res, 200, { ok: true, tts: getTTSConfig() })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }
@@ -382,7 +382,7 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
       } catch {}
       jsonResponse(res, 200, { ok: true, embedding: getEmbeddingConfig() })
     } catch (err) {
-      jsonResponse(res, 400, { ok: false, error: err.message })
+      jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
     return true
   }

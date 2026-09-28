@@ -8,6 +8,7 @@ import {
   SYSTEM_BROWSER_TOOLS,
   capabilityContextBlocks,
   findCapabilitiesByQuery,
+  extractBrowserDownloadTaskTarget,
   isBrowserDownloadIntent,
 } from './capabilities/capability-registry.js'
 import { selectTools } from './memory/tool-router.js'
@@ -101,6 +102,13 @@ assert.deepEqual(BROWSER_DISPLAY_TOOLS, ['browser_set_display_mode'])
 assert.ok(TOOL_SCHEMAS.browser_set_display_mode,
   'the presentation-only browser mode tool has a built-in schema')
 assert.deepEqual(BROWSER_DOWNLOAD_TOOLS, ['start_browser_download_task', 'browser_download_manage'])
+assert.equal(
+  extractBrowserDownloadTaskTarget('你现在再次帮我下载capcut，看看你这个新版本表现怎么样'),
+  'capcut',
+  'the real retry phrasing binds only the requested product as the background target',
+)
+assert.equal(extractBrowserDownloadTaskTarget('下载 CapCut 并保存到下载目录'), 'CapCut')
+assert.equal(extractBrowserDownloadTaskTarget('用内置浏览器打开豆包官网并下载电脑版'), '豆包电脑版')
 assert.ok(TOOL_SCHEMAS.start_browser_download_task,
   'new browser downloads start through an independent background-task tool')
 assert.ok(TOOL_SCHEMAS.browser_download_manage,
@@ -130,6 +138,7 @@ assert.deepEqual([...browserDiscoveryTools].sort(), [...BROWSER_CAPABILITY_TOOLS
   'find_tool discovery loads dedicated Chrome plus the presentation-only display switch')
 
 for (const messageBody of [
+  '你现在再次帮我下载capcut，看看你这个新版本表现怎么样',
   '你现在下载豆包电脑版，我要用',
   '你需要用你的内在浏览器访问网页下载',
   '用内置浏览器打开豆包官网，像人一样点击下载电脑版',
@@ -371,6 +380,9 @@ assert.equal(classifyTool('start_browser_download_task'), 'medium')
 assert.equal(evaluateToolPolicy('start_browser_download_task', { target: 'CapCut' }, {
   currentUserMessage: '下载 CapCut',
 }).allowed, true)
+assert.equal(evaluateToolPolicy('start_browser_download_task', { target: 'CapCut' }, {
+  currentUserMessage: '你现在再次帮我下载capcut，看看你这个新版本表现怎么样',
+}).allowed, true, 'the real retry phrasing authorizes exactly one background download task')
 assert.equal(evaluateToolPolicy('start_browser_download_task', { target: 'CapCut' }, {
   currentUserMessage: 'CapCut 是什么？',
 }).allowed, false)

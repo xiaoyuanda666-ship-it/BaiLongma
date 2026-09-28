@@ -579,6 +579,7 @@ When the input comes from voice, reply in short, natural sentences because the a
     }
   }
 
+  prompt += '\n\nCurrent browser architecture: only Tencent BrowserSkill controls the selected real Chrome Agent Window. Recalled procedures about embedded/card/large-window browsers, browser_set_display_mode, or fixed bsk session IDs are obsolete. Ignore only those obsolete browser steps; preserve all other user memories. User takeover/login keeps the same Chrome page, and Agent actions resume only after explicit task-control resume and fresh observation.'
   return prompt
 }
 

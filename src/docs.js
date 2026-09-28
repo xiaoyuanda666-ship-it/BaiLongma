@@ -1,11 +1,12 @@
 // 文档面板管理模块
 // 类似 hotspots.js 的面板状态 + TTL 上下文注入机制
 import { DOC_TOPICS as VOICE_TOPICS, detectDocTopic as detectVoiceTopic } from './docs/voice-config-faq.js'
+import { USER_GUIDE_TOPICS } from './docs/user-guide.js'
 import { CONFIG_TOPICS } from './docs/config-faq.js'
 import { SELF_KNOWLEDGE_TOPICS, detectSelfKnowledgeTopic } from './docs/self-knowledge.js'
 
 // 合并所有文档主题
-const DOC_TOPICS = { ...VOICE_TOPICS, ...CONFIG_TOPICS, ...SELF_KNOWLEDGE_TOPICS }
+const DOC_TOPICS = { ...VOICE_TOPICS, ...CONFIG_TOPICS, ...SELF_KNOWLEDGE_TOPICS, ...USER_GUIDE_TOPICS }
 
 function formatDocAsContext(topicId) {
   const doc = DOC_TOPICS[topicId]
@@ -103,22 +104,13 @@ export function buildDocPanelStateContext(detectedTopic = null) {
     `Current document panel: ${state.active ? 'open' : 'closed'}${topicLabel}. ${ttl}.`,
     ``,
     `open_doc_panel tool rules. Follow strictly:`,
-    `- Do not proactively ask the user for API keys. If the user provides a key, help configure it directly and mention that they can test it.`,
-    `- Highest priority: when the user explicitly asks to open or view docs, immediately call open_doc_panel(action: "open", topic: "${state.topicId || 'voice_config'}"). No extra condition is required and you must not refuse.`,
-    `- When the user needs voice, model, WeChat, or social-platform configuration help, choose the matching topic and open the panel: voice_asr, voice_tts, voice_config, model_config, or wechat_config. When the user asks about how BaiLongma works, its code architecture, or its internal mechanisms, open self_architecture. When the user asks about BaiLongma's interface, panels, or Scene/visual design, open ui_design.`,
-    `- If the document panel is open but the current turn is unrelated to any configuration topic, immediately call open_doc_panel(topic: "${state.topicId || 'voice_config'}", action: "close") to close it.`,
+    `- This is a read-only user handbook. Guide the user to configure the application themselves in Settings; never ask them to paste secrets into the handbook or conversation.`,
+    `- When the user explicitly asks to open or view instructions, open the matching topic.`,
+    `- Normally answer directly without opening the handbook. You may offer to open relevant instructions when the user is unsure how to use a feature.`,
+    `- Opening without an explicit request is an occasional judgment call only when visual instructions clearly help the user's current task; keyword matches alone are never a reason to open it.`,
+    `- Respect a user's dismissal. Do not reopen, switch, or close their reading page just because the conversation topic changes. Close when requested or clearly appropriate.`,
   ]
-
-  // 关键词命中时明确要求 Agent 在本轮回复前先调用工具打开面板
-  if (detectedTopic && !state.active) {
-    const topicName = DOC_TOPICS[detectedTopic]?.title || detectedTopic
-    lines.push(`- Important: the user's current message involves "${topicName}". Before any text reply, you must first call open_doc_panel(action: "open", topic: "${detectedTopic}") to open the document panel, then answer in text. The only exception is when context clearly shows the word appeared incidentally in an unrelated topic and is not a configuration question.`)
-  }
-
-  if (detectedTopic && state.active && detectedTopic !== state.topicId) {
-    const topicName = DOC_TOPICS[detectedTopic]?.title || detectedTopic
-    lines.push(`- The user topic has switched to "${topicName}". Call open_doc_panel(action: "open", topic: "${detectedTopic}") to switch the panel topic.`)
-  }
+  if (detectedTopic) lines.push(`Relevant reference topic, if needed: ${detectedTopic}. This suggestion does not request a panel action.`)
 
   return lines.join('\n')
 }
@@ -130,9 +122,8 @@ export function buildDocRuntimeContext(userMessage) {
   if (now >= contextActiveUntilMs) return ''
   if (!state.topicId) return ''
 
-  // 如果用户消息中有新的文档触发词，自动切换主题
-  const detectedTopic = detectDocTopic(userMessage)
-  const topicId = detectedTopic || state.topicId
+  // 上下文跟随正在阅读的说明，不因聊天关键词悄悄切换。
+  const topicId = state.topicId
 
   return formatDocAsContext(topicId)
 }
