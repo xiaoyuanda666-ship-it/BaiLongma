@@ -43,6 +43,15 @@ An unresolved wait stays blocked. The user works in the same real Chrome page.
 **Resume** reads the page and requires the Agent to obtain a new snapshot before
 any referenced input; it does not resume the LLM turn automatically. Send a continue
 message after pressing Resume. No stale refs or unknown submissions are replayed.
+Paused tool errors and task status include `pause_reason` and `pause_message`.
+Reasons distinguish explicit takeover/cancel, an interrupted turn, login, and
+verification. Later turn cancellation preserves an existing pause reason.
+Interrupted or unsettled tasks show **确认操作已结束** (`settle`); this verifies
+daemon idle before enabling Resume. A failed idle check keeps the task paused.
+Missing task tabs return `BSK_TAB_UNAVAILABLE` without setting a login pause.
+The Agent can list/select/create task-owned tabs and obtain a fresh snapshot.
+`BSK_USER_CONTROL` originates in the adapter, not tab ownership validation;
+direct CLI commands or new sessions must not be used to bypass this pause.
 Login detection is heuristic; the user can always take over explicitly. Real Chrome
 can still encounter CAPTCHA. This adapter does not automate credential/verification
 entry or modify extension Automation settings.
@@ -57,7 +66,7 @@ the same limitation. Never restart the daemon to clean up.
 
 `GET /browser-backend/status` returns connection and owned task states.
 `POST /browser-backend/settings` configures CLI and instance.
-`POST /browser-backend/task` accepts takeover/cancel/resume/close for a known owned
+`POST /browser-backend/task` accepts takeover/cancel/settle/resume/close for a known owned
 session only. These endpoints require existing local/token authentication.
 Removed `/browser-surface*` and `/browser-preview` endpoints return 410; explicit
 screenshots are delivered using the existing chat-media path.

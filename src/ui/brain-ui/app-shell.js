@@ -47,7 +47,7 @@ const createPrimaryPanel = () => `
 
   <div class="legend" id="legend"></div>
 
-  <div class="stream">
+  <div class="stream" tabindex="0" aria-label="用户消息处理记录">
     <div class="stream-inner" id="si-l1"></div>
   </div>
 
@@ -160,9 +160,11 @@ const createSecondaryPanel = () => `
             <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
           </div>
         </div>
-        <div class="command-runs" id="command-runs" aria-live="polite" aria-label="实时命令状态" hidden></div>
-        <div class="action-log" id="action-log" aria-live="polite">
-          <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
+        <div class="action-log-feed" id="action-log-feed" tabindex="0" aria-label="行动日志">
+          <div class="command-runs" id="command-runs" aria-live="polite" aria-label="实时命令状态" hidden></div>
+          <div class="action-log" id="action-log" aria-live="polite">
+            <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
+          </div>
         </div>
       </div>
 
@@ -180,7 +182,7 @@ const createSecondaryPanel = () => `
             <span class="cognition-state" id="cognition-state" data-state="idle">空闲</span>
           </div>
         </div>
-        <div class="stream cognition-stream">
+        <div class="stream cognition-stream" tabindex="0" aria-label="思考与工具记录">
           <div class="stream-inner" id="si-l2">
             <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
           </div>

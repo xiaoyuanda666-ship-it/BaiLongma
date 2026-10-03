@@ -19,7 +19,7 @@ async function request(route, body) {
 function text(value) { const p = document.createElement('p'); p.textContent = value; content.append(p); }
 function button(label, action) {
   const b = document.createElement('button'); b.textContent = label; b.style.margin = '4px';
-  b.onclick = async () => { b.disabled = true; try { await action(); await refresh(); } catch(e) { text(e.message); } finally { b.disabled = false; } };
+  b.onclick = async () => { b.disabled = true; try { await action(); await refresh(); } catch(e) { await refresh(); text(e.message); } finally { b.disabled = false; } };
   content.append(b);
   return b;
 }
@@ -42,8 +42,9 @@ async function refresh() {
     binary.disabled = select.disabled = !!data.environment_override || !!data.tasks?.length;
     for (const task of data.tasks || []) {
       text(`${task.session_id || '启动中'} · ${task.browser} · ${task.state}${task.pending ? '（已有操作执行中）' : ''}`);
+      if (task.pause_message) text(task.pause_message);
       if (!task.session_id) continue;
-      const actions = task.state === 'user_control' ? [['恢复 Agent','resume']] : task.state === 'closing' ? [] : [['接管 / 取消任务','takeover']];
+      const actions = task.state === 'user_control' ? [['恢复 Agent','resume']] : task.state === 'waiting_for_idle' ? [['确认操作已结束','settle']] : task.state === 'closing' ? [] : [['接管 / 取消任务','takeover']];
       actions.push(['关闭此会话页面','close']);
       for (const [label, action] of actions) button(label, () => request('task',{session_id:task.session_id, action}));
     }

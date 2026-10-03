@@ -631,14 +631,17 @@ body {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  scrollbar-width: none;
 }
 
 .stream-inner {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+}
+
+.stream-inner > * {
+  flex-shrink: 0;
 }
 
 /* ── L2 / 自主意识观测台 ─────────────────────────────────────── */
@@ -909,22 +912,32 @@ body {
     opacity 300ms ease;
 }
 
-.action-log {
+.action-log-feed {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.action-log-feed::-webkit-scrollbar {
+  display: none;
+}
+
+.action-log-surface > .l2-module-head {
+  flex-shrink: 0;
 }
 
 .command-runs {
-  flex: 0 0 auto;
-  max-height: 86px;
-  margin: 0 0 7px;
-  overflow-y: auto;
-  border-block: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
+  margin: 0;
+}
+
+.command-runs:not([hidden]) + .action-log .action-log-empty {
+  display: none;
+}
+
+.command-runs:not([hidden]) + .action-log .action-log-entry:first-child {
+  border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
 }
 
 .command-runs[hidden] {
@@ -937,7 +950,7 @@ body {
   align-items: center;
   gap: 8px;
   min-height: 30px;
-  padding: 2px 0;
+  padding: 8px 0;
   color: var(--ink2);
   font-size: 9.5px;
 }
@@ -970,6 +983,7 @@ body {
 
 .command-run-command,
 .command-run-output {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -981,13 +995,15 @@ body {
 }
 
 .command-run-state {
+  white-space: nowrap;
   color: var(--dim);
-  font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
+  font: 500 8.5px/1.4 "JetBrains Mono", ui-monospace, monospace;
 }
 
 .command-run-output {
+  display: none;
   grid-column: 2 / 4;
-  margin: -2px 0 2px;
+  margin: 0;
   color: var(--dim);
 }
 
@@ -1013,6 +1029,8 @@ body {
   align-items: center;
   gap: 8px;
   min-height: 32px;
+  padding: 8px 0;
+  line-height: 1.5;
   border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
   color: var(--ink2);
   font-size: 9.5px;
@@ -1041,12 +1059,14 @@ body {
 }
 
 .action-log-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .action-log-time {
+  white-space: nowrap;
   color: var(--dim);
   font: 500 8.5px/1 "JetBrains Mono", ui-monospace, monospace;
 }
@@ -1207,6 +1227,11 @@ body {
   padding-right: 0;
 }
 
+.cognition-head,
+.panel-actions {
+  flex-shrink: 0;
+}
+
 .cognition-stream .stream-inner {
   min-height: 100%;
 }
@@ -1246,7 +1271,10 @@ body {
   border-top: 1px solid var(--line);
 }
 
-.stream::-webkit-scrollbar,
+.stream::-webkit-scrollbar {
+  display: none;
+}
+
 .panel::-webkit-scrollbar { width: 6px; }
 
 .stream::-webkit-scrollbar-thumb,
@@ -1268,6 +1296,8 @@ body {
   align-items: center;
   gap: 8px;
   margin-bottom: 5px;
+  flex-wrap: wrap;
+  line-height: 1.5;
 }
 
 .line-dot {
@@ -1286,6 +1316,7 @@ body {
 }
 
 .line-time {
+  flex-shrink: 0;
   font-size: 9px;
   color: var(--dim);
   font-family: "JetBrains Mono", ui-monospace, monospace;
@@ -1335,9 +1366,10 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  line-height: 1.6;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .line-tool .tool-spinner {
@@ -1361,7 +1393,11 @@ body {
 .line-tool .tool-name {
   font-weight: 500;
   letter-spacing: 0.04em;
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 40%;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .line-tool .tool-icon {
@@ -1402,7 +1438,7 @@ body {
 }
 
 .line-tool .tool-subject {
-  flex: 1 1 auto;
+  flex: 1 1 80px;
   min-width: 0;
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 10.5px;
@@ -1415,6 +1451,7 @@ body {
 }
 
 .line-tool .tool-status {
+  white-space: nowrap;
   margin-left: auto;
   font-size: 9px;
   font-family: "JetBrains Mono", ui-monospace, monospace;

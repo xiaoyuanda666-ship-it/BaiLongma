@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { browserBackend } from './browser-backend.js'
-import { BrowserSkillSession, getBrowserSkillStatus, stopBrowserSkillForContext } from './browserskill-client.js'
+import { BrowserSkillSession, getBrowserSkillStatus, stopBrowserSkillForContext, releaseBrowserSkillForContext, controlBrowserTask, browserTasks } from './browserskill-client.js'
 import { executeBrowserSkillTool, planBrowserSkillTool, browserSkillDescriptor } from './browserskill-tools.js'
 import { getBuiltInBrowserToolDescriptor } from './chrome-devtools-server.js'
 
@@ -69,7 +69,119 @@ test('login URL prevents input without silently switching accounts', async () =>
     await f.invoke('browser_navigate', { url: 'https://accounts.google.com/signin' })
     const result = await f.invoke('browser_type', { ref: '@e1', text: 'secret' })
     assert.equal(result.code, 'BSK_USER_CONTROL')
+    assert.equal(result.details.pause_reason, 'login_required')
     assert.equal(f.commands.some(a => a[0] === 'fill'), false)
+  } finally { await stopBrowserSkillForContext(f.context) }
+})
+
+test('missing task tab is recoverable without a false login pause', async () => {
+  const f = fixture()
+  try {
+    await f.invoke('browser_snapshot')
+    const run = f.session.run
+    f.session.run = async args => args[0] === 'tab' && args[1] === 'list' ? { tabs: [] } : run(args)
+    const result = await f.invoke('browser_click', { ref: '@e1' })
+    assert.equal(result.code, 'BSK_TAB_UNAVAILABLE')
+    assert.equal(f.session.humanControl, false)
+    assert.equal(f.commands.some(a => a[0] === 'click'), false)
+    f.session.run = run
+    await f.invoke('browser_snapshot')
+    assert.equal((await f.invoke('browser_click', { ref: '@e1' })).ok, true)
+  } finally { await stopBrowserSkillForContext(f.context) }
+})
+
+test('interrupted session preserves its reason and requires confirmed idle before resume', async () => {
+  const f = fixture()
+  try {
+    await f.invoke('browser_snapshot')
+    f.context.signal = AbortSignal.abort()
+    await releaseBrowserSkillForContext(f.context)
+    delete f.context.signal
+    const count = f.commands.length
+    const blocked = await f.invoke('browser_navigate', { url: 'https://example.com/' })
+    assert.equal(blocked.details.pause_reason, 'turn_interrupted')
+    assert.match(blocked.recovery, /bsk/)
+    assert.equal(f.commands.length, count)
+    assert.equal(browserTasks().find(t => t.session_id === 'test').pause_reason, 'turn_interrupted')
+    await assert.rejects(controlBrowserTask('test', 'resume'), { code: 'BSK_STILL_BUSY' })
+    const run = f.session.run
+    let idle = false
+    f.session.run = async args => args[0] === 'debug'
+      ? { activity: { state: idle ? 'idle' : 'running', wait_complete: idle } } : run(args)
+    await assert.rejects(controlBrowserTask('test', 'settle'), { code: 'BSK_STILL_BUSY' })
+    assert.equal(f.session.pauseReason, 'turn_interrupted')
+    idle = true
+    await controlBrowserTask('test', 'settle')
+    await controlBrowserTask('test', 'resume')
+    assert.equal(f.session.pauseReason, null)
+    assert.equal((await f.invoke('browser_click', { ref: '@e1' })).code, 'BSK_FRESH_OBSERVATION_REQUIRED')
+    await f.invoke('browser_snapshot')
+    assert.equal((await f.invoke('browser_click', { ref: '@e1' })).ok, true)
+  } finally { await stopBrowserSkillForContext(f.context) }
+})
+
+test('turn cancellation does not overwrite an existing login pause', async () => {
+  const f = fixture()
+  try {
+    await f.invoke('browser_navigate', { url: 'https://accounts.google.com/signin' })
+    f.context.signal = AbortSignal.abort()
+    await releaseBrowserSkillForContext(f.context)
+    assert.equal(f.session.pauseReason, 'login_required')
+  } finally { await stopBrowserSkillForContext(f.context) }
+})
+
+test('challenge observation records verification rather than user takeover', async () => {
+  const f = fixture()
+  try {
+    const run = f.session.run
+    f.session.run = async args => args[0] === 'observe'
+      ? { tab_id: 42, text: '请输入验证码' } : run(args)
+    const result = await f.invoke('browser_snapshot')
+    assert.equal(result.user_action_required, true)
+    assert.equal(result.details.pause_reason, 'challenge_required')
+    assert.equal((await f.invoke('browser_tabs', { action: 'create' })).code, 'BSK_USER_CONTROL')
+  } finally { await stopBrowserSkillForContext(f.context) }
+})
+
+test('explicit takeover and cancel report distinct reasons and clear after resume', async () => {
+  for (const [action, reason] of [['takeover', 'user_takeover'], ['cancel', 'user_cancelled']]) {
+    const f = fixture()
+    try {
+      await f.invoke('browser_snapshot')
+      const run = f.session.run
+      f.session.run = async args => args[0] === 'debug'
+        ? { activity: { state: 'idle', wait_complete: true } } : run(args)
+      await controlBrowserTask('test', action)
+      assert.equal((await f.invoke('browser_close')).details.pause_reason, reason)
+      await controlBrowserTask('test', 'resume')
+      assert.equal(browserTasks().find(t => t.session_id === 'test').pause_reason, undefined)
+    } finally { await stopBrowserSkillForContext(f.context) }
+  }
+})
+
+test('timed-out idle confirmation and failed resume retain the pause', async () => {
+  const f = fixture()
+  try {
+    await f.invoke('browser_snapshot')
+    const run = f.session.run
+    let timedOut = true
+    let observationFails = true
+    f.session.run = async args => {
+      if (args[0] === 'debug') return { activity: { state: 'idle', wait_complete: true, wait_timed_out: timedOut } }
+      if (args[0] === 'observe' && observationFails) throw new Error('disconnected')
+      return run(args)
+    }
+    await assert.rejects(controlBrowserTask('test', 'takeover'), { code: 'BSK_STILL_BUSY' })
+    assert.equal(f.session.unsettled, true)
+    await assert.rejects(controlBrowserTask('test', 'resume'), { code: 'BSK_STILL_BUSY' })
+    timedOut = false
+    await controlBrowserTask('test', 'settle')
+    await assert.rejects(controlBrowserTask('test', 'resume'), /disconnected/)
+    assert.equal(f.session.humanControl, true)
+    assert.equal(f.session.pauseReason, 'user_takeover')
+    observationFails = false
+    await controlBrowserTask('test', 'resume')
+    assert.equal(f.session.humanControl, false)
   } finally { await stopBrowserSkillForContext(f.context) }
 })
 test('a committed click is not repeated when observation fails', async () => {

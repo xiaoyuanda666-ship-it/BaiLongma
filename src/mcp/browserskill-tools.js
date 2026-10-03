@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import { mayOpenBrowserSkillTab, followBrowserSkillPopup, refreshBrowserSkillPopupUrl, waitForBrowserSkillPopup } from './browserskill-popup.js'
-import { BrowserSkillSession, stopBrowserSkillForContext, browserSessionForClient } from './browserskill-client.js'
+import { BrowserSkillSession, stopBrowserSkillForContext, browserSessionForClient, browserPauseError, browserPauseDetails } from './browserskill-client.js'
 import { isProtectedLoginUrl } from './chrome-devtools-server.js'
 import { detectBrowserChallenge } from '../runtime/browser-challenge-guard.js'
 import { browserPreviewDirectory, createBrowserPreviewFilename, resolveBrowserPreviewFile } from './browser-display.js'
@@ -83,7 +83,7 @@ export async function executeBrowserSkillTool(name, args = {}, context = {}, { s
   try {
     if (name === 'browser_close') {
       state.browserSkillSession ||= browserSessionForClient(owner)
-      if (state.browserSkillSession?.humanControl) throw new Error('The user controls this browser. Wait until control is returned.')
+      if (state.browserSkillSession?.humanControl) throw browserPauseError(state.browserSkillSession)
       await stopBrowserSkillForContext(context)
       return JSON.stringify({ ...base, ok: true, closed: true })
     }
@@ -91,12 +91,12 @@ export async function executeBrowserSkillTool(name, args = {}, context = {}, { s
     if (name === 'browser_take_screenshot' && args.type && args.type !== 'png') throw new Error('BrowserSkill screenshots currently support PNG only')
     const plan = name === 'browser_take_screenshot' ? null : planBrowserSkillTool(name, args)
     const session = state.browserSkillSession ||= browserSessionForClient(owner) || sessionFactory()
-    if (session.humanControl) throw Object.assign(new Error('The user controls this browser. Wait until control is returned in the browser task controls.'), { code: 'BSK_USER_CONTROL' })
+    if (session.humanControl) throw browserPauseError(session)
     if (owner) session.owner = owner
     session.background = context.autonomous === true
     session.agentPending += 1
     try { return await session.enqueue(async () => {
-      if (session.humanControl) throw Object.assign(new Error('The user has taken control of this browser.'), { code: 'BSK_USER_CONTROL' })
+      if (session.humanControl) throw browserPauseError(session)
       if (session.needsObservation && inputs.has(name)) throw Object.assign(new Error('Read browser_snapshot for fresh refs after user control or unknown effects.'), {code:'BSK_FRESH_OBSERVATION_REQUIRED'})
       context.signal?.throwIfAborted()
       await session.start(context)
@@ -110,11 +110,13 @@ export async function executeBrowserSkillTool(name, args = {}, context = {}, { s
         const tabs = await session.call(['tab', 'list', '--scope', 'agent'], context, { tab: false })
         if (mayOpenBrowserSkillTab(name, args)) tabsBeforeAction = tabs.tabs || []
         const page = tabs.tabs?.find(t => session.tabId != null ? t.tab_id === session.tabId : t.active)
-        if (!page || isProtectedLoginUrl(page.url) || session.challenge) {
-          session.humanControl = true
+        if (!page) throw Object.assign(new Error('Current task tab was not found. List task-owned tabs with browser_tabs and select an existing tab or create one, then read browser_snapshot.'), { code: 'BSK_TAB_UNAVAILABLE' })
+        if (isProtectedLoginUrl(page.url) || session.challenge) {
+          session.pause(isProtectedLoginUrl(page.url) ? 'login_required' : 'challenge_required')
           session.challenge = true
           return JSON.stringify({ ...base, ok: false, code: 'USER_LOGIN_REQUIRED', user_action_required: true,
-            error: 'Complete login or verification in the Chrome Agent Window, then explicitly resume using the browser task controls and read browser_snapshot.' })
+            error: 'Complete login or verification in the Chrome Agent Window, then explicitly resume using the browser task controls and read browser_snapshot.',
+            details: browserPauseDetails(session) })
         }
       }
       let result
@@ -171,7 +173,11 @@ export async function executeBrowserSkillTool(name, args = {}, context = {}, { s
       if (observation) {
         session.needsObservation = false
         session.challenge = Boolean(detectBrowserChallenge(name, JSON.stringify(payload))) || isProtectedLoginUrl(observation.url || result.url || '')
-        if (session.challenge) { session.humanControl = true; payload.user_action_required = true }
+        if (session.challenge) {
+          session.pause(isProtectedLoginUrl(observation.url || result.url || '') ? 'login_required' : 'challenge_required')
+          payload.user_action_required = true
+          payload.details = browserPauseDetails(session)
+        }
       }
       return JSON.stringify(payload)
     }) } finally { session.agentPending -= 1 }
@@ -180,6 +186,6 @@ export async function executeBrowserSkillTool(name, args = {}, context = {}, { s
     return JSON.stringify({ ...base, ok: false, code: error.code || 'BSK_TOOL_FAILED', error: error.message,
       ...(error.details ? { details: error.details } : {}),
       ...(formProgress ? { partial_progress: formProgress.completed_steps.length > 0, ...formProgress } : {}),
-      recovery: 'Inspect the current task state before retrying; never automatically repeat a possibly committed action or switch browser backends.' })
+      recovery: error.details?.recovery || (error.code === 'BSK_TAB_UNAVAILABLE' ? error.message : 'Inspect the current task state before retrying; never automatically repeat a possibly committed action or switch browser backends.') })
   }
 }

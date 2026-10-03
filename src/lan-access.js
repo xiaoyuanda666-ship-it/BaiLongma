@@ -3,6 +3,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import forge from 'node-forge'
+import { domainToASCII } from 'node:url'
+import { createSecureContext } from 'node:tls'
 import { paths } from './paths.js'
 
 const LAN_TLS_DIR = path.join(paths.dataDir, 'lan-tls')
@@ -99,18 +101,31 @@ function readRootCertificate(files) {
   }
 }
 
-function metadataMatches(files, addresses) {
+function certificateDnsNames() {
+  // DNS SAN values are IA5String, not arbitrary Unicode/binary strings.
+  let hostname = ''
+  try { hostname = domainToASCII(os.hostname().trim()).toLowerCase() } catch {}
+  const valid = hostname.length <= 253 && hostname.split('.').every(label =>
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+  return [...new Set(['localhost', ...(valid ? [hostname, ...(hostname.length <= 247 ? [`${hostname}.local`] : [])] : [])])]
+}
+
+function metadataMatches(files, addresses, dnsNames) {
   if (!fs.existsSync(files.serverKey) || !fs.existsSync(files.serverCert)) return false
   try {
     const metadata = JSON.parse(fs.readFileSync(files.metadata, 'utf8'))
-    return JSON.stringify(metadata.addresses || []) === JSON.stringify(addresses)
+    const matches = JSON.stringify(metadata.addresses || []) === JSON.stringify(addresses)
+      && JSON.stringify(metadata.dnsNames) === JSON.stringify(dnsNames)
       && new Date(metadata.validUntil || 0).getTime() > Date.now() + 30 * 24 * 60 * 60 * 1000
+    if (!matches) return false
+    createSecureContext({ key: fs.readFileSync(files.serverKey), cert: fs.readFileSync(files.serverCert) })
+    return true
   } catch {
     return false
   }
 }
 
-function createServerCertificate(files, addresses, root) {
+function createServerCertificate(files, addresses, root, dnsNames) {
   const pki = forge.pki
   const keys = pki.rsa.generateKeyPair(2048)
   const cert = pki.createCertificate()
@@ -122,14 +137,9 @@ function createServerCertificate(files, addresses, root) {
   cert.setIssuer(root.cert.subject.attributes)
 
   const altNames = [
-    { type: 2, value: 'localhost' },
+    ...dnsNames.map(value => ({ type: 2, value })),
     { type: 7, ip: '127.0.0.1' },
   ]
-  const hostname = os.hostname().trim()
-  if (hostname) {
-    altNames.push({ type: 2, value: hostname })
-    altNames.push({ type: 2, value: `${hostname}.local` })
-  }
   for (const address of addresses) altNames.push({ type: 7, ip: address })
 
   cert.setExtensions([
@@ -142,14 +152,14 @@ function createServerCertificate(files, addresses, root) {
   ])
   cert.sign(root.privateKey, forge.md.sha256.create())
 
-  writeAtomic(files.serverKey, pki.privateKeyToPem(keys.privateKey), 'utf8')
-  writeAtomic(
-    files.serverCert,
-    `${pki.certificateToPem(cert)}${pki.certificateToPem(root.cert)}`,
-    'utf8',
-  )
+  const key = pki.privateKeyToPem(keys.privateKey)
+  const chain = `${pki.certificateToPem(cert)}${pki.certificateToPem(root.cert)}`
+  createSecureContext({ key, cert: chain })
+  writeAtomic(files.serverKey, key, 'utf8')
+  writeAtomic(files.serverCert, chain, 'utf8')
   writeAtomic(files.metadata, JSON.stringify({
     addresses,
+    dnsNames,
     generatedAt: new Date().toISOString(),
     validUntil: cert.validity.notAfter.toISOString(),
   }, null, 2), 'utf8')
@@ -159,6 +169,7 @@ export function ensureLanTlsCertificates(addresses = getPrivateLanAddresses()) {
   const files = getLanTlsPaths()
   fs.mkdirSync(LAN_TLS_DIR, { recursive: true })
   const root = readRootCertificate(files)
-  if (!metadataMatches(files, addresses)) createServerCertificate(files, addresses, root)
+  const dnsNames = certificateDnsNames()
+  if (!metadataMatches(files, addresses, dnsNames)) createServerCertificate(files, addresses, root, dnsNames)
   return files
 }

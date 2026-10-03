@@ -30,7 +30,7 @@ function fixture() {
 }
 test.after(() => fs.rmSync(scratch,{recursive:true,force:true}))
 test('desktop PATH discovery, explicit CLI and persisted instance binding', () => {
-  const dir=path.join(scratch,'bin');fs.mkdirSync(dir);const bin=path.join(dir,'bsk');fs.writeFileSync(bin,'',{mode:0o700})
+  const dir=path.join(scratch,'bin');fs.mkdirSync(dir);const bin=path.join(dir,process.platform === 'win32' ? 'bsk.exe' : 'bsk');fs.writeFileSync(bin,'',{mode:0o700})
   assert.equal(browserSkillOptions({PATH:'',BSK_INSTALL_DIR:dir}).binary,bin)
   saveBrowserSkillSettings({browser:'one',binary:bin})
   assert.equal(browserSkillOptions({}).browser,'one')

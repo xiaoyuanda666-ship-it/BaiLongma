@@ -13,11 +13,28 @@ export function browserSessionForClient(clientId) {
 export function releaseBrowserSkillForContext(context = {}) {
   if (!context) return Promise.resolve()
   const session = (context.browserLeaseState || context).browserSkillSession
-  if (session?.id && context.signal?.aborted) { session.humanControl = true; session.needsObservation = true; session.unsettled = true }
+  if (session?.id && context.signal?.aborted) { session.pause('turn_interrupted'); session.unsettled = true }
   if (((session?.owner && !session?.background) || session?.humanControl || session?.challenge) && session.id && !session.closing) return Promise.resolve()
   return stopBrowserSkillForContext(context)
 }
 const problem = (code, message, details) => Object.assign(new Error(message), { code, details })
+const PAUSE_MESSAGES = {
+  user_takeover: '用户主动接管了浏览器。',
+  user_cancelled: '用户取消了浏览器任务。',
+  turn_interrupted: '上一轮任务被中断，浏览器操作尚需确认。',
+  login_required: '当前页面需要用户完成登录。',
+  challenge_required: '当前页面需要用户完成验证。',
+}
+export function browserPauseDetails(session) {
+  const reason = session.pauseReason || 'unknown'
+  return { session_id: session.id, tab_id: session.tabId, pause_reason: reason,
+    pause_message: PAUSE_MESSAGES[reason] || '浏览器任务已暂停，原因未记录。',
+    recovery: `${session.unsettled ? '先在“Chrome 浏览器任务”中点击“确认操作已结束”，等待确认空闲。' : ''}完成页面所需操作后，点击“恢复 Agent”，再发送继续消息。恢复后先调用 browser_snapshot 获取新引用。不要通过直接执行 bsk、另建会话或切换工具绕过暂停。` }
+}
+export function browserPauseError(session) {
+  const details = browserPauseDetails(session)
+  return problem('BSK_USER_CONTROL', details.pause_message, details)
+}
 
 // argv only: page text and model arguments must never become shell source.
 export async function runBsk(argv, { signal, timeout = 40_000, options = browserSkillOptions(), autoStart = false } = {}) {
@@ -69,7 +86,8 @@ export async function getBrowserSkillStatus({ run = runBsk, options = browserSki
 export function browserTasks() {
   return [...live].map(s => ({ session_id: s.id, browser: s.options.browser, owner: s.owner || '',
     state: s.closing ? 'closing' : s.humanControl ? (s.unsettled ? 'waiting_for_idle' : 'user_control') : s.agentPending ? 'running' : 'idle',
-    pending: s.agentPending, needs_observation: s.needsObservation, challenge: !!s.challenge }))
+    pending: s.agentPending, needs_observation: s.needsObservation, challenge: !!s.challenge,
+    ...(s.humanControl ? browserPauseDetails(s) : {}) }))
 }
 export async function controlBrowserTask(id, action) {
   const session = [...live].find(s => s.id === id)
@@ -79,29 +97,31 @@ export async function controlBrowserTask(id, action) {
   try { return await applyBrowserTaskControl(session, action) } finally { session.controlPending = false }
 }
 async function applyBrowserTaskControl(session, action) {
-  if (action === 'takeover' || action === 'cancel') {
-    session.humanControl = true // Block queued work immediately; accepted daemon actions must finish.
-    session.needsObservation = true
+  if (action === 'takeover' || action === 'cancel' || action === 'settle') {
+    if (action === 'settle' && !session.humanControl) throw problem('BSK_NOT_PAUSED', '任务尚未暂停')
+    session.pause(action === 'settle' ? session.pauseReason : action === 'cancel' ? 'user_cancelled' : 'user_takeover')
     session.unsettled = true
     await session.queue
     const waited = await session.run(['debug', 'wait', '--session', session.id, '--wait-ms', '30000'], {options:session.options, timeout:35000})
-    if (waited.activity?.state !== 'idle' || waited.activity?.wait_complete !== true) throw problem('BSK_STILL_BUSY', '已阻止新的 Agent 操作，但 Chrome 中已接受的操作尚未确认结束，请刷新状态后再接管。')
+    if (waited.activity?.state !== 'idle' || waited.activity?.wait_complete !== true || waited.activity?.wait_timed_out === true) throw problem('BSK_STILL_BUSY', '已阻止新的 Agent 操作，但 Chrome 中已接受的操作尚未确认结束，请刷新状态后再接管。')
     session.unsettled = false
     return { ok: true, state: 'user_control', message: 'Agent 已停止操作，请在同一个 Chrome 页面继续。' }
   }
   if (action === 'resume') {
     if (!session.humanControl) throw problem('BSK_NOT_PAUSED', '请先接管再恢复')
+    if (session.unsettled) throw problem('BSK_STILL_BUSY', '请先确认操作已结束，再恢复 Agent', browserPauseDetails(session))
     await session.enqueue(async () => {
       await session.call(['observe'], {}, { human: true })
       session.needsObservation = true // The Agent itself must read fresh refs next.
       session.challenge = false
       session.humanControl = false
+      session.pauseReason = null
       session.unsettled = false
     })
     return { ok: true, state: 'idle' }
   }
   if (action === 'close') { await session.stop(); return { ok: true, state: 'closed' } }
-  throw problem('BSK_INVALID_ACTION', '只支持 takeover、cancel、resume、close')
+  throw problem('BSK_INVALID_ACTION', '只支持 takeover、cancel、settle、resume、close')
 }
 
 export class BrowserSkillSession {
@@ -115,7 +135,13 @@ export class BrowserSkillSession {
     this.revision = 0
     this.agentPending = 0
     this.humanControl = false
+    this.pauseReason = null
     this.needsObservation = false
+  }
+  pause(reason) {
+    if (!this.humanControl) this.pauseReason = reason
+    this.humanControl = true
+    this.needsObservation = true
   }
   enqueue(operation) {
     if (this.closing) return Promise.reject(problem('BSK_SESSION_CLOSING', 'Browser task is closing'))
@@ -160,7 +186,7 @@ export class BrowserSkillSession {
   async call(args, context = {}, { tab = true, timeout = 40_000, human = false } = {}) {
     context.signal?.throwIfAborted()
     if (this.closing) throw problem('BSK_SESSION_CLOSING', 'Browser task is closing')
-    if (this.humanControl && !human) throw problem('BSK_USER_CONTROL', '用户已接管，停止 Agent 操作')
+    if (this.humanControl && !human) throw browserPauseError(this)
     const command = [...args, '--session', this.id]
     if (tab && this.tabId != null) command.push('--tab-id', String(this.tabId))
     const result = await this.run(command, { signal: context.signal, options: this.options, timeout })

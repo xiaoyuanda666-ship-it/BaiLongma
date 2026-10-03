@@ -1136,6 +1136,7 @@ const heartbeatStateLabelEl = document.getElementById("heartbeat-state-label");
 const heartbeatCountEl = document.getElementById("heartbeat-count");
 const heartbeatLastEl = document.getElementById("heartbeat-last");
 const actionLogEl = document.getElementById("action-log");
+const actionLogFeedEl = document.getElementById("action-log-feed");
 const commandRunsEl = document.getElementById("command-runs");
 const actionLogModuleEl = actionLogEl?.closest(".action-log-module");
 const actionLogSurfaceEl = document.getElementById("action-log-surface");
@@ -1210,7 +1211,7 @@ function renderActionLog() {
       row.append(dot, textEl, timeEl);
       actionLogEl.appendChild(row);
     }
-    actionLogEl.scrollTop = actionLogEl.scrollHeight;
+    if (actionLogFeedEl) actionLogFeedEl.scrollTop = actionLogFeedEl.scrollHeight;
   }
 }
 
@@ -1237,7 +1238,7 @@ function renderCommandRuns() {
     const card = document.createElement("article");
     card.className = "command-run";
     card.dataset.state = run.state || "starting";
-    card.title = run.command || run.runId;
+    card.title = [run.command || run.runId, run.output?.replace(/\r/g, "").trimEnd()].filter(Boolean).join("\n");
 
     const dot = document.createElement("span");
     dot.className = "command-run-dot";
