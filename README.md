@@ -93,7 +93,7 @@ npm run start:backend:lan
 
 ## 配置
 
-首次启动后会进入激活页，填写任意已支持 Provider 的 API Key 即可。也可以通过 `.env` 提供环境变量：
+首次启动后会进入激活页，填写已支持 Provider 的 API Key，并选择端点支持的 API 格式：Responses API 或 Chat Completions API。自定义端点也支持两种格式；Base URL 填写 API 根地址（如 `https://example.com/v1`），不用附加 `/responses` 或 `/chat/completions`。格式会随各 Provider 配置保存，旧配置继续使用 Responses。也可以通过 `.env` 提供环境变量：
 
 ```env
 LLM_PROVIDER=minimax
@@ -102,7 +102,7 @@ MINIMAX_API_KEY=your_key
 
 常用配置可以在 Brain UI 的设置页中完成：
 
-- 模型 Provider、模型、温度和 API Key。
+- 模型 Provider、API 格式、模型、温度和 API Key。修改 API 格式会先验证连接；当前工具调用链保持原连接，新设置从下一次对话回合生效。
 - 语音识别、TTS Provider、音色和凭证。
 - 社交平台连接参数。
 - 嵌入、网页搜索和安全开关。
@@ -225,7 +225,10 @@ npm run test:relevance
 npm run test:section-gate
 npm run test:agent-skills
 npm run test:config-upgrade
+npm run test:llm-protocols
 ```
+
+`test:llm-protocols` 使用项目自带 Electron 的 Node 运行时匹配 SQLite 原生模块，在临时数据目录运行双协议、工具循环、配置和界面回归；模型请求仅连接本机模拟 SSE 服务，不调用付费 API。
 
 记忆修复和配置探测：
 

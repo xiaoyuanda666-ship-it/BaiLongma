@@ -14,6 +14,8 @@ function publicActivationInfo(info) {
     provider: info.provider,
     model: info.model,
     models: info.models,
+    baseURL: info.baseURL,
+    apiFormat: info.apiFormat,
   }
 }
 
@@ -42,9 +44,10 @@ export async function handleActivationRoutes(req, res, url, {
 
   if (req.method === 'POST' && url.pathname === '/activate/prepare') {
     try {
-      const { apiKey, model, provider, baseURL } = await readJsonBody(req)
-      const info = await prepareLLMActivation({ provider, apiKey, model, baseURL })
-      const pending = storePreparedActivation({ apiKey, info })
+      const { apiKey, model, provider, baseURL, apiFormat } = await readJsonBody(req)
+      const draft = { provider, apiKey, model, baseURL, apiFormat }
+      const info = await prepareLLMActivation(draft)
+      const pending = storePreparedActivation({ draft, info })
       jsonResponse(res, 200, {
         ok: true,
         token: pending.token,
@@ -60,12 +63,13 @@ export async function handleActivationRoutes(req, res, url, {
 
   if (req.method === 'POST' && url.pathname === '/activate') {
     try {
-      const { apiKey, model, provider, baseURL, agentName, preparedToken } = await readJsonBody(req)
+      const { apiKey, model, provider, baseURL, apiFormat, agentName, preparedToken } = await readJsonBody(req)
       const trimmedName = validateAgentName(agentName)
-      const prepared = getPreparedActivation(preparedToken, apiKey)
+      const draft = { provider, apiKey, model, baseURL, apiFormat }
+      const prepared = getPreparedActivation(preparedToken, draft)
       const info = prepared
         ? commitPreparedActivation(prepared.info)
-        : await activateLLM({ provider, apiKey, model, baseURL })
+        : await activateLLM(draft)
       if (prepared) clearPreparedActivation?.()
 
       if (trimmedName) {

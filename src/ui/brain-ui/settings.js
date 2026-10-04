@@ -379,6 +379,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const autosaveStatus  = document.getElementById("settings-autosave-status");
   const autosaveStatusText = document.getElementById("settings-autosave-status-text");
   const providerSelect  = document.getElementById("settings-provider-select");
+  const apiFormatSelect = document.getElementById("settings-api-format");
   const modelSelect     = document.getElementById("settings-model-select");
   const refreshModelsBtn = document.getElementById("settings-refresh-models");
   const modelCatalogStatus = document.getElementById("settings-model-catalog-status");
@@ -393,6 +394,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const tempVal         = document.getElementById("settings-temperature-val");
   const tempFeedback    = document.getElementById("settings-temperature-feedback");
   const thinkingToggle  = document.getElementById("settings-thinking");
+  const thinkingHint    = document.getElementById("settings-thinking-hint");
   const thinkingFeedback = document.getElementById("settings-thinking-feedback");
   const contextRange = document.getElementById("settings-context-range");
   const chatContextSlider = document.getElementById("settings-chat-context-limit");
@@ -777,11 +779,18 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     return summary;
   }
 
+  function syncThinkingApiFormatUI() {
+    const usesServerDefaults = cachedLlm?.apiFormat === "chat-completions";
+    if (thinkingToggle) thinkingToggle.disabled = usesServerDefaults;
+    if (thinkingHint) thinkingHint.textContent = t(usesServerDefaults ? "settings.chatThinkingHint" : "settings.thinkingHint");
+  }
+
   function applyCustomProviderUI(providerOrLlm) {
     const provider = typeof providerOrLlm === "string"
       ? providerOrLlm
       : (providerOrLlm?.provider || "auto");
     const providerCfg = getProviderConfigForUI(provider, typeof providerOrLlm === "object" ? providerOrLlm : cachedLlm);
+    if (apiFormatSelect) apiFormatSelect.value = providerCfg.apiFormat || "responses";
     const customSection = document.getElementById("settings-custom-llm-section");
     const modelRow = document.getElementById("settings-model-row");
     const officialCustomModelRow = document.getElementById("settings-official-custom-model-row");
@@ -833,6 +842,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         if (tempVal) tempVal.textContent = llm.temperature.toFixed(2);
       }
       if (thinkingToggle) thinkingToggle.checked = llm.thinking === true;
+      syncThinkingApiFormatUI();
       const contextWindow = llm.contextWindow || {};
       const chatMessageLimit = Number(contextWindow.chatMessageLimit) || 20;
       const toolCallLimit = Number.isInteger(Number(contextWindow.toolCallLimit))
@@ -1144,6 +1154,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
   if (thinkingToggle) {
     const thinkingAutosave = createSettingsAutosave(async () => {
+      if (cachedLlm?.apiFormat === "chat-completions") {
+        return { skipped: true, message: t("settings.chatThinkingHint") };
+      }
       const thinking = thinkingToggle.checked;
       thinkingToggle.disabled = true;
       try {
@@ -1160,7 +1173,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         thinkingToggle.checked = !thinking;
         throw error;
       } finally {
-        thinkingToggle.disabled = false;
+        syncThinkingApiFormatUI();
       }
     }, { feedback: thinkingFeedback });
     thinkingToggle.addEventListener("change", () => {
@@ -1834,6 +1847,10 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     });
   }
 
+  apiFormatSelect?.addEventListener("change", () => {
+    llmAutosave.schedule({ immediate: true });
+  });
+
   const agentNameAutosave = createSettingsAutosave(async () => {
     const nextName = agentNameInput?.value?.trim() || "";
     if (nextName.length > 32) {
@@ -1867,7 +1884,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     const provider = providerSelect?.value || "auto";
     const apiKey = llmKeyInput.value.trim();
     const selectedCfg = cachedProviders?.[provider] || {};
-    const body = { provider };
+    const body = { provider, apiFormat: apiFormatSelect?.value || "responses" };
     if (provider === "custom") {
       body.baseURL = document.getElementById("settings-custom-baseurl")?.value?.trim();
       body.model = document.getElementById("settings-custom-model")?.value?.trim();
@@ -1905,17 +1922,22 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       provider: data.provider || provider,
       model: data.model || body.model || cachedLlm?.model,
       baseURL: data.baseURL || body.baseURL || cachedLlm?.baseURL,
+      apiFormat: data.apiFormat || body.apiFormat,
+      apiKey: body.apiKey ?? (apiKey || selectedCfg.apiKey || ""),
       activated: true,
     };
-    if (cachedProviders?.[provider]) {
-      cachedProviders[provider] = {
-        ...cachedProviders[provider],
+    const savedProvider = cachedLlm.provider;
+    if (cachedProviders?.[savedProvider]) {
+      cachedProviders[savedProvider] = {
+        ...cachedProviders[savedProvider],
         model: cachedLlm.model,
         baseURL: cachedLlm.baseURL,
-        apiKey: apiKey || cachedProviders[provider].apiKey,
+        apiFormat: cachedLlm.apiFormat,
+        apiKey: cachedLlm.apiKey,
       };
     }
     refreshConfigSummary({ llm: cachedLlm, minimax: cachedMinimax });
+    syncThinkingApiFormatUI();
     if (provider !== "auto" && provider !== "custom") void refreshProviderModels();
     return { message: "LLM 配置已自动保存" };
   }, { feedback: llmFeedback });

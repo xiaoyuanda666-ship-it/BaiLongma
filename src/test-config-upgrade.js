@@ -318,6 +318,52 @@ async function loadFresh(json) {
   assert(switched.provider === 'deepseek' && mod.config.apiKey === 'sk-deepseek-valid-key-1234567890', 'I: 无需重新输入 key 即可切回旧 provider')
 }
 
+// Scenario K: old records default to Responses, while an explicit format survives
+// legacy migration, model changes, provider switches, and restart.
+{
+  const legacy = await loadFresh({
+    provider: 'deepseek',
+    apiKey: 'sk-deepseek-format-test-key',
+    model: 'deepseek-v4-pro',
+  })
+  const deepseekFile = path.join(llmDir, 'deepseek.json')
+  assert(legacy.config.apiFormat === 'responses', 'K: 旧单文件配置缺少 apiFormat 时保留 Responses')
+  assert(JSON.parse(fs.readFileSync(deepseekFile, 'utf8')).apiFormat === 'responses', 'K: 迁移写入 provider 格式')
+
+  // Existing v4 provider files may also lack this new field.
+  const oldRecord = JSON.parse(fs.readFileSync(deepseekFile, 'utf8'))
+  delete oldRecord.apiFormat
+  fs.writeFileSync(deepseekFile, JSON.stringify(oldRecord), 'utf8')
+  const oldProviderReload = await import(`./config.js?v=${++v}`)
+  assert(oldProviderReload.config.apiFormat === 'responses', 'K: 旧 provider 文件缺少格式时正常加载')
+  oldProviderReload.switchModel('deepseek-v4-flash')
+  assert(JSON.parse(fs.readFileSync(deepseekFile, 'utf8')).apiFormat === 'responses', 'K: 后续保存补齐旧 provider 的默认格式')
+
+  const explicit = await loadFresh({
+    provider: 'custom',
+    apiKey: 'none',
+    model: 'local-model',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    apiFormat: 'chat-completions',
+    temperature: 0.7,
+  })
+  assert(explicit.config.apiFormat === 'chat-completions', 'K: 旧单文件中的显式格式迁移后保留')
+  assert(JSON.parse(fs.readFileSync(configFile, 'utf8')).apiFormat === undefined, 'K: 主配置不保留全局协议字段')
+  explicit.switchModel('local-model-v2')
+  explicit.commitPreparedActivation({
+    provider: 'openai',
+    apiKey: 'sk-openai-format-test-key',
+    model: 'gpt-4o-mini',
+  })
+  assert(explicit.config.apiFormat === 'responses', 'K: 旧 prepared 对象缺少格式时仍为 Responses')
+  explicit.switchProviderConfig({ provider: 'custom' })
+  const reload = await import(`./config.js?v=${++v}`)
+  assert(reload.config.apiFormat === 'chat-completions', 'K: 切回 provider 并重启后保留 Chat Completions')
+  assert(reload.config.model === 'local-model-v2', 'K: 切换模型未丢失 provider 配置')
+  assert(reload.getProviderSummaries().openai.apiFormat === 'responses', 'K: 各 provider 格式独立保存')
+  assert(reload.config.temperature === 0.7, 'K: 协议迁移不影响通用设置')
+}
+
 try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {}
 
 if (failed > 0) process.exit(1)

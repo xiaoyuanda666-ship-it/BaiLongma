@@ -10,7 +10,8 @@ import {
   DEFAULT_TTS_PROVIDER,
   normalizeDoubaoSpeechRate,
 } from './voice/tts-defaults.js'
-import { buildResponsesRequest } from './llm-responses.js'
+import { getLLMProtocol } from './llm-protocol.js'
+import { DEFAULT_LLM_API_FORMAT, normalizeLLMApiFormat } from './llm-api-format.js'
 import { resolveModelCatalog } from './model-catalog.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
@@ -20,7 +21,7 @@ export const QWEN_PROVIDER = 'qwen'
 export const MOONSHOT_PROVIDER = 'moonshot'
 export const ZHIPU_PROVIDER = 'zhipu'
 export const MIMO_PROVIDER = 'mimo'
-export const LLM_API_FORMAT = 'responses'
+export const LLM_API_FORMAT = DEFAULT_LLM_API_FORMAT
 
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-pro'
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
@@ -538,8 +539,8 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
-function buildPingParams(provider, model) {
-  return buildResponsesRequest({
+function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT) {
+  return getLLMProtocol(apiFormat).buildRequest({
     provider,
     model,
     messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
@@ -551,7 +552,8 @@ function buildPingParams(provider, model) {
   })
 }
 
-async function probeProvider(OpenAI, provider, apiKey, requestedModel) {
+async function probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat = DEFAULT_LLM_API_FORMAT) {
+  const format = normalizeLLMApiFormat(apiFormat)
   const pConfig = PROVIDER_CONFIG[provider]
   const models = getProviderModelFallbacks(provider, requestedModel)
   const client = new OpenAI({
@@ -563,11 +565,13 @@ async function probeProvider(OpenAI, provider, apiKey, requestedModel) {
   for (const model of models) {
     try {
       await withTimeout(
-        client.responses.create(buildPingParams(provider, model)),
+        format === 'responses'
+          ? client.responses.create(buildPingParams(provider, model, format))
+          : client.chat.completions.create(buildPingParams(provider, model, format)),
         PROBE_TIMEOUT_MS,
         provider,
       )
-      return { provider, model, pConfig }
+      return { provider, model, pConfig, apiFormat: format }
     } catch (err) {
       if (isProviderAuthError(err)) throw err
       errors.push(`${model}: ${getProviderErrorMessage(err)}`)
@@ -576,14 +580,14 @@ async function probeProvider(OpenAI, provider, apiKey, requestedModel) {
   throw new Error(`${provider} validation failed for models ${models.join(', ')}: ${errors.join(' | ')}`)
 }
 
-async function detectProvider(OpenAI, apiKey, requestedModel) {
+async function detectProvider(OpenAI, apiKey, requestedModel, apiFormat = DEFAULT_LLM_API_FORMAT) {
   const providers = getProvidersForAutoDetect()
   const errors = []
 
   return await new Promise((resolve, reject) => {
     let pending = providers.length
     for (const [provider] of providers) {
-      probeProvider(OpenAI, provider, apiKey, requestedModel)
+      probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat)
         .then(resolve)
         .catch((err) => {
           errors.push(`${provider}: ${getProviderErrorMessage(err)}`)
@@ -637,12 +641,16 @@ function writeLlmProviderConfig(provider, record) {
 
 function resolveLlmRecord(raw, fallbackProvider) {
   if (!raw || typeof raw !== 'object') return null
+  let apiFormat
+  try { apiFormat = normalizeLLMApiFormat(raw.apiFormat) }
+  catch { return null }
   const provider = resolveProviderId(raw.provider || fallbackProvider)
   if (provider === 'custom') {
     if (typeof raw.baseURL !== 'string' || !raw.baseURL) return null
     if (typeof raw.model !== 'string' || !raw.model) return null
     return {
       provider,
+      apiFormat,
       apiKey: typeof raw.apiKey === 'string' && raw.apiKey ? raw.apiKey : 'none',
       model: raw.model,
       baseURL: raw.baseURL,
@@ -650,7 +658,7 @@ function resolveLlmRecord(raw, fallbackProvider) {
   }
   if (!PROVIDER_CONFIG[provider]) return null
   if (typeof raw.apiKey !== 'string' || !raw.apiKey) return null
-  return { provider, apiKey: raw.apiKey, model: raw.model, baseURL: raw.baseURL }
+  return { provider, apiFormat, apiKey: raw.apiKey, model: raw.model, baseURL: raw.baseURL }
 }
 
 // 只负责把 config.json 解析成对象；文件缺失或损坏才返回 null。
@@ -667,7 +675,7 @@ function readParsedConfig() {
 }
 
 // 判断旧版 config.json 里的 LLM 块能否直接激活（provider/apiKey/custom 三件套齐全）。
-// 返回规整后的 { provider, apiKey, model, baseURL }（provider 已过别名映射）；不可用则返回 null。
+// 返回规整后的 { provider, apiFormat, apiKey, model, baseURL }；不可用则返回 null。
 function resolveLegacyStoredLlm(parsed) {
   if (!parsed || !parsed.provider) return null
   return resolveLlmRecord(parsed, parsed.provider)
@@ -711,6 +719,7 @@ function withoutLegacyLlmFields(obj) {
     apiKey: _apiKey,
     model: _model,
     baseURL: _baseURL,
+    apiFormat: _apiFormat,
     activatedAt: _activatedAt,
     ...rest
   } = obj || {}
@@ -728,9 +737,11 @@ function writeActiveLlmProvider(provider) {
 
 function persistLlmProviderConfig(record) {
   const provider = resolveProviderId(record?.provider)
+  const apiFormat = normalizeLLMApiFormat(record?.apiFormat)
   if (provider === 'custom') {
     writeLlmProviderConfig('custom', {
       provider: 'custom',
+      apiFormat,
       apiKey: String(record.apiKey || '').trim() || 'none',
       model: String(record.model || '').trim(),
       baseURL: String(record.baseURL || '').trim(),
@@ -743,6 +754,7 @@ function persistLlmProviderConfig(record) {
   if (!pConfig) throw new Error(`Unsupported provider: "${provider}"`)
   writeLlmProviderConfig(provider, {
     provider,
+    apiFormat,
     apiKey: String(record.apiKey || '').trim(),
     model: normalizeModel(record.model, provider),
     baseURL: undefined,
@@ -920,7 +932,8 @@ function loadFromEnv() {
   return null
 }
 
-function applyConfig(provider, apiKey, model, customBaseURL) {
+function applyConfig(provider, apiKey, model, customBaseURL, apiFormat = DEFAULT_LLM_API_FORMAT) {
+  config.apiFormat = normalizeLLMApiFormat(apiFormat)
   if (provider === 'custom') {
     config.provider = 'custom'
     config.model = String(model || '').trim()
@@ -1035,12 +1048,13 @@ export const config = {
     updatedAt: null,
   },
   provider: null,
+  apiFormat: DEFAULT_LLM_API_FORMAT,
   model: null,
   apiKey: null,
   baseURL: null,
   needsActivation: true,
   temperature: 0.5,
-  // Responses reasoning 强度开关：true=high，false=provider 支持的最低强度
+  // reasoning 强度开关：true=high，false=provider 支持的最低强度
   // （DeepSeek 为 low，OpenAI 为 none）。默认低强度——只有用户显式开启才使用 high。
   // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
   thinking: false,
@@ -1118,7 +1132,7 @@ if (parsedConfig) {
 
 const storedLlm = resolveStoredLlm(parsedConfig)
 if (storedLlm) {
-  applyConfig(storedLlm.provider, storedLlm.apiKey, storedLlm.model, storedLlm.baseURL)
+  applyConfig(storedLlm.provider, storedLlm.apiKey, storedLlm.model, storedLlm.baseURL, storedLlm.apiFormat)
   if (storedLlm.provider !== 'custom' && storedLlm.model) {
     const normalized = normalizeModel(storedLlm.model, storedLlm.provider)
     if (normalized !== storedLlm.model) {
@@ -1143,8 +1157,11 @@ if (storedLlm) {
   } catch {}
 })()
 
-export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, model, baseURL }) {
+export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat }) {
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
+  const format = normalizeLLMApiFormat(apiFormat === undefined
+    ? resolveStoredLlmForProvider(p)?.apiFormat
+    : apiFormat)
 
   if (p === 'custom') {
     const normalizedBaseURL = String(baseURL || '').trim()
@@ -1157,15 +1174,9 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
     const client = new OpenAI({ apiKey: normalizedKey, baseURL: normalizedBaseURL, timeout: PROBE_TIMEOUT_MS })
     try {
       await withTimeout(
-        client.responses.create(buildResponsesRequest({
-          provider: 'custom',
-          model: normalizedModel,
-          messages: [{ role: 'user', content: 'Reply with exactly: hello' }],
-          maxTokens: 32,
-          temperature: 0,
-          thinking: false,
-          stream: false,
-        })),
+        format === 'responses'
+          ? client.responses.create(buildPingParams('custom', normalizedModel, format))
+          : client.chat.completions.create(buildPingParams('custom', normalizedModel, format)),
         PROBE_TIMEOUT_MS,
         'custom',
       )
@@ -1176,6 +1187,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 
     return {
       provider: 'custom',
+      apiFormat: format,
       apiKey: normalizedKey,
       model: normalizedModel,
       baseURL: normalizedBaseURL,
@@ -1196,9 +1208,10 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 
   const { default: OpenAI } = await import('openai')
   if (p === AUTO_PROVIDER) {
-    const detected = await detectProvider(OpenAI, normalizedKey, model)
+    const detected = await detectProvider(OpenAI, normalizedKey, model, format)
     return {
       provider: detected.provider,
+      apiFormat: detected.apiFormat,
       apiKey: normalizedKey,
       model: detected.model,
       baseURL: undefined,
@@ -1208,7 +1221,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 
   let detected
   try {
-    detected = await probeProvider(OpenAI, p, normalizedKey, normalizedModel)
+    detected = await probeProvider(OpenAI, p, normalizedKey, normalizedModel, format)
   } catch (err) {
     const message = err?.message || String(err)
     if (/401|unauthoriz|invalid.*api.*key|authentication/i.test(message)) {
@@ -1219,6 +1232,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 
   return {
     provider: p,
+    apiFormat: detected.apiFormat,
     apiKey: normalizedKey,
     model: detected.model,
     baseURL: undefined,
@@ -1228,6 +1242,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 
 export function commitPreparedActivation(prepared) {
   const p = String(prepared?.provider || '').toLowerCase()
+  const apiFormat = normalizeLLMApiFormat(prepared?.apiFormat)
 
   if (p === 'custom') {
     const normalizedBaseURL = String(prepared.baseURL || '').trim()
@@ -1236,9 +1251,10 @@ export function commitPreparedActivation(prepared) {
     if (!normalizedBaseURL) throw new Error('Custom endpoint requires a Base URL')
     if (!normalizedModel) throw new Error('Custom endpoint requires a model name')
 
-    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL)
+    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL, apiFormat)
     persistLlmProviderConfig({
       provider: 'custom',
+      apiFormat,
       apiKey: normalizedKey,
       model: normalizedModel,
       baseURL: normalizedBaseURL,
@@ -1247,6 +1263,8 @@ export function commitPreparedActivation(prepared) {
     writeActiveLlmProvider('custom')
     return {
       provider: 'custom',
+      apiFormat,
+      baseURL: normalizedBaseURL,
       model: normalizedModel,
       models: [{ id: normalizedModel, label: normalizedModel, deprecated: false }],
     }
@@ -1263,9 +1281,10 @@ export function commitPreparedActivation(prepared) {
     throw new Error(`${p} key is invalid`)
   }
 
-  applyConfig(p, normalizedKey, normalizedModel)
+  applyConfig(p, normalizedKey, normalizedModel, undefined, apiFormat)
   persistLlmProviderConfig({
     provider: p,
+    apiFormat,
     apiKey: normalizedKey,
     model: normalizedModel,
     activatedAt: new Date().toISOString(),
@@ -1274,13 +1293,14 @@ export function commitPreparedActivation(prepared) {
 
   return {
     provider: p,
+    apiFormat,
     model: normalizedModel,
     models: withCurrentModel(pConfig.models, normalizedModel),
   }
 }
 
-export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL }) {
-  const prepared = await prepareActivation({ provider, apiKey, model, baseURL })
+export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat }) {
+  const prepared = await prepareActivation({ provider, apiKey, model, baseURL, apiFormat })
   return commitPreparedActivation(prepared)
 }
 
@@ -1289,7 +1309,7 @@ export function getActivationStatus() {
   const customModels = config.model ? [{ id: config.model, label: config.model, deprecated: false }] : DEEPSEEK_MODELS
   return {
     activated: !config.needsActivation,
-    apiFormat: LLM_API_FORMAT,
+    apiFormat: config.apiFormat,
     provider: config.provider,
     model: config.model,
     baseURL: config.provider === 'custom' ? config.baseURL : undefined,
@@ -1305,7 +1325,7 @@ export function getProviderSummaries() {
       const stored = resolveStoredLlmForProvider(name)
       return {
       label: pConfig.label || name,
-      apiFormat: LLM_API_FORMAT,
+      apiFormat: stored?.apiFormat || DEFAULT_LLM_API_FORMAT,
       models: withCurrentModel(pConfig.models, stored?.model),
       defaultModel: pConfig.defaultModel,
       modelCatalogSupported: pConfig.modelCatalogSupported !== false,
@@ -1318,7 +1338,7 @@ export function getProviderSummaries() {
   const custom = resolveStoredLlmForProvider('custom')
   result.custom = {
     label: 'Custom Endpoint',
-    apiFormat: LLM_API_FORMAT,
+    apiFormat: custom?.apiFormat || DEFAULT_LLM_API_FORMAT,
     models: [],
     defaultModel: '',
     configured: !!custom,
@@ -1390,6 +1410,7 @@ export function deactivate() {
     if (fs.existsSync(paths.configFile)) fs.unlinkSync(paths.configFile)
   } catch {}
   config.provider = null
+  config.apiFormat = DEFAULT_LLM_API_FORMAT
   config.model = null
   config.apiKey = null
   config.baseURL = null
@@ -1404,22 +1425,24 @@ export function switchModel(model) {
     config.model = trimmed
     persistLlmProviderConfig({
       provider: 'custom',
+      apiFormat: config.apiFormat,
       apiKey: config.apiKey,
       model: trimmed,
       baseURL: config.baseURL,
       activatedAt: readLlmProviderConfig('custom')?.activatedAt,
     })
-    return { provider: 'custom', model: trimmed }
+    return { provider: 'custom', model: trimmed, apiFormat: config.apiFormat, baseURL: config.baseURL }
   }
   const normalized = normalizeModel(model, config.provider)
   config.model = normalized
   persistLlmProviderConfig({
     provider: config.provider,
+    apiFormat: config.apiFormat,
     apiKey: config.apiKey,
     model: normalized,
     activatedAt: readLlmProviderConfig(config.provider)?.activatedAt,
   })
-  return { provider: config.provider, model: normalized }
+  return { provider: config.provider, model: normalized, apiFormat: config.apiFormat }
 }
 
 export function switchProviderConfig({ provider, model } = {}) {
@@ -1433,9 +1456,10 @@ export function switchProviderConfig({ provider, model } = {}) {
   if (p === 'custom') {
     const nextModel = String(model || stored.model || '').trim()
     if (!nextModel) throw new Error('Model name cannot be empty')
-    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL)
+    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL, stored.apiFormat)
     persistLlmProviderConfig({
       provider: 'custom',
+      apiFormat: stored.apiFormat,
       apiKey: stored.apiKey || 'none',
       model: nextModel,
       baseURL: stored.baseURL,
@@ -1444,15 +1468,18 @@ export function switchProviderConfig({ provider, model } = {}) {
     writeActiveLlmProvider('custom')
     return {
       provider: 'custom',
+      apiFormat: stored.apiFormat,
+      baseURL: stored.baseURL,
       model: nextModel,
       models: [{ id: nextModel, label: nextModel, deprecated: false }],
     }
   }
 
   const nextModel = normalizeModel(model || stored.model, p)
-  applyConfig(p, stored.apiKey, nextModel)
+  applyConfig(p, stored.apiKey, nextModel, undefined, stored.apiFormat)
   persistLlmProviderConfig({
     provider: p,
+    apiFormat: stored.apiFormat,
     apiKey: stored.apiKey,
     model: nextModel,
     activatedAt: readLlmProviderConfig(p)?.activatedAt,
@@ -1460,17 +1487,20 @@ export function switchProviderConfig({ provider, model } = {}) {
   writeActiveLlmProvider(p)
   return {
     provider: p,
+    apiFormat: stored.apiFormat,
     model: nextModel,
     models: withCurrentModel(PROVIDER_CONFIG[p].models, nextModel),
   }
 }
 
-export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model, baseURL } = {}) {
-  const p = String(provider || AUTO_PROVIDER).toLowerCase()
+export async function saveLLMSettings({ provider, apiKey, model, baseURL, apiFormat } = {}) {
+  if (apiFormat !== undefined) normalizeLLMApiFormat(apiFormat)
+  const p = String(provider || (apiFormat !== undefined ? config.provider : null) || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
+  const stored = resolveStoredLlmForProvider(p)
+  const nextApiFormat = normalizeLLMApiFormat(apiFormat === undefined ? stored?.apiFormat : apiFormat)
 
   if (p === 'custom') {
-    const stored = resolveStoredLlmForProvider('custom')
     const nextKey = trimmedKey || stored?.apiKey || 'none'
     const nextModel = String(model || stored?.model || '').trim()
     const nextBaseURL = String(baseURL || stored?.baseURL || '').trim()
@@ -1479,16 +1509,20 @@ export async function saveLLMSettings({ provider = AUTO_PROVIDER, apiKey, model,
       apiKey: nextKey,
       model: nextModel,
       baseURL: nextBaseURL,
+      apiFormat: nextApiFormat,
     })
     return commitPreparedActivation(prepared)
   }
 
-  if (trimmedKey || p === AUTO_PROVIDER) {
-    if (!trimmedKey) throw new Error('API key is required to auto-detect a provider')
+  const formatChanged = stored && nextApiFormat !== stored.apiFormat
+  if (trimmedKey || p === AUTO_PROVIDER || formatChanged) {
+    const nextKey = trimmedKey || stored?.apiKey
+    if (!nextKey) throw new Error('API key is required to auto-detect a provider')
     const prepared = await prepareActivation({
       provider: p,
-      apiKey: trimmedKey,
-      model,
+      apiKey: nextKey,
+      model: model || stored?.model,
+      apiFormat: nextApiFormat,
     })
     return commitPreparedActivation(prepared)
   }

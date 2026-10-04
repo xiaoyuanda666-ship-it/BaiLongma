@@ -1,6 +1,5 @@
 import http from 'http'
 import https from 'https'
-import crypto from 'crypto'
 import fs from 'fs'
 import { WebSocketServer } from 'ws'
 import { handleSceneConnection, setSceneIntentHandler } from './scene/scene-server.js'
@@ -15,6 +14,7 @@ import { ensureLanTlsCertificates } from './lan-access.js'
 import { createCloudASRSession } from './voice/cloud-asr.js'
 import { jsonResponse } from './api/utils.js'
 import { handleActivationRoutes } from './api/routes/activation.js'
+import { createPreparedActivationStore } from './api/activation-draft.js'
 import { handleAdminRoutes } from './api/routes/admin.js'
 import { handleBrowserPreviewRoutes } from './api/routes/browser-preview.js'
 import { handleEmbeddingRoutes } from './api/routes/embedding.js'
@@ -337,32 +337,7 @@ export function startAPI(port = 3721, {
   const host = getApiHost()
   const tlsOptions = getTlsOptions()
   const protocol = tlsOptions ? 'https' : 'http'
-  let pendingActivation = null
-
-  function storePreparedActivation({ apiKey, info }) {
-    pendingActivation = {
-      token: crypto.randomUUID(),
-      apiKey: String(apiKey || '').trim(),
-      info,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-    }
-    return pendingActivation
-  }
-
-  function getPreparedActivation(token, apiKey) {
-    if (!pendingActivation) return null
-    if (pendingActivation.expiresAt <= Date.now()) {
-      pendingActivation = null
-      return null
-    }
-    if (!token || pendingActivation.token !== token) return null
-    if (pendingActivation.apiKey !== String(apiKey || '').trim()) return null
-    return pendingActivation
-  }
-
-  function clearPreparedActivation() {
-    pendingActivation = null
-  }
+  const { storePreparedActivation, getPreparedActivation, clearPreparedActivation } = createPreparedActivationStore()
 
   try {
     const storedName = (getConfig('agent_name') || '').trim()

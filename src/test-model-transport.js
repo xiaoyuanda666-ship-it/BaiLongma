@@ -49,8 +49,18 @@ for (const change of [
   await connection.openStream(request)
   assert.equal(clients.length, before + 1, 'key, endpoint and provider changes invalidate SDK')
 }
+const turnConnection = Object.freeze({ ...settings })
+settings = { provider: 'next-turn', baseURL: 'https://next.invalid/v1', apiKey: 'next-key' }
+await connection.openStream({ ...request, connection: turnConnection })
+assert.deepEqual(clients.at(-1), { apiKey: turnConnection.apiKey, baseURL: turnConnection.baseURL },
+  'an existing tool chain keeps its endpoint and credential together after settings change')
+await connection.openStream(request)
+assert.deepEqual(clients.at(-1), { apiKey: settings.apiKey, baseURL: settings.baseURL },
+  'a new request without a turn snapshot sees the latest settings')
 settings.apiKey = ''
 assert.throws(() => connection.openStream(request), /尚未激活/, 'revocation cannot use cached credentials')
+assert.throws(() => connection.openStream({ ...request, connection: turnConnection }), /尚未激活/,
+  'revocation also prevents requests from an existing turn snapshot')
 settings.apiKey = 'key-two'
 controller.abort()
 failure = Object.assign(new Error('cancelled'), { name: 'AbortError' })

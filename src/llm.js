@@ -18,11 +18,7 @@ import {
 } from './runtime/browser-challenge-guard.js'
 import { streamWriteFileArgumentPreview } from './write-file-preview.js'
 import { formatBrowserDownloadContext } from './browser-download-context.js'
-import {
-  buildResponsesRequest,
-  createResponsesEventAccumulator,
-  responseStreamError,
-} from './llm-responses.js'
+import { getLLMProtocol } from './llm-protocol.js'
 import {
   actionContractCompletionIssue,
   actionContractToolCallIssue,
@@ -65,17 +61,22 @@ function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null, to
   } catch { /* 非 JSON 结果（如错误串）忽略 */ }
 }
 
-function normalizeTemperatureForProvider(temperature, model = config.model) {
+function captureModelSettings() {
+  const { provider, model, apiKey, baseURL, apiFormat } = config
+  return Object.freeze({ provider, model, apiKey, baseURL, apiFormat: getLLMProtocol(apiFormat).id })
+}
+
+function normalizeTemperatureForProvider(temperature, model, provider) {
   if (typeof temperature !== 'number') return temperature
-  if (shouldOmitSamplingForProviderModel(config.provider, model)) return undefined
-  if (config.provider !== ZHIPU_PROVIDER) return temperature
+  if (shouldOmitSamplingForProviderModel(provider, model)) return undefined
+  if (provider !== ZHIPU_PROVIDER) return temperature
   return Math.max(0, Math.min(1, Number(temperature.toFixed(2))))
 }
 
-function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = true, model = config.model }) {
-  const providerTemperature = normalizeTemperatureForProvider(temperature, model)
-  return buildResponsesRequest({
-    provider: config.provider,
+function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = true, modelSettings = captureModelSettings(), model = modelSettings.model }) {
+  const providerTemperature = normalizeTemperatureForProvider(temperature, model, modelSettings.provider)
+  return getLLMProtocol(modelSettings.apiFormat).buildRequest({
+    provider: modelSettings.provider,
     messages,
     toolSchemas,
     temperature: providerTemperature,
@@ -83,15 +84,17 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
     maxTokens,
     thinking,
     model,
-    omitSampling: shouldOmitSamplingForProviderModel(config.provider, model),
+    omitSampling: shouldOmitSamplingForProviderModel(modelSettings.provider, model),
     stream: true,
   })
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, model = config.model }) {
+async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, modelSettings = captureModelSettings(), model = modelSettings.model }) {
+  const protocol = getLLMProtocol(modelSettings.apiFormat)
   const requestParams = sanitizeJsonForTransport(
     buildLLMRequestParams({
+      modelSettings,
       model,
       messages,
       toolSchemas,
@@ -167,7 +170,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     onStream?.({ event: 'chunk', text: cleanText })
   }
 
-  const accumulator = createResponsesEventAccumulator({
+  const accumulator = protocol.createAccumulator({
     onReasoningDelta: text => {
       emittedReasoning += text
       if (!thinkDone) {
@@ -203,23 +206,30 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       previewState.session ||= writeFilePreviewSession
       writeFilePreviewStates.set(key, streamWriteFileArgumentPreview(call, previewState))
     },
-  })
+  }, { provider: modelSettings.provider, model })
   const hasPartialOutput = partial => Boolean(
     partial?.content
     || partial?.reasoningContent
     || partial?.commentaryContent
     || partial?.outputItems?.length
+    || partial?.replay?.entries?.length
     || partial?.toolCalls?.length,
   )
 
   try {
   // create() 也放进 try：连接建立阶段就卡死时，idle 触发 → 这里抛 AbortError → 下方 catch 转成可重试的瞬时错误。
-  const stream = await openModelStream({ protocol: 'responses', params: requestParams, signal: reqController.signal })
+  const stream = await openModelStream({
+    connection: modelSettings,
+    protocol: protocol.id,
+    params: requestParams,
+    signal: reqController.signal,
+  })
   for await (const event of stream) {
     armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break
     accumulator.consume(event)
   }
+  if (signal?.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
   } catch (err) {
     const partial = accumulator.result()
@@ -239,8 +249,9 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       return {
         content: sanitizeAssistantReplyForDelivery(partial.content),
         reasoningContent: partial.reasoningContent,
-        toolCalls: partial.toolCalls,
+        toolCalls: [],
         outputItems: partial.outputItems,
+        replay: partial.replay,
         aborted: true
       }
     }
@@ -272,8 +283,8 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   if (!emittedText && parsed.content) emitTextChunk(parsed.content)
   flushTextStream()
   if (streamStarted) onStream?.({ event: 'end' })
-  const streamError = responseStreamError(parsed)
-  if (streamError && (parsed.terminalType !== 'response.incomplete' || !parsed.content.trim())) throw streamError
+  const streamError = protocol.streamError(parsed)
+  if (streamError && (parsed.status !== 'incomplete' || !parsed.content.trim())) throw streamError
   if (parsed.usage.totalTokens > 0) {
     recordUsage(parsed.usage.totalTokens)
     const promptTotal = parsed.usage.inputTokens
@@ -285,12 +296,14 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   return {
     content: sanitizeAssistantReplyForDelivery(parsed.content),
+    model,
     reasoningContent: parsed.reasoningContent,
     // Never execute arguments from a truncated response. A partial text answer
     // can still be surfaced, but an incomplete side-effect request is unsafe.
-    toolCalls: parsed.terminalType === 'response.incomplete' ? [] : parsed.toolCalls,
+    toolCalls: parsed.status === 'incomplete' ? [] : parsed.toolCalls,
     outputItems: parsed.outputItems,
-    incomplete: parsed.terminalType === 'response.incomplete',
+    replay: parsed.replay,
+    incomplete: parsed.status === 'incomplete',
     aborted: false,
   }
 }
@@ -369,19 +382,24 @@ async function streamOnceWithRetry(args) {
 
 // 不同模型偶尔使用参数别名；在执行边界统一映射到工具 schema 名称。
 async function streamOnceWithModelFallback(args) {
-  if (config.provider !== MIMO_PROVIDER) return await streamOnceWithRetry(args)
+  const modelSettings = args.modelSettings || captureModelSettings()
+  args = { ...args, modelSettings }
+  if (modelSettings.provider !== MIMO_PROVIDER) return await streamOnceWithRetry(args)
 
-  const models = getProviderModelFallbacks(config.provider, args.model || config.model)
-  if (models.length <= 1) return await streamOnceWithRetry({ ...args, model: models[0] || config.model })
+  const models = getProviderModelFallbacks(modelSettings.provider, args.model || modelSettings.model)
+  if (models.length <= 1) return await streamOnceWithRetry({ ...args, model: models[0] || modelSettings.model })
 
   let lastErr
   for (let idx = 0; idx < models.length; idx++) {
     const model = models[idx]
     try {
       const result = await streamOnceWithRetry({ ...args, model })
-      if (model !== config.model) {
+      if (model !== modelSettings.model) {
         try {
-          switchModel(model)
+          // Do not overwrite settings the user changed while this turn ran.
+          if (config.provider === modelSettings.provider && config.model === modelSettings.model
+            && config.apiKey === modelSettings.apiKey && config.baseURL === modelSettings.baseURL
+            && getLLMProtocol(config.apiFormat).id === modelSettings.apiFormat) switchModel(model)
         } catch (persistErr) {
           console.warn(`[LLM] MiMo fallback model "${model}" worked but could not be saved: ${persistErr.message || persistErr}`)
         }
@@ -952,6 +970,12 @@ function isCloserPattern(content) {
 //   runtime 直接拦截 send_message 调用（不让它真投递），并在工具结果里告知
 //   "本轮是 silent 系统信号，不要 send_message"，让模型从这次拒绝里学到边界。
 export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, onModelAccept, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
+  // A tool chain must replay to the connection and protocol that produced it.
+  // Settings changes apply to the next turn; credential revocation is still
+  // checked by the model connection before every outgoing request.
+  const modelSettings = captureModelSettings()
+  const protocol = getLLMProtocol(modelSettings.apiFormat)
+  let activeModel = modelSettings.model
   const strictEvaluation = toolContext?.strictEvaluation || null
   const toolPromptHints = toolContext?.toolPromptHints || null
   const actionContract = toolContext?.actionContract || null
@@ -1008,6 +1032,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   // 回合上下文追踪：把本 turn 每一轮模型看到的 messages[] 与思考/输出原样记下，供 /turn-trace
   // 后台逐回合回放（专为排查"agent 把自己的话和用户的话搞混"这类生成层问题）。永不影响主流程。
   const trace = beginTurn({
+    provider: modelSettings.provider,
+    model: modelSettings.model,
+    apiFormat: protocol.id,
     label: toolContext?.currentChannel || (silentSignal ? 'silent' : (mustReply ? 'turn' : 'background')),
     channel: toolContext?.currentChannel,
     fromId: toolContext?.currentExternalPartyId || toolContext?.currentTargetId,
@@ -1138,6 +1165,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             round,
           })
         : await streamOnceWithModelFallback({
+            modelSettings,
+            model: activeModel,
             messages,
             toolSchemas,
             temperature,
@@ -1159,11 +1188,12 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
       throw err
     }
+    if (roundResult.model) activeModel = roundResult.model
     if (!modelAccepted) {
       modelAccepted = true
       if (onModelAccept) await onModelAccept()
     }
-    const { content, reasoningContent, toolCalls = [], outputItems = [], incomplete = false, aborted } = roundResult
+    const { content, reasoningContent, toolCalls = [], incomplete = false, aborted } = roundResult
 
     trace.recordRound({ round, inputOffset: roundInputOffset, content, reasoningContent, toolCalls, aborted })
 
@@ -1185,26 +1215,20 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
 
     appendContent(content)
 
-    // An incomplete Responses result may contain useful partial prose, but its
+    // An incomplete model result may contain useful partial prose, but its
     // output state is not a safe basis for another agent/tool round. Surface
     // the text already received and stop; never execute or nudge from it.
     if (incomplete) {
-      console.warn('[LLM] Responses API returned an incomplete response; preserving partial text and stopping this turn')
+      console.warn(`[LLM] ${protocol.id} returned an incomplete response; preserving partial text and stopping this turn`)
       break
     }
 
     const effectiveToolCalls = toolCalls
 
-    // Preserve native Responses output Items whenever another provider round
-    // follows. This keeps reasoning/function-call state intact on our fully
-    // stateless request path. Test doubles may omit Items, so plain assistant
-    // text remains a narrow internal fallback rather than a wire protocol.
+    // The adapter preserves native state separately from display text, including
+    // Responses reasoning Items and Chat Completions assistant tool_calls.
     const appendRoundOutput = () => {
-      if (outputItems.length > 0) {
-        messages.push(...outputItems.map(item => ({ ...item })))
-      } else if (content) {
-        messages.push({ role: 'assistant', content })
-      }
+      messages.push(...protocol.toHistoryEntries(roundResult))
     }
 
     // 无工具调用：本轮结束；若工具后空回复，再补一轮明确的最终回复指令。
@@ -1833,17 +1857,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
     }
 
-    // Responses is stateless in Bailongma: replay the exact model output Items,
-    // then append one function_call_output Item for every executed local tool.
+    // Replay model output and pair every tool result using the selected protocol.
     const terminalInternalRound = isTerminalInternalToolRound(effectiveToolCalls, { mustReply })
     appendRoundOutput()
-    for (const tr of toolResults) {
-      messages.push({
-        type: 'function_call_output',
-        call_id: tr.id,
-        output: String(tr.result),
-      })
-    }
+    messages.push(...protocol.toToolResultEntries(toolResults))
     {
       if (terminalInternalRound) break
       // "send_message 是不是本轮最后一个动作"才是判断"能不能收尾"的正确信号。

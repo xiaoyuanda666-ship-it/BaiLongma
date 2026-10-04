@@ -117,9 +117,9 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
 
   if (req.method === 'POST' && url.pathname === '/settings/model') {
     try {
-      const { provider, apiKey, model, baseURL } = await readJsonBody(req)
-      const result = provider || apiKey || baseURL
-        ? await saveLLMSettings({ provider, apiKey, model, baseURL })
+      const { provider, apiKey, model, baseURL, apiFormat } = await readJsonBody(req)
+      const result = provider || apiKey || baseURL || apiFormat !== undefined
+        ? await saveLLMSettings({ provider, apiKey, model, baseURL, apiFormat })
         : switchModel(model)
       emitEvent('model_switched', result)
       jsonResponse(res, 200, { ok: true, ...result })

@@ -64,9 +64,9 @@ export const SELF_KNOWLEDGE_TOPICS = {
       {
         title: 'LLM 调用与提示词组装',
         content: `■ llm.js
-	  - 统一使用 OpenAI Responses API（供应商与自定义端点必须支持 /responses）
-	  - 按类型化语义事件处理正文、推理、函数调用与完成/截断/失败状态
-	  - 工具循环：模型出 function_call Item → executor 执行 → function_call_output 回灌 → 继续，直到收尾
+	  - 按各供应商保存的 apiFormat 使用 OpenAI Responses API 或 Chat Completions API；旧配置默认 Responses
+	  - 协议适配器分别构建请求、解析流式事件、保留模型原始状态并编码工具结果，Agent 共用工具循环
+	  - 工具循环：模型发出工具调用 → executor 执行 → 按当前协议回传结果 → 继续，直到收尾；同一回合固定使用同一协议
   - 内置耗时工具的进度兜底（执行慢工具前替模型先应一声）、投递权威判定（delivered 为唯一权威）
 
 ■ prompt.js —— 系统提示词组装（buildSystemPrompt）

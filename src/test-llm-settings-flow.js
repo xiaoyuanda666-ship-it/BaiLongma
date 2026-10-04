@@ -18,6 +18,7 @@ for (const key of [
 
 const originalFetch = globalThis.fetch
 const requests = []
+let rejectedEndpoint = null
 
 function responseJson(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -61,8 +62,20 @@ globalThis.fetch = async (input, init = {}) => {
     body: requestBody,
   })
 
+  if (url === rejectedEndpoint) {
+    return responseJson({ error: { message: 'Selected API protocol is unavailable' } }, 404)
+  }
   if (url.endsWith('/responses')) {
     return responseJson(responsePayload(requestBody?.model || 'unknown-model'))
+  }
+  if (url.endsWith('/chat/completions')) {
+    return responseJson({
+      id: 'chatcmpl_settings_test',
+      object: 'chat.completion',
+      model: requestBody?.model,
+      choices: [{ index: 0, message: { role: 'assistant', content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })
   }
   if (url === 'https://api.deepseek.com/models') {
     return responseJson({ data: [{ id: 'deepseek-v4-pro' }, { id: 'deepseek-v5-preview' }] })
@@ -106,6 +119,8 @@ try {
   })
   assert.equal(activatedDeepSeek.provider, 'deepseek')
   assert.equal(activatedDeepSeek.model, 'deepseek-v4-pro')
+  assert.equal(activatedDeepSeek.apiFormat, 'responses')
+  assert.equal(mod.config.apiFormat, 'responses')
   assert.equal(mod.config.needsActivation, false)
   assert.equal(mod.config.apiKey, 'sk-deepseek-flow-test-key')
   assert.equal(JSON.parse(fs.readFileSync(path.join(tempUserDir, 'config.json'), 'utf8')).provider, 'deepseek')
@@ -192,6 +207,76 @@ try {
   assert.equal(switchedCustom.model, 'local-b')
   assert.equal(mod.config.baseURL, 'http://127.0.0.1:11434/v1')
   assert.equal(JSON.parse(fs.readFileSync(path.join(tempUserDir, 'llm', 'custom.json'), 'utf8')).model, 'local-b')
+
+  // A format-only update uses the current provider and its saved credentials.
+  const customChat = await mod.saveLLMSettings({ apiFormat: 'chat-completions' })
+  assert.equal(customChat.provider, 'custom')
+  assert.equal(customChat.apiFormat, 'chat-completions')
+  assert.equal(requests.at(-1).url, 'http://127.0.0.1:11434/v1/chat/completions')
+  assert.equal(requests.at(-1).body.stream, false)
+  assert(Array.isArray(requests.at(-1).body.messages))
+  assert.equal(requests.at(-1).body.input, undefined)
+  assert.equal(mod.getActivationStatus().apiFormat, 'chat-completions')
+  assert.equal(mod.getProviderSummaries().custom.apiFormat, 'chat-completions')
+  assert.equal(mod.switchModel('local-a').apiFormat, 'chat-completions')
+  await mod.saveLLMSettings({ provider: 'custom', model: 'local-b' })
+  assert.equal(requests.at(-1).url, 'http://127.0.0.1:11434/v1/chat/completions')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(tempUserDir, 'llm', 'custom.json'), 'utf8')).apiFormat, 'chat-completions')
+
+  const deepSeekChat = await mod.saveLLMSettings({ provider: 'deepseek', apiFormat: 'chat-completions' })
+  assert.equal(deepSeekChat.apiFormat, 'chat-completions')
+  assert.equal(deepSeekChat.model, 'deepseek-v5-preview')
+  assert.equal(requests.at(-1).url, 'https://api.deepseek.com/chat/completions')
+  assert.equal(requests.at(-1).authorization, 'Bearer sk-deepseek-flow-test-key')
+  assert.equal(mod.switchModel('deepseek-v4-pro').apiFormat, 'chat-completions')
+  assert.equal(mod.getProviderSummaries().deepseek.apiFormat, 'chat-completions')
+
+  // Failed protocol validation leaves both active memory and every saved file intact.
+  const activeFile = path.join(tempUserDir, 'config.json')
+  const deepSeekFile = path.join(tempUserDir, 'llm', 'deepseek.json')
+  const beforeActive = fs.readFileSync(activeFile, 'utf8')
+  const beforeProvider = fs.readFileSync(deepSeekFile, 'utf8')
+  const beforeRuntime = { ...mod.config }
+  rejectedEndpoint = 'https://api.deepseek.com/responses'
+  await assert.rejects(mod.saveLLMSettings({ apiFormat: 'responses' }), /validation failed/)
+  rejectedEndpoint = null
+  assert.deepEqual(mod.config, beforeRuntime)
+  assert.equal(fs.readFileSync(activeFile, 'utf8'), beforeActive)
+  assert.equal(fs.readFileSync(deepSeekFile, 'utf8'), beforeProvider)
+
+  // Invalid explicit formats never issue a probe or mutate saved configuration.
+  const requestsBeforeInvalid = requests.length
+  for (const apiFormat of ['auto', 'chat', '', null, 42]) {
+    await assert.rejects(mod.saveLLMSettings({ apiFormat }), /Unsupported LLM API format/)
+    await assert.rejects(mod.prepareActivation({ provider: 'custom', apiFormat }), /Unsupported LLM API format/)
+    assert.throws(() => mod.commitPreparedActivation({ provider: 'deepseek', apiFormat }), /Unsupported LLM API format/)
+  }
+  assert.equal(requests.length, requestsBeforeInvalid)
+  assert.equal(fs.readFileSync(deepSeekFile, 'utf8'), beforeProvider)
+
+  assert.equal(mod.switchProviderConfig({ provider: 'minimax' }).apiFormat, 'responses')
+  assert.equal(mod.switchProviderConfig({ provider: 'deepseek' }).apiFormat, 'chat-completions')
+  assert.equal(mod.config.apiFormat, 'chat-completions')
+  const reloaded = await import(`./config.js?llm-settings-reload=${Date.now()}`)
+  assert.equal(reloaded.config.provider, 'deepseek')
+  assert.equal(reloaded.config.apiFormat, 'chat-completions')
+  assert.equal(reloaded.getProviderSummaries().custom.apiFormat, 'chat-completions')
+  assert.equal(reloaded.getProviderSummaries().minimax.apiFormat, 'responses')
+  assert.equal(JSON.parse(fs.readFileSync(activeFile, 'utf8')).apiFormat, undefined)
+
+  // Activation carries the validated format through preparation and commit.
+  const prepared = await mod.prepareActivation({
+    provider: 'minimax',
+    apiKey: 'sk-minimax-flow-test-key',
+    model: 'MiniMax-M2.7',
+    apiFormat: 'chat-completions',
+  })
+  assert.equal(prepared.apiFormat, 'chat-completions')
+  assert.equal(mod.config.provider, 'deepseek')
+  assert.equal(mod.getProviderSummaries().minimax.apiFormat, 'responses')
+  const committed = mod.commitPreparedActivation(prepared)
+  assert.equal(committed.apiFormat, 'chat-completions')
+  assert.equal(mod.getProviderSummaries().minimax.apiFormat, 'chat-completions')
 
   const responseRequests = requests.filter(request => request.url.endsWith('/responses'))
   assert(responseRequests.length >= 4, 'new provider credentials and custom model changes are validated before saving')

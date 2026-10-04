@@ -113,7 +113,7 @@
     .input-wrap {
       position: relative;
     }
-    input {
+    input, select {
       width: 100%;
       box-sizing: border-box;
       border: none;
@@ -123,8 +123,11 @@
       font-size: 14px;
       outline: none;
     }
-    input:focus {
+    input:focus, select:focus {
       outline: none;
+    }
+    select {
+      color-scheme: dark;
     }
     input.has-detect {
       padding-right: 100px;
@@ -818,7 +821,14 @@
       <label for="apiKey">LLM Key</label>
       <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key" />
     </div>
-    <div class="row-hint">模型端点必须支持 OpenAI Responses API；激活时会自动探测</div>
+    <div class="row">
+      <label for="apiFormat">API 格式</label>
+      <select id="apiFormat">
+        <option value="responses">Responses API</option>
+        <option value="chat-completions">Chat Completions API</option>
+      </select>
+    </div>
+    <div class="row-hint">选择端点支持的 API 格式，适用于官方厂商和下方自定义端点；激活时会验证连接。</div>
 
     <!-- AI 名字 -->
     <div class="row">
@@ -859,7 +869,7 @@
       <button class="primary" id="activate" disabled>自动识别并进入</button>
     </div>
     <div id="status" class="status"></div>
-    <button id="settings-toggle" type="button">或使用自定义 Responses API 端点</button>
+    <button id="settings-toggle" type="button">或使用自定义 API 端点</button>
 
     <p class="hint">
       激活信息会保存到本地 <code>config.json</code>，仅用于连接对应厂商的官方 API。
@@ -870,7 +880,7 @@
       <hr class="divider">
       <div class="custom-section">
         <div class="custom-section-label">自定义端点</div>
-        <p class="custom-hint">使用兼容 OpenAI Responses API 的本地、私有或中转端点，API Key 可留空。</p>
+        <p class="custom-hint">使用兼容 OpenAI 的本地、私有或中转端点，在上方选择 API 格式，API Key 可留空。</p>
         <div class="row">
           <label for="customBaseUrl">Base URL</label>
           <input id="customBaseUrl" type="text" placeholder="如 http://localhost:11434/v1" autocomplete="off" spellcheck="false" />
@@ -897,13 +907,14 @@
     const isIntroPreview = new URLSearchParams(window.location.search).has('intro-preview')
 
     const apiKeyInput = document.getElementById('apiKey')
+    const apiFormatSelect = document.getElementById('apiFormat')
     const agentNameInput = document.getElementById('agentName')
     const btn = document.getElementById('activate')
     const statusEl = document.getElementById('status')
     const AUTO_DETECT_DELAY_MS = 650
     let autoDetectTimer = null
     let activationRequestSeq = 0
-    let activationState = { status: 'idle', key: '', agentName: '', token: '', info: null, promise: null }
+    let activationState = { status: 'idle', key: '', apiFormat: 'responses', agentName: '', token: '', info: null, promise: null }
 
     function enterBrainUiWithIntro({ preview = false } = {}) {
       try {
@@ -941,6 +952,7 @@
     function currentActivationDraft() {
       return {
         apiKey: apiKeyInput.value.trim(),
+        apiFormat: apiFormatSelect.value,
         agentName: agentNameInput.value.trim(),
       }
     }
@@ -949,6 +961,7 @@
       const draft = currentActivationDraft()
       return activationState.status === 'success'
         && activationState.key === draft.apiKey
+        && activationState.apiFormat === draft.apiFormat
         && activationState.token
     }
 
@@ -960,7 +973,8 @@
         return
       }
       if (activationState.status === 'pending'
-          && activationState.key === draft.apiKey) {
+          && activationState.key === draft.apiKey
+          && activationState.apiFormat === draft.apiFormat) {
         btn.disabled = true
         btn.textContent = '正在识别...'
         return
@@ -1140,7 +1154,8 @@
 
       if (!force && isPreparedForCurrentDraft()) return activationState
       if (activationState.status === 'pending'
-          && activationState.key === draft.apiKey) {
+          && activationState.key === draft.apiKey
+          && activationState.apiFormat === draft.apiFormat) {
         return activationState.promise
       }
 
@@ -1150,13 +1165,13 @@
           const resp = await fetch('/activate/prepare', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey: draft.apiKey, provider: 'auto' }),
+            body: JSON.stringify({ apiKey: draft.apiKey, provider: 'auto', apiFormat: draft.apiFormat }),
           })
           const data = await resp.json().catch(() => ({}))
           const latest = currentActivationDraft()
-          if (seq !== activationRequestSeq || latest.apiKey !== draft.apiKey) return null
+          if (seq !== activationRequestSeq || latest.apiKey !== draft.apiKey || latest.apiFormat !== draft.apiFormat) return null
           if (!resp.ok || !data.ok) {
-            activationState = { status: 'error', key: draft.apiKey, agentName: '', token: '', info: null, promise: null }
+            activationState = { status: 'error', key: draft.apiKey, apiFormat: draft.apiFormat, agentName: '', token: '', info: null, promise: null }
             setStatus(data.error || '识别失败', 'err')
             syncButtonState()
             return null
@@ -1164,6 +1179,7 @@
           activationState = {
             status: 'success',
             key: draft.apiKey,
+            apiFormat: draft.apiFormat,
             agentName: '',
             token: data.token,
             info: data,
@@ -1174,15 +1190,15 @@
           return activationState
         } catch (err) {
           const latest = currentActivationDraft()
-          if (seq !== activationRequestSeq || latest.apiKey !== draft.apiKey) return null
-          activationState = { status: 'error', key: draft.apiKey, agentName: '', token: '', info: null, promise: null }
+          if (seq !== activationRequestSeq || latest.apiKey !== draft.apiKey || latest.apiFormat !== draft.apiFormat) return null
+          activationState = { status: 'error', key: draft.apiKey, apiFormat: draft.apiFormat, agentName: '', token: '', info: null, promise: null }
           setStatus('网络错误：' + err.message, 'err')
           syncButtonState()
           return null
         }
       })()
 
-      activationState = { status: 'pending', key: draft.apiKey, agentName: '', token: '', info: null, promise }
+      activationState = { status: 'pending', key: draft.apiKey, apiFormat: draft.apiFormat, agentName: '', token: '', info: null, promise }
       setStatus('正在自动识别 API Key 所属厂商...')
       syncButtonState()
       return promise
@@ -1190,8 +1206,9 @@
 
     function scheduleAutoActivation() {
       if (autoDetectTimer) clearTimeout(autoDetectTimer)
+      activationRequestSeq += 1
       const draft = currentActivationDraft()
-      activationState = { status: 'idle', key: draft.apiKey, agentName: draft.agentName, token: '', info: null, promise: null }
+      activationState = { status: 'idle', key: draft.apiKey, apiFormat: draft.apiFormat, agentName: draft.agentName, token: '', info: null, promise: null }
       syncButtonState()
       if (!draft.apiKey) {
         setStatus('')
@@ -1230,13 +1247,14 @@
           body: JSON.stringify({
             apiKey: draft.apiKey,
             provider: 'auto',
+            apiFormat: draft.apiFormat,
             agentName,
             preparedToken: prepared.token,
           }),
         })
         const data = await resp.json().catch(() => ({}))
         if (!resp.ok || !data.ok) {
-          activationState = { status: 'error', key: draft.apiKey, agentName, token: '', info: null, promise: null }
+          activationState = { status: 'error', key: draft.apiKey, apiFormat: draft.apiFormat, agentName, token: '', info: null, promise: null }
           setStatus(data.error || '激活失败', 'err')
           syncButtonState()
           return
@@ -1257,6 +1275,7 @@
 
     btn.addEventListener('click', activate)
     apiKeyInput.addEventListener('input', scheduleAutoActivation)
+    apiFormatSelect.addEventListener('change', scheduleAutoActivation)
     apiKeyInput.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !btn.disabled) activate()
     })
@@ -1309,11 +1328,11 @@
         const resp = await fetch('/activate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'custom', baseURL, model, apiKey, agentName }),
+          body: JSON.stringify({ provider: 'custom', baseURL, model, apiKey, apiFormat: apiFormatSelect.value, agentName }),
         })
         const data = await resp.json().catch(() => ({}))
         if (!resp.ok || !data.ok) {
-          setCustomStatus(data.error || 'Responses API 连接失败，请检查端点、模型名与协议支持', 'err')
+          setCustomStatus(data.error || 'API 连接失败，请检查端点、模型名与所选 API 格式', 'err')
           syncCustomButtonState()
           return
         }

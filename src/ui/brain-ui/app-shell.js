@@ -333,9 +333,17 @@ const createSettingsModal = () => `
                 <option value="deepseek">DeepSeek</option>
                 <option value="minimax">MiniMax</option>
                 <option value="mimo">小米 MiMo</option>
-                <option value="custom">自定义 Responses API 端点</option>
+                <option value="custom">自定义 API 端点</option>
               </select>
             </div>
+            <div class="settings-row">
+              <label class="settings-label" for="settings-api-format">API 格式</label>
+              <select class="settings-select" id="settings-api-format">
+                <option value="responses">Responses API</option>
+                <option value="chat-completions">Chat Completions API</option>
+              </select>
+            </div>
+            <p class="settings-hint">选择端点支持的 API 格式。修改后会测试连接，成功后自动保存。</p>
             <div class="settings-row" id="settings-model-row">
               <label class="settings-label" for="settings-model-select">模型</label>
               <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
@@ -350,7 +358,7 @@ const createSettingsModal = () => `
               <label class="settings-label" for="settings-official-custom-model">自定义模型名</label>
               <input class="settings-input" id="settings-official-custom-model" type="text" placeholder="如 kimi-k2.8, gpt-5.2, glm-6" autocomplete="off" spellcheck="false">
             </div>
-            <!-- 自定义 Responses API 端点字段 -->
+            <!-- 自定义 API 端点字段 -->
             <div id="settings-custom-llm-section" style="display:none;">
               <div class="settings-row">
                 <label class="settings-label" for="settings-custom-baseurl">Base URL</label>
@@ -386,7 +394,7 @@ const createSettingsModal = () => `
           </div>
           <div class="settings-section">
             <div class="settings-section-label">推理强度</div>
-            <p class="settings-hint">默认使用较低推理强度；开启后通过 Responses API 请求 high 强度。仅在当前模型支持 reasoning 时生效。</p>
+            <p class="settings-hint" id="settings-thinking-hint">默认使用较低推理强度；开启后请求 high 强度。仅在当前模型和 API 格式支持推理设置时生效。</p>
             <div class="settings-row">
               <label class="settings-label" for="settings-thinking">使用高强度推理</label>
               <label class="settings-toggle">

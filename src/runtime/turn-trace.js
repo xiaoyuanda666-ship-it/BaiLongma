@@ -1,7 +1,7 @@
 // 回合上下文追踪器（Turn Trace）
 //
 // 目的：诊断"agent 把自己说的话和用户说的话搞混"这类**生成层**问题。要看清根因，必须能
-// 还原模型每一轮实际看到的 Responses input Items 以及它的思考、正文与工具调用。
+// 还原模型每一轮实际看到的协议上下文以及它的思考、正文与工具调用。
 // 本模块就是这条取证通道：callLLM 在每个 turn 把这些原样记下来，
 // 后台页面 /turn-trace 逐回合回放。
 //
@@ -97,6 +97,9 @@ function sanitizeMeta(meta = {}) {
   )
   return {
     label: pick(meta.label, 60) || 'turn',
+    provider: pick(meta.provider, 80),
+    model: pick(meta.model, 120),
+    apiFormat: pick(meta.apiFormat, 40),
     channel: pick(meta.channel, 40),
     fromId: pick(meta.fromId, 80),
     targetId: pick(meta.targetId, 80),
