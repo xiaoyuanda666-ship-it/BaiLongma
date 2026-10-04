@@ -20,6 +20,8 @@ if (invalidArgs.length > 0) {
 const requestedArchs = args.filter((arg) => supportedArchs.has(arg));
 const archs = requestedArchs.length > 0 ? requestedArchs : ['x64', 'arm64'];
 const shouldNotarize = !args.includes('no-notarize');
+// Custom hooks own notarization; a build must never publish an update implicitly.
+const builderSafetyArgs = ['--config.mac.notarize=false', '--publish', 'never'];
 
 if (String(process.env.BAILONGMA_CODESIGN_TIMESTAMP || '').trim().toLowerCase() === 'none') {
   console.error('[build:mac] BAILONGMA_CODESIGN_TIMESTAMP=none is forbidden for release artifacts');
@@ -92,7 +94,7 @@ for (const arch of archs) {
   console.log(`[build:mac] building signed ${arch} app${shouldNotarize ? ' and submitting it to Apple' : ' without Apple notarization'}`);
   const previousMode = process.env.BAILONGMA_NOTARY_MODE;
   process.env.BAILONGMA_NOTARY_MODE = shouldNotarize ? 'submit' : 'skip';
-  run('node', ['./node_modules/electron-builder/cli.js', '--mac', 'dir', `--${arch}`]);
+  run('node', ['./node_modules/electron-builder/cli.js', '--mac', 'dir', `--${arch}`, ...builderSafetyArgs]);
   if (previousMode === undefined) delete process.env.BAILONGMA_NOTARY_MODE;
   else process.env.BAILONGMA_NOTARY_MODE = previousMode;
 }
@@ -109,7 +111,7 @@ for (const arch of archs) {
   process.env.BAILONGMA_NOTARY_MODE = shouldNotarize ? 'submit' : 'skip';
   run('node', [
     './node_modules/electron-builder/cli.js', '--mac', 'dmg', 'zip', `--${arch}`,
-    '--prepackaged', `${appOutDir}/Bailongma.app`,
+    '--prepackaged', `${appOutDir}/Bailongma.app`, ...builderSafetyArgs,
   ]);
   if (previousMode === undefined) delete process.env.BAILONGMA_NOTARY_MODE;
   else process.env.BAILONGMA_NOTARY_MODE = previousMode;
