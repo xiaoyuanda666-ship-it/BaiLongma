@@ -1,8 +1,9 @@
 import fs from 'fs'
 import path from 'path'
+import { pipeline } from 'node:stream'
 import { config } from '../../config.js'
 import { paths } from '../../paths.js'
-import { contentTypeFor, isPathInside } from '../utils.js'
+import { contentTypeFor, isPathInside, parseByteRange } from '../utils.js'
 
 const INDEX_PATH = paths.indexHtml
 const DASHBOARD_PATH = paths.dashboardHtml
@@ -42,7 +43,7 @@ function serveFile(res, filePath, notFoundText, cacheControl = 'no-cache') {
       'Content-Length': stat.size,
       'Cache-Control': cacheControl,
     })
-    fs.createReadStream(filePath).pipe(res)
+    pipeline(fs.createReadStream(filePath), res, () => {})
   } catch {
     res.writeHead(404)
     res.end(notFoundText)
@@ -52,7 +53,8 @@ function serveFile(res, filePath, notFoundText, cacheControl = 'no-cache') {
 function serveAsset(req, res, assetRoot, relativePrefix) {
   const relativePath = decodeURIComponent(req.url.split('?')[0].slice(relativePrefix.length))
   const root = path.resolve(assetRoot)
-  const assetPath = path.resolve(assetRoot, relativePath)
+  let assetPath = path.resolve(assetRoot, relativePath)
+  const contentType = contentTypeFor(assetPath)
 
   if (!isPathInside(root, assetPath)) {
     res.writeHead(403)
@@ -61,55 +63,47 @@ function serveAsset(req, res, assetRoot, relativePrefix) {
   }
 
   try {
+    assetPath = fs.realpathSync(assetPath)
+    if (!isPathInside(fs.realpathSync(root), assetPath)) {
+      res.writeHead(403)
+      res.end('forbidden')
+      return
+    }
     const stat = fs.statSync(assetPath)
     if (!stat.isFile()) {
       res.writeHead(404)
       res.end('asset not found')
       return
     }
-    const rangeMatch = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || '').trim())
-    if (rangeMatch) {
-      const requestedStart = rangeMatch[1] === '' ? null : Number(rangeMatch[1])
-      const requestedEnd = rangeMatch[2] === '' ? null : Number(rangeMatch[2])
-      let start = requestedStart
-      let end = requestedEnd
-
-      if (start === null && end !== null) {
-        start = Math.max(0, stat.size - end)
-        end = stat.size - 1
-      } else {
-        start ??= 0
-        end = Math.min(end ?? stat.size - 1, stat.size - 1)
-      }
-
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
-        || start < 0 || end < start || start >= stat.size) {
-        res.writeHead(416, {
-          'Content-Range': `bytes */${stat.size}`,
-          'Accept-Ranges': 'bytes',
-        })
-        res.end()
-        return
-      }
-
+    const byteRange = parseByteRange(req.headers.range, stat.size)
+    if (byteRange?.unsatisfiable) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${stat.size}`,
+        'Accept-Ranges': 'bytes',
+      })
+      res.end()
+      return
+    }
+    if (byteRange) {
+      const { start, end } = byteRange
       res.writeHead(206, {
-        'Content-Type': contentTypeFor(assetPath),
+        'Content-Type': contentType,
         'Content-Length': end - start + 1,
         'Content-Range': `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-cache',
       })
-      fs.createReadStream(assetPath, { start, end }).pipe(res)
+      pipeline(fs.createReadStream(assetPath, { start, end }), res, () => {})
       return
     }
 
     res.writeHead(200, {
-      'Content-Type': contentTypeFor(assetPath),
+      'Content-Type': contentType,
       'Content-Length': stat.size,
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'no-cache',
     })
-    fs.createReadStream(assetPath).pipe(res)
+    pipeline(fs.createReadStream(assetPath), res, () => {})
   } catch {
     res.writeHead(404)
     res.end('asset not found')
@@ -214,7 +208,7 @@ export async function handleStaticRoutes(req, res, url) {
         'Content-Length': stat.size,
         'Cache-Control': 'public, max-age=31536000, immutable',
       })
-      fs.createReadStream(D3_VENDOR_PATH).pipe(res)
+      pipeline(fs.createReadStream(D3_VENDOR_PATH), res, () => {})
     } catch {
       res.writeHead(404)
       res.end('d3.min.js not found')

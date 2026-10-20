@@ -24,11 +24,35 @@ function readJsonFile(file, fallback) {
 }
 
 function writeJsonFile(file, value) {
+  writeFileAtomically(file, JSON.stringify(value, null, 2))
+}
+
+function writeFileAtomically(file, contents) {
   const tmp = `${file}.tmp`
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf-8', mode: 0o600 })
-  try { fs.chmodSync(tmp, 0o600) } catch {}
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, contents, { encoding: 'utf-8', mode: 0o600 })
+    try { fs.chmodSync(tmp, 0o600) } catch {}
+    fs.renameSync(tmp, file)
+  } finally {
+    try { fs.rmSync(tmp, { force: true }) } catch {}
+  }
+}
+
+function readStoreForUpdate() {
+  let original
+  try {
+    original = fs.readFileSync(paths.apiCapabilitySecretsFile)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+    return { original: null, store: { version: STORE_VERSION, secrets: {} } }
+  }
+  const store = JSON.parse(original.toString('utf-8'))
+  if (store?.version !== STORE_VERSION || !store.secrets
+    || typeof store.secrets !== 'object' || Array.isArray(store.secrets)) {
+    throw new Error('Saved secrets have an unsupported or invalid format')
+  }
+  return { original, store }
 }
 
 function readStore() {
@@ -39,7 +63,7 @@ function readStore() {
   return { version: STORE_VERSION, secrets: {} }
 }
 
-function migratePlainSecrets(store) {
+function migratePlainSecrets(store, { persist = true } = {}) {
   let changed = false
   const secrets = store?.secrets && typeof store.secrets === 'object' ? store.secrets : {}
   for (const [key, record] of Object.entries(secrets)) {
@@ -52,7 +76,7 @@ function migratePlainSecrets(store) {
     }
     changed = true
   }
-  if (changed) writeStore(store)
+  if (changed && persist) writeStore(store)
   return store
 }
 
@@ -78,16 +102,23 @@ function approveSafeStorageAccess(purpose = 'saved-secrets') {
   try { return request(purpose) === true } catch { return false }
 }
 
-function readFallbackMasterKey() {
+function readFallbackMasterKey({ create = true } = {}) {
   try {
     const raw = fs.readFileSync(paths.apiCapabilitySecretKeyFile, 'utf-8').trim()
     const key = Buffer.from(raw, 'base64')
     if (key.length >= 32) return key.subarray(0, 32)
-  } catch {}
+    throw new Error('Saved secret encryption key has an invalid format')
+  } catch (error) {
+    if (error.code !== 'ENOENT' || !create) throw error
+  }
+  const { store } = readStoreForUpdate()
+  if (Object.values(store.secrets).some(record => record?.scheme === FALLBACK_SCHEME)) {
+    throw new Error('Saved secret encryption key is missing; existing credentials must be recovered before saving')
+  }
 
   const key = crypto.randomBytes(32)
   fs.mkdirSync(path.dirname(paths.apiCapabilitySecretKeyFile), { recursive: true })
-  fs.writeFileSync(paths.apiCapabilitySecretKeyFile, key.toString('base64'), { encoding: 'utf-8', mode: 0o600 })
+  fs.writeFileSync(paths.apiCapabilitySecretKeyFile, key.toString('base64'), { encoding: 'utf-8', mode: 0o600, flag: 'wx' })
   try { fs.chmodSync(paths.apiCapabilitySecretKeyFile, 0o600) } catch {}
   return key
 }
@@ -124,7 +155,7 @@ function decryptSecret(record) {
       return safeStorage.decryptString(Buffer.from(String(record.value || ''), 'base64'))
     }
     if (record.scheme === FALLBACK_SCHEME) {
-      const key = readFallbackMasterKey()
+      const key = readFallbackMasterKey({ create: false })
       const decipher = crypto.createDecipheriv(FALLBACK_SCHEME, key, Buffer.from(String(record.iv || ''), 'base64'))
       decipher.setAuthTag(Buffer.from(String(record.tag || ''), 'base64'))
       return Buffer.concat([
@@ -145,13 +176,56 @@ export function setSecret(ref, value) {
     deleteSecret(key)
     return false
   }
-  const store = readStore()
-  store.secrets[key] = {
-    ...encryptSecret(secret),
-    updatedAt: nowIso(),
-  }
-  writeStore(store)
+  updateSecrets([{ ref: key, value: secret }])
   return true
+}
+
+// Apply a complete settings update in one atomic secret-file replacement.
+// The optional synchronous commit writes its companion configuration file; if
+// that fails, restore the original encrypted bytes without decrypting anything.
+export function updateSecrets(updates, commit) {
+  if (!Array.isArray(updates)) throw new Error('secret updates must be an array')
+  if (commit !== undefined && typeof commit !== 'function') throw new Error('commit must be a function')
+  const normalized = updates.map(({ ref, value }) => {
+    const key = String(ref || '').trim()
+    if (!key) throw new Error('secret ref required')
+    return { key, value: String(value || '') }
+  })
+  if (!normalized.length) {
+    commit?.()
+    return 0
+  }
+
+  const { original, store } = readStoreForUpdate()
+  let changed = 0
+  for (const { key, value } of normalized) {
+    if (value) {
+      store.secrets[key] = { ...encryptSecret(value), updatedAt: nowIso() }
+      changed += 1
+    } else if (Object.prototype.hasOwnProperty.call(store.secrets, key)) {
+      delete store.secrets[key]
+      changed += 1
+    }
+  }
+  if (changed) {
+    migratePlainSecrets(store, { persist: false })
+    writeStore(store)
+  }
+  try {
+    commit?.()
+  } catch (error) {
+    if (changed) {
+      try {
+        if (original === null) fs.rmSync(paths.apiCapabilitySecretsFile, { force: true })
+        else writeFileAtomically(paths.apiCapabilitySecretsFile, original)
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError],
+          `Configuration save failed and saved secrets could not be restored: ${error.message}; ${rollbackError.message}`)
+      }
+    }
+    throw error
+  }
+  return changed
 }
 
 export function getSecret(ref) {
@@ -160,10 +234,12 @@ export function getSecret(ref) {
   return decryptSecret(readStore().secrets[key])
 }
 
-export function hasSecret(ref) {
+export function hasSecret(ref, { strict = false } = {}) {
   const key = String(ref || '').trim()
   if (!key) return false
-  const store = readJsonFile(paths.apiCapabilitySecretsFile, null)
+  const store = strict
+    ? readStoreForUpdate().store
+    : readJsonFile(paths.apiCapabilitySecretsFile, null)
   const record = store?.version === STORE_VERSION && store?.secrets?.[key]
   // Configuration/status checks must not decrypt a value: they run during
   // startup and must never trigger a macOS Keychain password prompt.
@@ -173,11 +249,7 @@ export function hasSecret(ref) {
 export function deleteSecret(ref) {
   const key = String(ref || '').trim()
   if (!key) return false
-  const store = readStore()
-  if (!Object.prototype.hasOwnProperty.call(store.secrets, key)) return false
-  delete store.secrets[key]
-  writeStore(store)
-  return true
+  return updateSecrets([{ ref: key, value: '' }]) > 0
 }
 
 export const __internal = {

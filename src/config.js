@@ -633,10 +633,7 @@ function readLlmProviderConfig(provider) {
 function writeLlmProviderConfig(provider, record) {
   const file = getLlmConfigFile(provider)
   if (!file) throw new Error(`Unsupported provider: "${provider}"`)
-  const tmp = `${file}.tmp`
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
-  fs.renameSync(tmp, file)
+  writeJsonObjectFile(file, record)
 }
 
 function resolveLlmRecord(raw, fallbackProvider) {
@@ -646,8 +643,8 @@ function resolveLlmRecord(raw, fallbackProvider) {
   catch { return null }
   const provider = resolveProviderId(raw.provider || fallbackProvider)
   if (provider === 'custom') {
-    if (typeof raw.baseURL !== 'string' || !raw.baseURL) return null
-    if (typeof raw.model !== 'string' || !raw.model) return null
+    if (typeof raw.baseURL !== 'string' || !raw.baseURL.trim()) return null
+    if (typeof raw.model !== 'string' || !raw.model.trim()) return null
     return {
       provider,
       apiFormat,
@@ -657,7 +654,7 @@ function resolveLlmRecord(raw, fallbackProvider) {
     }
   }
   if (!PROVIDER_CONFIG[provider]) return null
-  if (typeof raw.apiKey !== 'string' || !raw.apiKey) return null
+  if (typeof raw.apiKey !== 'string' || !raw.apiKey.trim()) return null
   return { provider, apiFormat, apiKey: raw.apiKey, model: raw.model, baseURL: raw.baseURL }
 }
 
@@ -683,7 +680,8 @@ function resolveLegacyStoredLlm(parsed) {
 
 function resolveStoredLlmForProvider(provider) {
   const p = resolveProviderId(provider)
-  return resolveLlmRecord(readLlmProviderConfig(p), p)
+  const record = resolveLlmRecord(readLlmProviderConfig(p), p)
+  return record?.provider === p ? record : null
 }
 
 function resolveStoredLlm(parsed) {
@@ -693,16 +691,35 @@ function resolveStoredLlm(parsed) {
 }
 
 function writeStoredConfig(obj) {
-  const tmp = paths.configFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.configFile)
+  writeJsonObjectFile(paths.configFile, obj)
 }
 
-// 读出 config.json 现有内容（失败返回空对象）。
-// activate() 等写操作必须基于它合并，否则会抹掉 voice/tts/security 等其它字段。
+// 写操作只把不存在的文件视为空配置；损坏或不可读时必须保留原文件并报错。
+function readJsonObjectForUpdate(file) {
+  let raw
+  try { raw = fs.readFileSync(file, 'utf-8') }
+  catch (error) {
+    if (error.code === 'ENOENT') return {}
+    throw error
+  }
+  const parsed = JSON.parse(raw)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Configuration must be a JSON object: ${path.basename(file)}`)
+  }
+  return parsed
+}
+
 function readExistingStoredConfig() {
-  try { return JSON.parse(fs.readFileSync(paths.configFile, 'utf-8')) || {} }
-  catch { return {} }
+  return readJsonObjectForUpdate(paths.configFile)
+}
+
+function settingText(value, key) {
+  // GET responses contain redacted objects such as { configured: true }.
+  // Never stringify those into a credential while processing a PATCH.
+  if (value !== null && typeof value === 'object') {
+    throw new Error(`Invalid value for ${key}: expected a setting value, not a status object`)
+  }
+  return String(value ?? '').trim()
 }
 
 // 顶级字段的"读-浅合并-写"一把梭。所有 setter 都该走它（或 readExistingStoredConfig），
@@ -726,12 +743,17 @@ function withoutLegacyLlmFields(obj) {
   return rest
 }
 
-function writeActiveLlmProvider(provider) {
-  const base = withoutLegacyLlmFields(readExistingStoredConfig())
-  writeStoredConfig({
-    ...base,
-    schemaVersion: CONFIG_SCHEMA_VERSION,
-    provider,
+function persistActiveLlmConfig(record) {
+  const existing = readExistingStoredConfig()
+  preserveLegacyLlmConfig(existing, { archiveUnknown: true })
+  const base = withoutLegacyLlmFields(existing)
+  withConfigFileRollback([getLlmConfigFile(record.provider), paths.configFile], () => {
+    persistLlmProviderConfig(record)
+    writeStoredConfig({
+      ...base,
+      schemaVersion: CONFIG_SCHEMA_VERSION,
+      provider: record.provider,
+    })
   })
 }
 
@@ -760,6 +782,37 @@ function persistLlmProviderConfig(record) {
     baseURL: undefined,
     activatedAt: record.activatedAt || new Date().toISOString(),
   })
+}
+
+function backupLlmMigrationFile(file) {
+  const original = fs.readFileSync(file)
+  const backup = `${file}.migration-backup-${crypto.randomUUID()}`
+  fs.writeFileSync(backup, original, { flag: 'wx', mode: 0o600 })
+  if (!fs.readFileSync(backup).equals(original)) {
+    throw new Error('Could not verify LLM configuration backup')
+  }
+}
+
+function preserveLegacyLlmConfig(cfg, { archiveUnknown = false } = {}) {
+  const legacy = resolveLegacyStoredLlm(cfg)
+  if (!legacy) {
+    if (archiveUnknown && ['apiKey', 'model', 'baseURL', 'apiFormat', 'activatedAt']
+      .some(key => Object.prototype.hasOwnProperty.call(cfg, key))) {
+      // A later provider switch must not erase credentials this version cannot
+      // interpret. Keep the original file, including its provider identity.
+      backupLlmMigrationFile(paths.configFile)
+    }
+    return false
+  }
+  if (!resolveStoredLlmForProvider(legacy.provider)) {
+    const target = getLlmConfigFile(legacy.provider)
+    if (fs.existsSync(target)) backupLlmMigrationFile(target)
+    persistLlmProviderConfig({ ...legacy, activatedAt: cfg.activatedAt })
+    if (!resolveStoredLlmForProvider(legacy.provider)) {
+      throw new Error(`Could not preserve legacy ${legacy.provider} configuration`)
+    }
+  }
+  return true
 }
 
 const VOICE_PROVIDER_ALIASES = {
@@ -820,10 +873,50 @@ function readJsonObjectFile(file) {
 }
 
 function writeJsonObjectFile(file, record) {
-  const tmp = `${file}.tmp`
+  writeConfigFile(file, JSON.stringify(record, null, 2))
+}
+
+function writeConfigFile(file, contents) {
+  const tmp = `${file}.${crypto.randomUUID()}.tmp`
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(record, null, 2), 'utf-8')
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, contents, { encoding: 'utf-8', mode: 0o600, flag: 'wx' })
+    fs.renameSync(tmp, file)
+  } finally {
+    fs.rmSync(tmp, { force: true })
+  }
+}
+
+// Several settings span a provider file and an active pointer. If a synchronous
+// save fails, restore any files already changed before reporting the failure.
+function withConfigFileRollback(files, save) {
+  const before = [...new Set(files)].map(file => {
+    try { return { file, contents: fs.readFileSync(file) } }
+    catch (error) {
+      if (error.code === 'ENOENT') return { file, contents: null }
+      throw error
+    }
+  })
+  try { return save() }
+  catch (error) {
+    const rollbackErrors = []
+    for (const { file, contents } of before.reverse()) {
+      try {
+        if (contents === null) {
+          fs.rmSync(file, { force: true })
+        } else {
+          let current = null
+          try { current = fs.readFileSync(file) }
+          catch (readError) { if (readError.code !== 'ENOENT') throw readError }
+          if (!current?.equals(contents)) writeConfigFile(file, contents)
+        }
+      } catch (rollbackError) { rollbackErrors.push(rollbackError) }
+    }
+    if (rollbackErrors.length) {
+      throw new AggregateError([error, ...rollbackErrors], `${error.message}; configuration rollback failed`)
+    }
+    throw error
+  }
 }
 
 function readVoiceProviderConfig(provider) {
@@ -853,7 +946,7 @@ function writeActiveVoiceProvider(provider) {
   return p
 }
 
-function readLegacyVoiceBlock(cfg = readExistingStoredConfig()) {
+function readLegacyVoiceBlock(cfg = readParsedConfig()) {
   return (cfg?.voice && typeof cfg.voice === 'object') ? cfg.voice : {}
 }
 
@@ -974,16 +1067,9 @@ const CONFIG_MIGRATIONS = {
   // v1 → v2：LLM 凭据按 provider 拆到 userData/llm/<provider>.json。
   // config.json 只保留当前 provider 指针和 temperature/security/voice 等通用块。
   2(cfg) {
-    const legacyLlm = resolveLegacyStoredLlm(cfg)
-    if (legacyLlm) {
-      const targetFile = getLlmConfigFile(legacyLlm.provider)
-      if (targetFile && !fs.existsSync(targetFile)) {
-        persistLlmProviderConfig({
-          ...legacyLlm,
-          activatedAt: cfg.activatedAt,
-        })
-      }
-    }
+    // Unknown legacy fields stay recoverable; damaged destinations are backed
+    // up and repaired before the main file can lose its only usable copy.
+    if (!preserveLegacyLlmConfig(cfg)) return cfg
     return withoutLegacyLlmFields(cfg)
   },
   // v2 → v3：ASR 语音识别凭据按厂商拆到 userData/voice/<provider>.json，
@@ -1251,8 +1337,7 @@ export function commitPreparedActivation(prepared) {
     if (!normalizedBaseURL) throw new Error('Custom endpoint requires a Base URL')
     if (!normalizedModel) throw new Error('Custom endpoint requires a model name')
 
-    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL, apiFormat)
-    persistLlmProviderConfig({
+    persistActiveLlmConfig({
       provider: 'custom',
       apiFormat,
       apiKey: normalizedKey,
@@ -1260,7 +1345,7 @@ export function commitPreparedActivation(prepared) {
       baseURL: normalizedBaseURL,
       activatedAt: new Date().toISOString(),
     })
-    writeActiveLlmProvider('custom')
+    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL, apiFormat)
     return {
       provider: 'custom',
       apiFormat,
@@ -1281,15 +1366,14 @@ export function commitPreparedActivation(prepared) {
     throw new Error(`${p} key is invalid`)
   }
 
-  applyConfig(p, normalizedKey, normalizedModel, undefined, apiFormat)
-  persistLlmProviderConfig({
+  persistActiveLlmConfig({
     provider: p,
     apiFormat,
     apiKey: normalizedKey,
     model: normalizedModel,
     activatedAt: new Date().toISOString(),
   })
-  writeActiveLlmProvider(p)
+  applyConfig(p, normalizedKey, normalizedModel, undefined, apiFormat)
 
   return {
     provider: p,
@@ -1406,9 +1490,9 @@ export async function getProviderModels({ provider, apiKey, baseURL, forceRefres
 }
 
 export function deactivate() {
-  try {
-    if (fs.existsSync(paths.configFile)) fs.unlinkSync(paths.configFile)
-  } catch {}
+  const existing = readExistingStoredConfig()
+  preserveLegacyLlmConfig(existing, { archiveUnknown: true })
+  writeStoredConfig({ ...withoutLegacyLlmFields(existing), provider: null })
   config.provider = null
   config.apiFormat = DEFAULT_LLM_API_FORMAT
   config.model = null
@@ -1422,7 +1506,6 @@ export function switchModel(model) {
   if (config.provider === 'custom') {
     const trimmed = String(model || '').trim()
     if (!trimmed) throw new Error('Model name cannot be empty')
-    config.model = trimmed
     persistLlmProviderConfig({
       provider: 'custom',
       apiFormat: config.apiFormat,
@@ -1431,10 +1514,10 @@ export function switchModel(model) {
       baseURL: config.baseURL,
       activatedAt: readLlmProviderConfig('custom')?.activatedAt,
     })
+    config.model = trimmed
     return { provider: 'custom', model: trimmed, apiFormat: config.apiFormat, baseURL: config.baseURL }
   }
   const normalized = normalizeModel(model, config.provider)
-  config.model = normalized
   persistLlmProviderConfig({
     provider: config.provider,
     apiFormat: config.apiFormat,
@@ -1442,6 +1525,7 @@ export function switchModel(model) {
     model: normalized,
     activatedAt: readLlmProviderConfig(config.provider)?.activatedAt,
   })
+  config.model = normalized
   return { provider: config.provider, model: normalized, apiFormat: config.apiFormat }
 }
 
@@ -1456,8 +1540,7 @@ export function switchProviderConfig({ provider, model } = {}) {
   if (p === 'custom') {
     const nextModel = String(model || stored.model || '').trim()
     if (!nextModel) throw new Error('Model name cannot be empty')
-    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL, stored.apiFormat)
-    persistLlmProviderConfig({
+    persistActiveLlmConfig({
       provider: 'custom',
       apiFormat: stored.apiFormat,
       apiKey: stored.apiKey || 'none',
@@ -1465,7 +1548,7 @@ export function switchProviderConfig({ provider, model } = {}) {
       baseURL: stored.baseURL,
       activatedAt: readLlmProviderConfig('custom')?.activatedAt,
     })
-    writeActiveLlmProvider('custom')
+    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL, stored.apiFormat)
     return {
       provider: 'custom',
       apiFormat: stored.apiFormat,
@@ -1476,15 +1559,14 @@ export function switchProviderConfig({ provider, model } = {}) {
   }
 
   const nextModel = normalizeModel(model || stored.model, p)
-  applyConfig(p, stored.apiKey, nextModel, undefined, stored.apiFormat)
-  persistLlmProviderConfig({
+  persistActiveLlmConfig({
     provider: p,
     apiFormat: stored.apiFormat,
     apiKey: stored.apiKey,
     model: nextModel,
     activatedAt: readLlmProviderConfig(p)?.activatedAt,
   })
-  writeActiveLlmProvider(p)
+  applyConfig(p, stored.apiKey, nextModel, undefined, stored.apiFormat)
   return {
     provider: p,
     apiFormat: stored.apiFormat,
@@ -1531,16 +1613,17 @@ export async function saveLLMSettings({ provider, apiKey, model, baseURL, apiFor
 }
 
 export function setTemperature(t) {
-  const v = Math.min(2, Math.max(0, Number(t) || 0.5))
-  config.temperature = v
+  const value = Number(t)
+  const v = Math.min(2, Math.max(0, Number.isFinite(value) ? value : 0.5))
   patchConfig({ temperature: v })
+  config.temperature = v
   return { temperature: v }
 }
 
 export function setThinking(enabled) {
   const v = !!enabled
-  config.thinking = v
   patchConfig({ thinking: v })
+  config.thinking = v
   return { thinking: v }
 }
 
@@ -1569,8 +1652,8 @@ export function setContextWindowConfig(updates = {}) {
   if (next.toolCallLimit < CONTEXT_TOOL_LIMIT_MIN || next.toolCallLimit >= next.chatMessageLimit) {
     throw new Error(`工具调用条数必须在 ${CONTEXT_TOOL_LIMIT_MIN} 到 ${next.chatMessageLimit - 1} 之间`)
   }
-  config.contextWindow = next
   patchConfig({ contextWindow: { ...next } })
+  config.contextWindow = next
   return getContextWindowConfig()
 }
 
@@ -1604,11 +1687,10 @@ export function setHeartbeatConfig(updates = {}) {
 
   const changed = before.enabled !== next.enabled
     || before.defaultIntervalMinutes !== next.defaultIntervalMinutes
-  config.heartbeat.enabled = next.enabled
-  config.heartbeat.defaultIntervalMinutes = next.defaultIntervalMinutes
+  next.updatedAt = changed ? nowTimestamp() : config.heartbeat.updatedAt
+  patchConfig({ heartbeat: next })
+  config.heartbeat = next
   config.tickInterval = next.defaultIntervalMinutes * 60 * 1000
-  if (changed) config.heartbeat.updatedAt = nowTimestamp()
-  patchConfig({ heartbeat: { ...config.heartbeat } })
   return getHeartbeatConfig()
 }
 
@@ -1630,18 +1712,22 @@ function normalizeBlockedTools(values = []) {
 
 export function setSecurity(updates) {
   const before = getSecurity()
-  if (typeof updates.fileSandbox === 'boolean') config.security.fileSandbox = updates.fileSandbox
-  if (typeof updates.execSandbox === 'boolean') config.security.execSandbox = updates.execSandbox
-  if (typeof updates.browserPrivateNetwork === 'boolean') config.security.browserPrivateNetwork = updates.browserPrivateNetwork
+  const next = { ...config.security }
+  if (typeof updates.fileSandbox === 'boolean') next.fileSandbox = updates.fileSandbox
+  if (typeof updates.execSandbox === 'boolean') next.execSandbox = updates.execSandbox
+  if (typeof updates.browserPrivateNetwork === 'boolean') next.browserPrivateNetwork = updates.browserPrivateNetwork
   if (Array.isArray(updates.blockedTools)) {
-    config.security.blockedTools = normalizeBlockedTools(updates.blockedTools)
+    next.blockedTools = normalizeBlockedTools(updates.blockedTools)
   }
-  const changed = before.fileSandbox !== config.security.fileSandbox
-    || before.execSandbox !== config.security.execSandbox
-    || before.browserPrivateNetwork !== config.security.browserPrivateNetwork
-    || JSON.stringify(before.blockedTools) !== JSON.stringify(config.security.blockedTools)
-  if (changed) config.security.updatedAt = nowTimestamp()
-  patchConfig({ security: { ...config.security } })
+  const changed = before.fileSandbox !== next.fileSandbox
+    || before.execSandbox !== next.execSandbox
+    || before.browserPrivateNetwork !== next.browserPrivateNetwork
+    || JSON.stringify(before.blockedTools) !== JSON.stringify(next.blockedTools)
+  if (changed) next.updatedAt = nowTimestamp()
+  const network = typeof updates.allowLanAccess === 'boolean' ? nextNetworkConfig(updates) : null
+  patchConfig({ security: next, ...(network ? { network } : {}) })
+  config.security = next
+  if (network) config.network = network
   return getSecurity()
 }
 
@@ -1651,8 +1737,9 @@ export function getLanAccessToken({ ensure = false } = {}) {
   if (config.network.accessToken) return config.network.accessToken
   if (!ensure) return ''
 
-  config.network.accessToken = crypto.randomBytes(32).toString('base64url')
-  patchConfig({ network: { ...config.network } })
+  const next = { ...config.network, accessToken: crypto.randomBytes(32).toString('base64url') }
+  patchConfig({ network: next })
+  config.network = next
   return config.network.accessToken
 }
 
@@ -1683,15 +1770,23 @@ export function getNetworkConfig() {
   }
 }
 
-export function setNetworkConfig(updates) {
-  const before = getNetworkConfig()
+function nextNetworkConfig(updates) {
+  const next = { ...config.network }
   if (typeof updates.allowLanAccess === 'boolean') {
-    config.network.allowLanAccess = updates.allowLanAccess
-    if (updates.allowLanAccess) getLanAccessToken({ ensure: true })
+    next.allowLanAccess = updates.allowLanAccess
   }
-  const changed = before.allowLanAccess !== config.network.allowLanAccess
-  if (changed) config.network.updatedAt = nowTimestamp()
-  patchConfig({ network: { ...config.network } })
+  if (next.allowLanAccess && !next.accessToken && !getLanAccessToken()) {
+    next.accessToken = crypto.randomBytes(32).toString('base64url')
+  }
+  if (config.network.allowLanAccess !== next.allowLanAccess) next.updatedAt = nowTimestamp()
+  return next
+}
+
+export function setNetworkConfig(updates) {
+  const next = nextNetworkConfig(updates)
+  const changed = config.network.allowLanAccess !== next.allowLanAccess
+  patchConfig({ network: next })
+  config.network = next
   return {
     ...getNetworkConfig(),
     restartRequired: changed,
@@ -1729,9 +1824,7 @@ function readSeedanceFile() {
   catch { return {} }
 }
 function writeSeedanceFile(obj) {
-  const tmp = paths.seedanceConfigFile + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf-8')
-  fs.renameSync(tmp, paths.seedanceConfigFile)
+  writeJsonObjectFile(paths.seedanceConfigFile, obj)
 }
 
 // 一次性迁移：旧版把 seedance 存在 config.json 里。若独立文件尚无、而 config.json 里还有，
@@ -1772,15 +1865,11 @@ export function isSeedanceConfigured() {
 
 export function setSeedanceConfig({ apiKey, model, baseURL } = {}) {
   migrateLegacySeedance()
-  const next = { ...readSeedanceFile() }
-  if (apiKey !== undefined) next.apiKey = String(apiKey || '').trim()
-  if (model !== undefined) next.model = String(model || '').trim()
-  if (baseURL !== undefined) next.baseURL = String(baseURL || '').trim()
-  // 没有 key 时删掉独立文件，保持干净
-  if (!next.apiKey) {
-    try { fs.rmSync(paths.seedanceConfigFile, { force: true }) } catch {}
-    return getSeedanceConfig()
-  }
+  const next = { ...readJsonObjectForUpdate(paths.seedanceConfigFile) }
+  if (apiKey !== undefined) next.apiKey = settingText(apiKey, 'apiKey')
+  if (model !== undefined) next.model = settingText(model, 'model')
+  if (baseURL !== undefined) next.baseURL = settingText(baseURL, 'baseURL')
+  // Model/endpoint settings remain useful when the key comes from the environment.
   writeSeedanceFile(next)
   return getSeedanceConfig()
 }
@@ -1830,16 +1919,22 @@ export function setSocialConfig(updates) {
   const next = { ...current }
   for (const [key, val] of Object.entries(updates || {})) {
     if (!SOCIAL_ENV_KEYS.includes(key)) continue
-    const trimmed = String(val || '').trim()
+    const trimmed = settingText(val, key)
     if (trimmed) {
       next[key] = trimmed
-      // Take effect immediately without restart
-      if (globalThis.process?.env) globalThis.process.env[key] = trimmed
     } else {
       delete next[key]
     }
   }
   writeStoredConfig({ ...existing, social: next })
+  // Publish changes only after persistence succeeds, including explicit clears.
+  if (globalThis.process?.env) {
+    for (const key of Object.keys(updates || {})) {
+      if (!SOCIAL_ENV_KEYS.includes(key)) continue
+      if (next[key]) globalThis.process.env[key] = next[key]
+      else delete globalThis.process.env[key]
+    }
+  }
 }
 
 function isValidAliyunAsrKey(value) {
@@ -1901,12 +1996,11 @@ export function setVoiceConfig(updates) {
   if (requestedProvider !== undefined) {
     activeProvider = normalizeVoiceProvider(requestedProvider, activeProvider)
   }
-  activeProvider = writeActiveVoiceProvider(activeProvider)
   const changedProviders = new Map()
   for (const [key, val] of Object.entries(updates)) {
     if (key === 'provider') continue
     if (!VOICE_CONFIG_KEYS.includes(key)) continue
-    const trimmed = String(val || '').trim()
+    const trimmed = settingText(val, key)
     if (key === 'voiceProvider') {
       continue
     }
@@ -1925,17 +2019,24 @@ export function setVoiceConfig(updates) {
       continue
     }
     const provider = VOICE_KEY_PROVIDER.get(key) || activeProvider
-    const record = changedProviders.get(provider) || { ...readVoiceProviderConfig(provider), provider }
+    const record = changedProviders.get(provider) || { ...readJsonObjectForUpdate(getVoiceProviderConfigFile(provider)), provider }
     if (trimmed) record[key] = trimmed
     else delete record[key]
     changedProviders.set(provider, record)
   }
-  for (const [provider, record] of changedProviders) {
-    writeVoiceProviderConfig(provider, record)
-  }
-  writeStoredConfig({
-    ...baseConfig,
-    schemaVersion: CONFIG_SCHEMA_VERSION,
+  withConfigFileRollback([
+    paths.configFile,
+    getVoiceActiveFile(),
+    ...[...changedProviders.keys()].map(getVoiceProviderConfigFile),
+  ], () => {
+    for (const [provider, record] of changedProviders) {
+      writeVoiceProviderConfig(provider, record)
+    }
+    writeActiveVoiceProvider(activeProvider)
+    writeStoredConfig({
+      ...baseConfig,
+      schemaVersion: CONFIG_SCHEMA_VERSION,
+    })
   })
 }
 
@@ -1994,7 +2095,7 @@ export function setTTSConfig(updates) {
   const next = { ...current }
   for (const [key, val] of Object.entries(updates)) {
     if (!TTS_CONFIG_KEYS.includes(key)) continue
-    const trimmed = String(val || '').trim()
+    const trimmed = settingText(val, key)
     if (trimmed) next[key] = trimmed
     else delete next[key]
   }
@@ -2091,7 +2192,7 @@ export function setEmbeddingConfig(updates) {
       else delete next[key]
       continue
     }
-    const trimmed = String(val || '').trim()
+    const trimmed = settingText(val, key)
     if (trimmed) next[key] = trimmed
     else delete next[key]
   }

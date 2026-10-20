@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { paths } from '../paths.js'
-import { deleteSecret, getSecret, hasSecret, setSecret } from '../capabilities/secret-store.js'
+import { getSecret, hasSecret, updateSecrets } from '../capabilities/secret-store.js'
 
 const STORE_VERSION = 1
 const MASKED_SECRET = '[configured]'
@@ -9,20 +9,27 @@ const SERVER_ID_RE = /^[a-z][a-z0-9_-]{0,39}$/
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 const RESERVED_SERVER_IDS = new Set(['builtin_chrome_devtools', 'builtin_playwright', 'builtin_playwright_reader'])
 
-function readStore() {
+function readStore({ strict = false } = {}) {
   try {
     const parsed = JSON.parse(fs.readFileSync(paths.mcpServersFile, 'utf-8'))
     if (parsed?.version === STORE_VERSION && Array.isArray(parsed.servers)) return parsed
-  } catch {}
+    if (strict) throw new Error('Saved MCP servers have an unsupported or invalid format')
+  } catch (error) {
+    if (strict && error.code !== 'ENOENT') throw error
+  }
   return { version: STORE_VERSION, servers: [] }
 }
 
 function writeStore(store) {
   const tmp = `${paths.mcpServersFile}.tmp`
   fs.mkdirSync(path.dirname(paths.mcpServersFile), { recursive: true })
-  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), { encoding: 'utf-8', mode: 0o600 })
-  try { fs.chmodSync(tmp, 0o600) } catch {}
-  fs.renameSync(tmp, paths.mcpServersFile)
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    try { fs.chmodSync(tmp, 0o600) } catch {}
+    fs.renameSync(tmp, paths.mcpServersFile)
+  } finally {
+    try { fs.rmSync(tmp, { force: true }) } catch {}
+  }
 }
 
 function normalizeStringArray(value, label, { max = 128 } = {}) {
@@ -129,7 +136,7 @@ export function setMcpServersConfig(input = {}) {
   if (!Array.isArray(incoming)) throw new Error('servers must be an array')
   if (incoming.length > 32) throw new Error('at most 32 MCP servers may be configured')
 
-  const previous = new Map(readStore().servers.map(raw => {
+  const previous = new Map(readStore({ strict: true }).servers.map(raw => {
     try {
       const server = normalizeStoredServer(raw)
       return [server.id, server]
@@ -155,28 +162,30 @@ export function setMcpServersConfig(input = {}) {
     return { env, prior, server }
   })
 
-  const servers = normalizedInputs.map(({ env, prior, server }) => {
+  const secretUpdates = []
+  const servers = normalizedInputs.map(({ env, server }) => {
     const retainedEnvKeys = []
     for (const name of server.envKeys) {
       const value = env[name]
-      if (value && value !== MASKED_SECRET) setSecret(secretRef(server.id, name), value)
-      if (value === '' && Object.prototype.hasOwnProperty.call(env, name)) {
-        deleteSecret(secretRef(server.id, name))
+      const ref = secretRef(server.id, name)
+      if (value && value !== MASKED_SECRET) {
+        secretUpdates.push({ ref, value })
+        retainedEnvKeys.push(name)
+      } else if (value === '' && Object.prototype.hasOwnProperty.call(env, name)) {
+        secretUpdates.push({ ref, value: '' })
+      } else if (hasSecret(ref, { strict: true })) {
+        retainedEnvKeys.push(name)
       }
-      if (hasSecret(secretRef(server.id, name))) retainedEnvKeys.push(name)
-    }
-    for (const name of prior?.envKeys || []) {
-      if (!retainedEnvKeys.includes(name)) deleteSecret(secretRef(server.id, name))
     }
     return { ...server, envKeys: retainedEnvKeys }
   })
 
   for (const prior of previous.values()) {
     if (!prior || seen.has(prior.id)) continue
-    for (const name of prior.envKeys || []) deleteSecret(secretRef(prior.id, name))
+    for (const name of prior.envKeys || []) secretUpdates.push({ ref: secretRef(prior.id, name), value: '' })
   }
 
-  writeStore({ version: STORE_VERSION, servers })
+  updateSecrets(secretUpdates, () => writeStore({ version: STORE_VERSION, servers }))
   return getMcpServersConfig()
 }
 

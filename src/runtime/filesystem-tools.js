@@ -116,9 +116,11 @@ export function createFilesystemTools({
     const requestedEnd = args.end_line !== undefined
       ? Math.max(start, parseInt(args.end_line, 10) || start)
       : null
-    const end = maxLines !== null
-      ? Math.min(totalLines, start + maxLines - 1)
-      : Math.min(totalLines, requestedEnd ?? totalLines)
+    const end = Math.min(
+      totalLines,
+      requestedEnd ?? totalLines,
+      maxLines !== null ? start + maxLines - 1 : totalLines,
+    )
     let selectedContent = ''
     if (!hasRange) {
       selectedContent = content

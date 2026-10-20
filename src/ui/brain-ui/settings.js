@@ -266,30 +266,32 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     return body;
   }
 
+  async function saveTTSSettings() {
+    const body = collectTTSBody();
+    const response = await fetch(`${API}/settings/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error(data.error || "语音合成配置保存失败");
+    setTtsVoiceId(body.ttsVoiceId || getTtsVoiceId());
+    const secretFields = ["tts-minimax-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"];
+    for (const id of secretFields) {
+      const el = document.getElementById(id);
+      const bodyKey = {
+        "tts-minimax-key": "minimaxKey",
+        "tts-openai-key": "openaiTtsKey",
+        "tts-elevenlabs-key": "elevenLabsKey",
+        "tts-volcano-token": "volcanoToken",
+      }[id];
+      if (el && body[bodyKey] && el.value.trim() === body[bodyKey]) el.value = "";
+    }
+    return { message: "语音合成配置已自动保存" };
+  }
+
   if (createAutosave) {
-    ttsAutosave = createAutosave(async () => {
-      const body = collectTTSBody();
-      const response = await fetch(`${API}/settings/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data.ok) throw new Error(data.error || "语音合成配置保存失败");
-      setTtsVoiceId(body.ttsVoiceId || getTtsVoiceId());
-      const secretFields = ["tts-minimax-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"];
-      for (const id of secretFields) {
-        const el = document.getElementById(id);
-        const bodyKey = {
-          "tts-minimax-key": "minimaxKey",
-          "tts-openai-key": "openaiTtsKey",
-          "tts-elevenlabs-key": "elevenLabsKey",
-          "tts-volcano-token": "volcanoToken",
-        }[id];
-        if (el && body[bodyKey] && el.value.trim() === body[bodyKey]) el.value = "";
-      }
-      return { message: "语音合成配置已自动保存" };
-    }, { feedback });
+    ttsAutosave = createAutosave(saveTTSSettings, { feedback });
 
     const ttsTextInputs = [
       "tts-minimax-key",
@@ -312,30 +314,12 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       testBtn.disabled = true;
       if (testStatus) testStatus.textContent = "保存配置中…";
       try {
-        const preBody = { ttsProvider: providerSel.value };
-        const currentVoice = voiceSel?.value?.trim();
-        if (currentVoice) { preBody.ttsVoiceId = currentVoice; setTtsVoiceId(currentVoice); }
-        const minimaxKey2 = document.getElementById("tts-minimax-key")?.value?.trim();
-        if (minimaxKey2) preBody.minimaxKey = minimaxKey2;
-        const doubaoKey = document.getElementById("tts-doubao-key")?.value?.trim();
-        if (doubaoKey) preBody.doubaoKey = doubaoKey;
-        const doubaoResource = document.getElementById("tts-doubao-resource")?.value?.trim();
-        if (doubaoResource) preBody.doubaoResourceId = doubaoResource;
-        const rateEl3 = document.getElementById("tts-doubao-rate");
-        if (rateEl3) preBody.doubaoSpeechRate = rateEl3.value;
-        const openaiKey = document.getElementById("tts-openai-key")?.value?.trim();
-        if (openaiKey) preBody.openaiTtsKey = openaiKey;
-        const elevenKey = document.getElementById("tts-elevenlabs-key")?.value?.trim();
-        if (elevenKey) preBody.elevenLabsKey = elevenKey;
-        const volcanoAppId = document.getElementById("tts-volcano-appid")?.value?.trim();
-        if (volcanoAppId) preBody.volcanoAppId = volcanoAppId;
-        const volcanoToken = document.getElementById("tts-volcano-token")?.value?.trim();
-        if (volcanoToken) preBody.volcanoToken = volcanoToken;
-        await fetch(`${API}/settings/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(preBody),
-        });
+        if (ttsAutosave) {
+          const saved = await ttsAutosave.schedule({ immediate: true });
+          if (!saved) throw new Error("语音合成配置保存失败，请检查配置后重试");
+        } else {
+          await saveTTSSettings();
+        }
         if (testStatus) testStatus.textContent = "合成中…";
         const ttsResp = await fetch(`${API}/tts/stream`, {
           method: "POST",
@@ -362,8 +346,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         await ttsAudio.play();
         if (testStatus) testStatus.textContent = "播放中";
         setTimeout(() => { if (testStatus && testStatus.textContent === "播放中") testStatus.textContent = ""; }, 8000);
-      } catch {
-        if (testStatus) testStatus.textContent = "失败 — 请检查配置和 API Key";
+      } catch (error) {
+        if (testStatus) testStatus.textContent = error?.message || "失败 — 请检查配置和 API Key";
       } finally {
         testBtn.disabled = false;
       }
@@ -462,6 +446,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const autosaveErrors = new Map();
   let activeAutosaves = 0;
   let autosaveIdleTimer = null;
+  let settingsOpenRequestId = 0;
 
   overlay.querySelectorAll(".settings-nav-item").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -534,6 +519,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   } = {}) {
     let timer = null;
     let running = false;
+    let inFlight = null;
     let queued = false;
     let pending = false;
 
@@ -542,12 +528,12 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         pending = true;
         if (running) {
           queued = true;
-          return;
+          return inFlight;
         }
         if (timer) clearTimeout(timer);
         if (immediate) {
           timer = null;
-          void controller.flush();
+          return controller.flush();
         } else {
           timer = setTimeout(() => {
             timer = null;
@@ -555,43 +541,46 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
           }, delay);
         }
       },
-      async flush() {
+      flush() {
         if (timer) {
           clearTimeout(timer);
           timer = null;
         }
         if (running) {
-          queued = true;
-          return;
+          return inFlight;
         }
-        if (!pending && !queued) return;
+        if (!pending && !queued) return Promise.resolve(!autosaveErrors.has(controller));
         running = true;
-        let didSave = false;
-        do {
-          queued = false;
-          pending = false;
-          activeAutosaves += 1;
-          showFeedback(feedback, pendingMessage, false, { persistent: true });
-          refreshAutosaveStatus();
-          try {
-            const result = await save();
-            if (result?.skipped) {
-              showFeedback(feedback, result.message || "", false, { persistent: Boolean(result.message) });
-            } else {
-              autosaveErrors.delete(controller);
-              showFeedback(feedback, result?.message || successMessage);
-              didSave = true;
+        inFlight = (async () => {
+          let didSave = false;
+          do {
+            queued = false;
+            pending = false;
+            activeAutosaves += 1;
+            showFeedback(feedback, pendingMessage, false, { persistent: true });
+            refreshAutosaveStatus();
+            try {
+              const result = await save();
+              if (result?.skipped) {
+                showFeedback(feedback, result.message || "", false, { persistent: Boolean(result.message) });
+              } else {
+                autosaveErrors.delete(controller);
+                showFeedback(feedback, result?.message || successMessage);
+                didSave = true;
+              }
+            } catch (error) {
+              const message = error?.message || "自动保存失败";
+              autosaveErrors.set(controller, message);
+              showFeedback(feedback, message, true);
+            } finally {
+              activeAutosaves = Math.max(0, activeAutosaves - 1);
             }
-          } catch (error) {
-            const message = error?.message || "自动保存失败";
-            autosaveErrors.set(controller, message);
-            showFeedback(feedback, message, true);
-          } finally {
-            activeAutosaves = Math.max(0, activeAutosaves - 1);
-          }
-        } while (queued || pending);
-        running = false;
-        refreshAutosaveStatus({ recentlySaved: didSave && !autosaveErrors.has(controller) });
+          } while (queued || pending);
+          running = false;
+          refreshAutosaveStatus({ recentlySaved: didSave && !autosaveErrors.has(controller) });
+          return didSave && !autosaveErrors.has(controller);
+        })();
+        return inFlight;
       },
     };
     autosaveControllers.add(controller);
@@ -608,9 +597,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   function flushPendingAutosaves() {
-    for (const controller of autosaveControllers) {
-      void controller.flush();
-    }
+    return Promise.all([...autosaveControllers].map(controller => controller.flush()));
   }
 
   const localPreferenceAutosave = createSettingsAutosave(async () => ({
@@ -686,11 +673,15 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   async function refreshProviderModels({ forceRefresh = false } = {}) {
+    const requestId = ++modelCatalogRequestId;
     const provider = providerSelect?.value || "auto";
     const isOfficial = provider !== "auto" && provider !== "custom";
     const supportsCatalog = isOfficial
       && cachedProviders?.[provider]?.modelCatalogSupported !== false;
-    if (refreshModelsBtn) refreshModelsBtn.style.display = supportsCatalog ? "" : "none";
+    if (refreshModelsBtn) {
+      refreshModelsBtn.style.display = supportsCatalog ? "" : "none";
+      refreshModelsBtn.disabled = false;
+    }
     if (modelCatalogStatusRow) modelCatalogStatusRow.style.display = isOfficial ? "" : "none";
     if (!isOfficial) return;
     if (!supportsCatalog) {
@@ -701,10 +692,6 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       return;
     }
 
-    const requestId = ++modelCatalogRequestId;
-    const current = modelSelect?.value === CUSTOM_MODEL_VALUE
-      ? officialCustomModelInput?.value?.trim()
-      : modelSelect?.value;
     if (refreshModelsBtn) refreshModelsBtn.disabled = true;
     if (modelCatalogStatus) {
       modelCatalogStatus.className = "settings-feedback";
@@ -725,8 +712,17 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       if (requestId !== modelCatalogRequestId || providerSelect?.value !== provider) return;
 
       const providerCfg = cachedProviders?.[provider] || {};
+      const isCustomDraft = modelSelect?.value === CUSTOM_MODEL_VALUE;
+      const current = isCustomDraft
+        ? officialCustomModelInput?.value?.trim()
+        : modelSelect?.value;
       const selectedModel = current || providerCfg.model || providerCfg.defaultModel;
       populateModelSelect(data.models, selectedModel);
+      if (isCustomDraft && !current) {
+        modelSelect.value = CUSTOM_MODEL_VALUE;
+        if (officialCustomModelInput) officialCustomModelInput.value = "";
+        syncOfficialCustomModelRow();
+      }
       if (cachedProviders?.[provider]) {
         cachedProviders[provider] = {
           ...cachedProviders[provider],
@@ -991,9 +987,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     if (lanSharePanel) lanSharePanel.style.display = entry ? "" : "none";
   }
 
-  function applyLanNetworkSettings(network = {}) {
+  function applyLanNetworkSettings(network = {}, { syncToggle = true } = {}) {
     const previousAddress = lanAccessEntries[Number(lanAddressSelect?.value || 0)]?.address;
-    if (lanAccessToggle) lanAccessToggle.checked = network.allowLanAccess === true;
+    if (lanAccessToggle && syncToggle) lanAccessToggle.checked = network.allowLanAccess === true;
     if (lanAccessToken) lanAccessToken.value = network.accessToken || "";
     lanAccessEntries = Array.isArray(network.accessEntries) ? network.accessEntries : [];
     if (lanAddressSelect) {
@@ -1047,33 +1043,30 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   const securityAutosave = createSettingsAutosave(async () => {
-    try {
-      const blockedTools = [...document.querySelectorAll(".security-blocked-tool")]
-        .filter(cb => cb.checked)
-        .map(cb => cb.value);
-      const body = {
-        fileSandbox: fileSandboxToggle ? fileSandboxToggle.checked : false,
-        execSandbox: execSandboxToggle ? execSandboxToggle.checked : false,
-        allowLanAccess: lanAccessToggle ? lanAccessToggle.checked : false,
-        blockedTools,
-      };
-      const res = await fetch(`${API}/settings/security`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || "安全设置保存失败");
-      applyLanNetworkSettings(data.network);
-      if (data.network?.restartRequired) {
-        restartSecurityBtn?.classList.remove("hidden");
-        return { message: "安全设置已自动保存 · 重启后生效" };
-      }
-      return { message: "安全设置已自动保存 · 立即生效" };
-    } catch (error) {
-      await loadSecuritySettings();
-      throw error;
+    const blockedTools = [...document.querySelectorAll(".security-blocked-tool")]
+      .filter(cb => cb.checked)
+      .map(cb => cb.value);
+    const body = {
+      fileSandbox: fileSandboxToggle ? fileSandboxToggle.checked : false,
+      execSandbox: execSandboxToggle ? execSandboxToggle.checked : false,
+      allowLanAccess: lanAccessToggle ? lanAccessToggle.checked : false,
+      blockedTools,
+    };
+    const res = await fetch(`${API}/settings/security`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "安全设置保存失败");
+    applyLanNetworkSettings(data.network, {
+      syncToggle: lanAccessToggle?.checked === body.allowLanAccess,
+    });
+    if (data.network?.restartRequired) {
+      restartSecurityBtn?.classList.remove("hidden");
+      return { message: "安全设置已自动保存 · 重启后生效" };
     }
+    return { message: "安全设置已自动保存 · 立即生效" };
   }, { feedback: securityFeedback });
 
   [
@@ -1791,9 +1784,12 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     });
   }
 
-  function openSettings(tab = null) {
+  async function openSettings(tab = null) {
+    const requestId = ++settingsOpenRequestId;
     overlay.hidden = false;
     refreshAutosaveStatus();
+    const saved = await flushPendingAutosaves();
+    if (overlay.hidden || requestId !== settingsOpenRequestId || saved.some(result => !result)) return;
     loadSettings();
     loadVoiceSettings();
     if (tab) {
@@ -1814,7 +1810,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   function closeSettings() {
-    flushPendingAutosaves();
+    settingsOpenRequestId += 1;
+    void flushPendingAutosaves();
     updateSecretVisibility(mapKeyInput, mapKeyToggle, false, "Web 端 Key");
     updateSecretVisibility(mapSecurityInput, mapSecurityToggle, false, "安全密钥");
     overlay.hidden = true;
@@ -1829,10 +1826,10 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !overlay.hidden) closeSettings(); });
 
   if (providerSelect) {
-    providerSelect.addEventListener("change", async () => {
+    providerSelect.addEventListener("change", () => {
       applyCustomProviderUI(providerSelect.value);
-      await refreshProviderModels();
       llmAutosave.schedule({ immediate: true });
+      void refreshProviderModels();
     });
   }
 

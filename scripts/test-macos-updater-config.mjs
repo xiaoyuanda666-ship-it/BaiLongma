@@ -14,14 +14,14 @@ import {
 
 const publish = [{
   provider: 'generic',
-  url: 'https://updates.bailongma.ai/stable/${os}/${arch}',
+  url: 'https://bailongma.top/updates/stable/${os}/${arch}',
   channel: 'latest',
 }]
 
 const x64 = createMacUpdaterConfig({ arch: 'x64', publish })
 assert.deepEqual(x64, {
   provider: 'generic',
-  url: 'https://updates.bailongma.ai/stable/mac/x64',
+  url: 'https://bailongma.top/updates/stable/mac/x64',
   channel: 'latest',
   updaterCacheDirName: 'bailongma-updater',
 })
@@ -29,7 +29,7 @@ assert.deepEqual(x64, {
 const arm64 = createMacUpdaterConfig({ arch: 'arm64', publish })
 assert.deepEqual(arm64, {
   provider: 'generic',
-  url: 'https://updates.bailongma.ai/stable/mac/arm64',
+  url: 'https://bailongma.top/updates/stable/mac/arm64',
   channel: 'latest',
   updaterCacheDirName: 'bailongma-updater',
 })

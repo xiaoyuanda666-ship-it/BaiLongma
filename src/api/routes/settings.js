@@ -22,7 +22,6 @@ import {
   setContextWindowConfig,
   setHeartbeatConfig,
   setMinimaxKey,
-  setNetworkConfig,
   setSecurity,
   setSocialConfig,
   setTemperature,
@@ -248,14 +247,16 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
     if (!checkLocalOrToken(req, res, url, requireLocalOrToken)) return true
     try {
       const updates = await readJsonBody(req)
+      const previousNetwork = getNetworkConfig()
       const result = setSecurity(updates)
-      const network = Object.prototype.hasOwnProperty.call(updates, 'allowLanAccess')
-        ? setNetworkConfig({ allowLanAccess: !!updates.allowLanAccess })
-        : getNetworkConfig()
+      const network = getNetworkConfig()
       jsonResponse(res, 200, {
         ok: true,
         security: result,
-        network: network.allowLanAccess ? await getNetworkSettingsForUi() : network,
+        network: {
+          ...(network.allowLanAccess ? await getNetworkSettingsForUi() : network),
+          restartRequired: previousNetwork.allowLanAccess !== network.allowLanAccess,
+        },
       })
     } catch (err) {
       jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
@@ -271,35 +272,24 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
   if (req.method === 'POST' && url.pathname === '/settings/social') {
     try {
       const updates = await readJsonBody(req)
-      const feishuTouched = ('FEISHU_APP_ID' in updates) || ('FEISHU_APP_SECRET' in updates)
-      const feishuChanged = feishuTouched && (
-        (updates.FEISHU_APP_ID || '') !== (process.env.FEISHU_APP_ID || '') ||
-        (updates.FEISHU_APP_SECRET || '') !== (process.env.FEISHU_APP_SECRET || '')
-      )
-      setSocialConfig(updates)
       const PLATFORM_KEYS = {
         discord: ['DISCORD_BOT_TOKEN'],
+        feishu: ['FEISHU_APP_ID', 'FEISHU_APP_SECRET'],
       }
-      for (const [platform, keys] of Object.entries(PLATFORM_KEYS)) {
-        if (keys.some(k => updates[k])) {
-          restartConnector(platform, { pushMessage, emitEvent }).catch(err =>
-            console.warn(`[social] restart ${platform} failed:`, err.message)
-          )
-        }
-      }
-      if (feishuChanged && process.env.FEISHU_APP_ID && process.env.FEISHU_APP_SECRET) {
-        restartConnector('feishu', { pushMessage, emitEvent }).catch(err =>
-          console.warn('[social] restart feishu failed:', err.message)
-        )
-      }
-      if (updates._clawbot_connect) {
-        restartConnector('wechat-clawbot', { pushMessage, emitEvent }).catch(err =>
-          console.warn('[social] restart wechat-clawbot failed:', err.message)
-        )
-      }
-      if (updates._feishu_disconnect) {
-        restartConnector('feishu', { pushMessage, emitEvent }).catch(err =>
-          console.warn('[social] restart feishu failed:', err.message)
+      const previousValues = Object.fromEntries(
+        Object.values(PLATFORM_KEYS).flat().map(key => [key, process.env[key] || ''])
+      )
+      setSocialConfig(updates)
+      // Compare effective credentials only after a successful save. Clearing a
+      // credential must also restart the connector so the old session is stopped.
+      const restarts = new Set(Object.entries(PLATFORM_KEYS)
+        .filter(([, keys]) => keys.some(key => previousValues[key] !== (process.env[key] || '')))
+        .map(([platform]) => platform))
+      if (updates._clawbot_connect) restarts.add('wechat-clawbot')
+      if (updates._feishu_disconnect) restarts.add('feishu')
+      for (const platform of restarts) {
+        restartConnector(platform, { pushMessage, emitEvent }).catch(err =>
+          console.warn(`[social] restart ${platform} failed:`, err.message)
         )
       }
       jsonResponse(res, 200, { ok: true, social: getSocialConfig() })

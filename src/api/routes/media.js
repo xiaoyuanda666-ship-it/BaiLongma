@@ -1,10 +1,11 @@
 import fs from 'fs'
 import path from 'path'
+import { pipeline } from 'node:stream'
 import { paths } from '../../paths.js'
 import { getMediaHistory, upsertMediaHistory } from '../../db.js'
 import { execGenerateVideo, getVideoHistory, saveGeneratedVideo } from '../../capabilities/tools/media.js'
 import { mimeFromChatMediaExt } from '../../chat-media.js'
-import { isPathInside, jsonResponse, readJsonBody } from '../utils.js'
+import { isPathInside, jsonResponse, parseByteRange, readJsonBody } from '../utils.js'
 
 function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache', range = false } = {}) {
   try {
@@ -15,11 +16,17 @@ function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache'
       return
     }
     const total = stat.size
-    const rangeHeader = range ? req.headers.range : null
-    if (rangeHeader) {
-      const m = rangeHeader.match(/bytes=(\d*)-(\d*)/)
-      const start = m?.[1] ? parseInt(m[1]) : 0
-      const end = m?.[2] ? parseInt(m[2]) : total - 1
+    const byteRange = range ? parseByteRange(req.headers.range, total) : null
+    if (byteRange?.unsatisfiable) {
+      res.writeHead(416, {
+        'Content-Range': `bytes */${total}`,
+        'Accept-Ranges': 'bytes',
+      })
+      res.end()
+      return
+    }
+    if (byteRange) {
+      const { start, end } = byteRange
       res.writeHead(206, {
         'Content-Type': contentType,
         'Content-Range': `bytes ${start}-${end}/${total}`,
@@ -27,7 +34,7 @@ function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache'
         'Content-Length': end - start + 1,
         'Cache-Control': cacheControl,
       })
-      fs.createReadStream(filePath, { start, end }).pipe(res)
+      pipeline(fs.createReadStream(filePath, { start, end }), res, () => {})
     } else {
       res.writeHead(200, {
         'Content-Type': contentType,
@@ -35,7 +42,7 @@ function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache'
         ...(range ? { 'Accept-Ranges': 'bytes' } : {}),
         'Cache-Control': cacheControl,
       })
-      fs.createReadStream(filePath).pipe(res)
+      pipeline(fs.createReadStream(filePath), res, () => {})
     }
   } catch {
     res.writeHead(404)
@@ -43,11 +50,21 @@ function streamFile(req, res, filePath, contentType, { cacheControl = 'no-cache'
   }
 }
 
-function ensureInside(res, root, filePath, { allowRoot = true } = {}) {
-  if (isPathInside(root, filePath) && (allowRoot || path.resolve(root) !== path.resolve(filePath))) return true
+function resolveMediaPath(res, root, filePath, { allowRoot = true } = {}) {
+  if (isPathInside(root, filePath) && (allowRoot || path.resolve(root) !== path.resolve(filePath))) {
+    try {
+      const realRoot = fs.realpathSync(root)
+      const realPath = fs.realpathSync(filePath)
+      if (isPathInside(realRoot, realPath) && (allowRoot || realRoot !== realPath)) return realPath
+    } catch {
+      res.writeHead(404)
+      res.end('media not found')
+      return null
+    }
+  }
   res.writeHead(403)
   res.end('forbidden')
-  return false
+  return null
 }
 
 export async function handleMediaRoutes(req, res, url) {
@@ -129,8 +146,8 @@ export async function handleMediaRoutes(req, res, url) {
   if (req.method === 'GET' && url.pathname.startsWith('/media/music/')) {
     const raw = url.pathname.slice('/media/music/'.length)
     const filename = path.basename(decodeURIComponent(raw))
-    const filePath = path.join(paths.musicDir, filename)
-    if (!ensureInside(res, paths.musicDir, filePath)) return true
+    const filePath = resolveMediaPath(res, paths.musicDir, path.join(paths.musicDir, filename))
+    if (!filePath) return true
     const mimeMap = {
       '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav',
       '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
@@ -145,8 +162,8 @@ export async function handleMediaRoutes(req, res, url) {
     const raw = url.pathname.slice('/media/video/'.length)
     const filename = path.basename(decodeURIComponent(raw))
     const videoDir = path.join(paths.sandboxDir, 'videos')
-    const filePath = path.join(videoDir, filename)
-    if (!ensureInside(res, videoDir, filePath)) return true
+    const filePath = resolveMediaPath(res, videoDir, path.join(videoDir, filename))
+    if (!filePath) return true
     const mimeMap = { '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' }
     const contentType = mimeMap[path.extname(filename).toLowerCase()] || 'video/mp4'
     streamFile(req, res, filePath, contentType, { range: true })
@@ -161,8 +178,8 @@ export async function handleMediaRoutes(req, res, url) {
     const mediaDir = fs.existsSync(path.join(paths.mediaDir, filename))
       ? paths.mediaDir
       : paths.sandboxChatUploadsDir
-    const filePath = path.join(mediaDir, filename)
-    if (!ensureInside(res, mediaDir, filePath, { allowRoot: false })) return true
+    const filePath = resolveMediaPath(res, mediaDir, path.join(mediaDir, filename), { allowRoot: false })
+    if (!filePath) return true
     const contentType = mimeFromChatMediaExt(path.extname(filename).toLowerCase())
     streamFile(req, res, filePath, contentType, { cacheControl: 'public, max-age=31536000, immutable' })
     return true
@@ -170,7 +187,9 @@ export async function handleMediaRoutes(req, res, url) {
 
   if (req.method === 'GET' && url.pathname.startsWith('/audio/')) {
     const filename = path.basename(url.pathname)
-    const filePath = path.join(paths.sandboxDir, 'audio', filename)
+    const audioDir = path.join(paths.sandboxDir, 'audio')
+    const filePath = resolveMediaPath(res, audioDir, path.join(audioDir, filename), { allowRoot: false })
+    if (!filePath) return true
     streamFile(req, res, filePath, 'audio/mpeg')
     return true
   }

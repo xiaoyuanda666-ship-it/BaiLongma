@@ -86,6 +86,7 @@ for (const testCase of [
   { args: ['--no-notarize'], archs: ['x64', 'arm64'], notarized: false, inheritedMode: 'submit' },
   { args: ['x64', '--no-notarize'], archs: ['x64'], notarized: false, inheritedMode: 'submit' },
   { args: ['arm64'], archs: ['arm64'], notarized: true },
+  { args: ['arm64', 'x64'], archs: ['arm64', 'x64'], notarized: true },
 ]) {
   const plan = await runPlan(testCase.args, testCase)
   assert.ifError(plan.error)
@@ -107,7 +108,16 @@ for (const testCase of [
     ? [['app', ...testCase.archs], ['dmg', ...testCase.archs]] : [],
   'no-notarize must not wait for, staple, or otherwise finalize Apple submissions')
   assert.equal(plan.calls.some(call => /publish|upload/.test(call.args[0])), false, 'the build must not invoke a release/upload script')
+  const metadataCalls = plan.calls.filter(call => call.args[0] === 'scripts/refresh-macos-update-metadata.mjs')
+  assert.equal(metadataCalls.length, 1)
+  assert.deepEqual(metadataCalls[0].args, ['scripts/refresh-macos-update-metadata.mjs', testCase.archs.at(-1)])
+  const metadataIndex = plan.calls.indexOf(metadataCalls[0])
+  assert.ok(metadataIndex > plan.calls.indexOf(builderCalls.at(-1)), 'refresh metadata after all builder hooks')
+  if (testCase.notarized) {
+    assert.ok(metadataIndex > plan.calls.indexOf(finalizations.at(-1)), 'refresh metadata after final DMG stapling')
+  }
   const smoke = plan.calls.at(-1)
+  assert.ok(metadataIndex < plan.calls.indexOf(smoke), 'smoke must inspect refreshed metadata')
   assert.deepEqual(smoke.args, ['scripts/smoke-mac-artifacts.mjs', ...testCase.archs, ...(testCase.notarized ? [] : ['--no-notarize'])])
   assert.equal(plan.writes.length, 1)
   assert.equal(path.basename(plan.writes[0].target), 'mac-build-metadata.json')
@@ -122,6 +132,7 @@ const failed = await runPlan(['--no-notarize'], { failBuilder: true })
 assert.equal(failed.error?.exitCode, 17)
 assert.equal(failed.calls.filter(call => call.args[0] === builderEntry).length, 1)
 assert.equal(failed.calls.some(call => /finalize-macos-notarization|smoke-mac-artifacts/.test(call.args[0])), false)
+assert.equal(failed.calls.some(call => call.args[0] === 'scripts/refresh-macos-update-metadata.mjs'), false)
 assert.equal(failed.writes.length, 0)
 
 console.log('PASS isolated macOS build plans: explicit no-publish, built-in notarization disabled, custom modes, and failure stopping')

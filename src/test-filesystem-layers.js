@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import test from 'node:test'
 import { createFilesystemPort } from './kernel/filesystem.js'
 import { createFilesystemTools } from './runtime/filesystem-tools.js'
 
@@ -76,3 +77,58 @@ try {
 } finally {
   fs.rmSync(root, { recursive: true, force: true })
 }
+
+test('read_file respects both end_line and max_lines', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'filesystem-ranges-'))
+  try {
+    const tools = createFilesystemTools({
+      filesystem: createFilesystemPort({ assertAccess() {} }),
+      sandboxRoot: root,
+      normalizeSandboxPath: value => value,
+      resolvePathThroughExistingPrefix: value => value,
+      assertInSandbox() {},
+      preview: {},
+    })
+    for (const newline of ['\n', '\r\n', '\r']) {
+      fs.writeFileSync(path.join(root, 'lines.txt'), ['one', 'two', 'three', 'four', 'five'].join(newline))
+      const read = async range => JSON.parse(await tools.execReadFile({ path: 'lines.txt', ...range }))
+      const endLimited = await read({ start_line: 2, end_line: 3, max_lines: 20 })
+      assert.equal(endLimited.content, ['two', 'three'].join(newline))
+      assert.equal(endLimited.end_line, 3)
+      assert.equal(endLimited.truncated, true)
+      const countLimited = await read({ start_line: 2, end_line: 5, max_lines: 2 })
+      assert.equal(countLimited.content, endLimited.content)
+      assert.equal(countLimited.end_line, 3)
+      assert.equal((await read({ start_line: 2, end_line: 3, max_lines: 0 })).content, '')
+      assert.equal((await read({ end_line: 2 })).content, ['one', 'two'].join(newline))
+      assert.equal((await read({ max_lines: 2 })).content, ['one', 'two'].join(newline))
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('atomic replacement preserves existing permissions while new files respect umask', {
+  skip: process.platform === 'win32' && 'POSIX permission bits are not supported on Windows',
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'filesystem-permissions-'))
+  const originalUmask = process.umask()
+  try {
+    const port = createFilesystemPort({ assertAccess() {} })
+    const target = path.join(root, 'existing.sh')
+    fs.writeFileSync(target, 'old content')
+    fs.chmodSync(target, 0o775)
+    process.umask(0o077)
+    port.atomicWriteUtf8(target, 'new content')
+    assert.equal(fs.readFileSync(target, 'utf8'), 'new content')
+    assert.equal(fs.statSync(target).mode & 0o777, 0o775, 'an edit must retain group and other access')
+
+    const created = path.join(root, 'new.txt')
+    port.atomicWriteUtf8(created, 'private', { failIfExists: true })
+    assert.equal(fs.statSync(created).mode & 0o777, 0o600, 'new files must still respect the process umask')
+    assert.deepEqual(fs.readdirSync(root).sort(), ['existing.sh', 'new.txt'])
+  } finally {
+    process.umask(originalUmask)
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

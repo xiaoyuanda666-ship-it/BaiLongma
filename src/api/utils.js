@@ -12,6 +12,28 @@ export function isPathInside(parentDir, candidatePath) {
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
+// Unsupported/malformed ranges are ignored. A valid but unsatisfiable single
+// range is distinct so callers can return 416 before committing stream headers.
+export function parseByteRange(header, size) {
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(String(header || '').trim())
+  if (!match || (!match[1] && !match[2])) return null
+  let start
+  let end
+  if (!match[1]) {
+    const suffixLength = Number(match[2])
+    start = Math.max(0, size - suffixLength)
+    end = size - 1
+  } else {
+    start = Number(match[1])
+    end = Math.min(match[2] ? Number(match[2]) : size - 1, size - 1)
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+    || start < 0 || start >= size || end < start) {
+    return { unsatisfiable: true }
+  }
+  return { start, end }
+}
+
 export function getRequestCharset(contentType = '') {
   const match = String(contentType || '').match(/(?:^|;)\s*charset\s*=\s*"?([^";\s]+)"?/i)
   return match?.[1]?.trim().toLowerCase() || ''

@@ -8,6 +8,7 @@ import { extractFile } from '@electron/asar'
 import pkg from '../package.json' with { type: 'json' }
 import { verifyExternalBlockmapForArtifact } from './publish-updates-lib.mjs'
 import { assertReleaseSignature, listMachOFiles } from './macos-signing-lib.mjs'
+import { assertFinalMacUpdateMetadata } from './refresh-macos-update-metadata.mjs'
 import {
   assertMacUpdaterConfig,
   assertMacUpdaterConfigFile,
@@ -268,4 +269,8 @@ for (const target of targets) {
   smokeTarget(target)
 }
 
+// The shared builder manifest represents only the last built architecture.
+// Validate the architecture it actually references, even when checking both.
+const finalMetadata = assertFinalMacUpdateMetadata({ root, productName, version })
+console.log(`[smoke:mac-artifacts] ${finalMetadata.arch} latest-mac.yml final sizes and SHA-512 OK`)
 console.log('[smoke:mac-artifacts] all mac artifacts OK')

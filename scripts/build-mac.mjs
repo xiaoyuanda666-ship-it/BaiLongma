@@ -121,6 +121,9 @@ if (shouldNotarize) {
   console.log('[build:mac] waiting for DMG notarization, stapling, and rebuilding final blockmaps');
   run('node', ['scripts/finalize-macos-notarization.mjs', 'dmg', ...archs]);
 }
+// Builder writes this manifest before the hooks sign/staple the final DMG.
+// Keep its last-built-architecture semantics, but refresh its final byte hashes.
+run('node', ['scripts/refresh-macos-update-metadata.mjs', archs.at(-1)]);
 fs.writeFileSync(path.resolve('dist', 'mac-build-metadata.json'), `${JSON.stringify({
   version: pkg.version,
   archs,

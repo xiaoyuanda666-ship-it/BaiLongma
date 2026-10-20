@@ -51,14 +51,17 @@ const server = http.createServer(async (req, res) => {
       emit({ choices: [], usage: { prompt_tokens: toolRound ? 5 : 1, completion_tokens: 2, total_tokens: toolRound ? 7 : 3 } })
       res.end('data: [DONE]\n\n')
     } else {
+      const responseCalls = calls.map((call, index) => scenario.mode === 'malformed' && index === 0
+        ? { ...call, arguments: '{"path":' }
+        : call)
       if (toolRound) {
-        for (const [output_index, item] of [reasoning, ...calls].entries()) {
+        for (const [output_index, item] of [reasoning, ...responseCalls].entries()) {
           emit({ type: 'response.output_item.added', output_index, item })
         }
       } else {
         emit({ type: 'response.output_text.delta', item_id: 'msg_final', output_index: 0, delta: text })
       }
-      const output = toolRound ? [reasoning, ...calls] : [{
+      const output = toolRound ? [reasoning, ...responseCalls] : [{
         type: 'message', id: 'msg_final', role: 'assistant', phase: 'final_answer', status: 'completed',
         content: [{ type: 'output_text', text, annotations: [] }],
       }]
@@ -150,9 +153,12 @@ try {
     assert.equal(scenario.requests[0].body.model, 'next-model')
   }
 
-  for (const mode of ['incomplete', 'eof', 'error', 'abort', 'malformed']) {
-    configure('chat-completions')
-    scenario = { format: 'chat-completions', mode, requests: [] }
+  for (const [format, mode] of [
+    ...['incomplete', 'eof', 'error', 'abort', 'malformed'].map(mode => ['chat-completions', mode]),
+    ['responses', 'malformed'],
+  ]) {
+    configure(format)
+    scenario = { format, mode, requests: [] }
     const controller = new AbortController()
     const executed = []
     const run = callLLM({ ...common, mustReply: false, signal: controller.signal,

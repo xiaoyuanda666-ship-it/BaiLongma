@@ -103,6 +103,8 @@ async function loadFresh(json) {
   assert(JSON.parse(fs.readFileSync(configFile, 'utf-8')).security.browserPrivateNetwork === false,
     'A: browserPrivateNetwork 变更持久化到 config.json')
   const after = JSON.parse(fs.readFileSync(configFile, 'utf-8'))
+  assert(after.apiKey === 'sk-whatever-old-key-1234567890' && after.model === 'old-model',
+    'A: unknown provider keeps its only legacy credentials for later recovery')
   assert(after.voice === undefined, 'A: voice 块已从 config.json 拆出')
   assert(getVoiceConfig().aliyunApiKey.configured === true, 'A: 拆分后 Aliyun ASR key 仍可被读取')
   assert(fs.existsSync(path.join(voiceDir, 'aliyun.json')), 'A: Aliyun ASR 配置已写入 voice/aliyun.json')
@@ -242,6 +244,146 @@ async function loadFresh(json) {
   const voiceAliyun = JSON.parse(fs.readFileSync(path.join(voiceDir, 'aliyun.json'), 'utf-8'))
   assert(voiceActive.provider === 'aliyun', 'E: voice/active.json 记录当前 ASR provider')
   assert(voiceAliyun.aliyunApiKey === 'sk-aliyunkeyplaceholder1234567890', 'E: Aliyun ASR 数据完整搬迁')
+}
+
+// Existing provider files are authoritative only if they contain a valid
+// matching record. Failed/partial migrations must not erase the usable source.
+{
+  const legacy = {
+    schemaVersion: 1,
+    provider: 'deepseek',
+    apiKey: 'sk-legacy-migration-test-key',
+    model: 'deepseek-v4-pro',
+    apiFormat: 'chat-completions',
+    temperature: 0.9,
+  }
+  const target = path.join(llmDir, 'deepseek.json')
+  const invalidTargets = [
+    ['malformed JSON', '{'],
+    ['missing key', JSON.stringify({ provider: 'deepseek', model: 'deepseek-v4-pro' })],
+    ['blank key', JSON.stringify({ provider: 'deepseek', apiKey: '  ' })],
+    ['wrong provider', JSON.stringify({ provider: 'openai', apiKey: 'sk-wrong-provider-test-key' })],
+  ]
+  const alternate = { provider: 'openai', apiKey: 'sk-alternate-test-key', model: 'gpt-5.5', apiFormat: 'responses' }
+  for (const [label, contents] of invalidTargets) {
+    fs.mkdirSync(llmDir, { recursive: true })
+    fs.writeFileSync(target, contents)
+    fs.writeFileSync(path.join(llmDir, 'openai.json'), JSON.stringify(alternate))
+    const previousBackups = new Set(fs.readdirSync(llmDir))
+    const original = JSON.stringify(legacy, null, 2)
+    fs.writeFileSync(configFile, original)
+    const mod = await import(`./config.js?v=${++v}`)
+    const backup = fs.readdirSync(llmDir).find(name => !previousBackups.has(name)
+      && name.startsWith('deepseek.json.migration-backup-'))
+    assert(backup && fs.readFileSync(path.join(llmDir, backup), 'utf8') === contents,
+      `E-recovery: ${label} target is backed up byte-for-byte before repair`)
+    assert(backup && (process.platform === 'win32'
+      || (fs.statSync(path.join(llmDir, backup)).mode & 0o777) === 0o600),
+    `E-recovery: ${label} backup is private to its owner`)
+    const migrated = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+    assert(migrated.schemaVersion === 4 && migrated.apiKey === undefined,
+      `E-recovery: ${label} repaired target permits migration to finish`)
+    assert(!mod.config.needsActivation && mod.config.apiKey === legacy.apiKey
+      && mod.config.apiFormat === legacy.apiFormat,
+    `E-recovery: ${label} repair retains the valid legacy connection`)
+    mod.switchProviderConfig({ provider: 'openai' })
+    mod.switchProviderConfig({ provider: 'deepseek' })
+    const reloaded = await import(`./config.js?v=${++v}`)
+    assert(reloaded.config.apiKey === legacy.apiKey && reloaded.config.apiFormat === legacy.apiFormat,
+      `E-recovery: ${label} legacy credentials survive switching away, back and restarting`)
+  }
+
+  // Any backup/write failure must preserve the source and the damaged target.
+  for (const operation of ['backup', 'repair']) {
+    fs.writeFileSync(target, '{')
+    const original = JSON.stringify(legacy, null, 2)
+    fs.writeFileSync(configFile, original)
+    const writeFile = fs.writeFileSync
+    let mod
+    try {
+      fs.writeFileSync = function (file, ...args) {
+        if ((operation === 'backup' && String(file).startsWith(`${target}.migration-backup-`))
+          || (operation === 'repair' && String(file).startsWith(`${target}.`) && String(file).endsWith('.tmp'))) {
+          throw new Error(`Simulated ${operation} failure`)
+        }
+        return writeFile.call(this, file, ...args)
+      }
+      mod = await import(`./config.js?v=${++v}`)
+    } finally {
+      fs.writeFileSync = writeFile
+    }
+    assert(fs.readFileSync(configFile, 'utf8') === original
+      && fs.readFileSync(target, 'utf8') === '{',
+    `E-recovery: failed ${operation} preserves both original files`)
+    assert(!mod.config.needsActivation && mod.config.apiKey === legacy.apiKey,
+      `E-recovery: failed ${operation} still permits legacy activation`)
+    // The setter must retry preservation if migration could not complete.
+    mod.switchProviderConfig({ provider: 'openai' })
+    mod.switchProviderConfig({ provider: 'deepseek' })
+    assert(mod.config.apiKey === legacy.apiKey,
+      `E-recovery: provider switching safely retries a previously failed ${operation}`)
+  }
+
+  const validTarget = JSON.stringify({
+    provider: 'deepseek',
+    apiKey: 'sk-newer-provider-test-key',
+    model: 'deepseek-v5-preview',
+    apiFormat: 'responses',
+  }, null, 2)
+  fs.writeFileSync(target, validTarget)
+  fs.writeFileSync(configFile, JSON.stringify(legacy, null, 2))
+  const mod = await import(`./config.js?v=${++v}`)
+  assert(fs.readFileSync(target, 'utf8') === validTarget,
+    'E-recovery: an existing valid provider configuration is never overwritten by legacy values')
+  assert(mod.config.apiKey === 'sk-newer-provider-test-key' && mod.config.apiFormat === 'responses',
+    'E-recovery: the existing valid provider configuration remains authoritative')
+  const migrated = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+  assert(migrated.schemaVersion === 4 && migrated.apiKey === undefined
+    && migrated.apiFormat === undefined && migrated.temperature === legacy.temperature,
+  'E-recovery: migration removes legacy credentials only after validating their destination')
+}
+
+// Required custom fields containing whitespace are not usable destinations.
+{
+  const legacy = {
+    schemaVersion: 1, provider: 'custom', apiKey: 'none',
+    model: 'local-fixture', baseURL: 'http://127.0.0.1:11434/v1',
+  }
+  const target = path.join(llmDir, 'custom.json')
+  for (const field of ['baseURL', 'model']) {
+    const broken = JSON.stringify({ ...legacy, [field]: '  ' })
+    fs.writeFileSync(target, broken)
+    fs.writeFileSync(configFile, JSON.stringify(legacy))
+    const mod = await import(`./config.js?v=${++v}`)
+    assert(mod.config.baseURL === legacy.baseURL && mod.config.model === legacy.model,
+      `E-recovery: blank custom ${field} is repaired from the usable legacy record`)
+    assert(fs.readdirSync(llmDir).some(name => name.startsWith('custom.json.migration-backup-')
+      && fs.readFileSync(path.join(llmDir, name), 'utf8') === broken),
+    `E-recovery: blank custom ${field} retains its original file in a backup`)
+  }
+}
+
+// Unknown providers may be activated by future versions or recovered manually.
+// Selecting a supported provider must archive their full identity and secrets.
+{
+  const mod = await loadFresh({
+    schemaVersion: 1, provider: 'retired-provider', apiKey: 'sk-retired-test-key',
+    model: 'retired-model', baseURL: 'https://retired.example/v1', apiFormat: 'responses',
+  })
+  fs.mkdirSync(llmDir, { recursive: true })
+  fs.writeFileSync(path.join(llmDir, 'openai.json'), JSON.stringify({
+    provider: 'openai', apiKey: 'sk-supported-test-key', model: 'gpt-5.5',
+  }))
+  const original = fs.readFileSync(configFile, 'utf8')
+  const previousFiles = new Set(fs.readdirSync(tmp))
+  mod.switchProviderConfig({ provider: 'openai' })
+  const backup = fs.readdirSync(tmp).find(name => !previousFiles.has(name)
+    && name.startsWith('config.json.migration-backup-'))
+  assert(backup && fs.readFileSync(path.join(tmp, backup), 'utf8') === original,
+    'E-recovery: switching away from an unknown provider archives its complete configuration')
+  assert(mod.config.provider === 'openai'
+    && JSON.parse(fs.readFileSync(configFile, 'utf8')).provider === 'openai',
+  'E-recovery: the supported provider can be selected after the unknown configuration is secured')
 }
 
 // ── 场景 F：已是最新 schemaVersion 的文件不被重复迁移 / 改写 ──

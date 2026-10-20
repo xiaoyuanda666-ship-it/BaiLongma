@@ -24,8 +24,9 @@ export function createFilesystemPort({ assertAccess } = {}) {
     checked(filePath)
     try {
       return fs.statSync(filePath).mode & 0o777
-    } catch {
-      return 0o666
+    } catch (err) {
+      if (err?.code !== 'ENOENT') throw err
+      return null
     }
   }
 
@@ -42,8 +43,12 @@ export function createFilesystemPort({ assertAccess } = {}) {
     let fd = null
     try {
       checked(tempPath)
-      fd = fs.openSync(tempPath, 'wx', existingFileMode(filePath))
+      const mode = existingFileMode(filePath)
+      fd = fs.openSync(tempPath, 'wx', mode ?? 0o666)
       fs.writeFileSync(fd, body, 'utf8')
+      // open(2) applies umask even when copying an existing mode. Restore the
+      // original permissions for replacements; new files retain the umask.
+      if (mode !== null) fs.fchmodSync(fd, mode)
       fs.fsyncSync(fd)
       fs.closeSync(fd)
       fd = null

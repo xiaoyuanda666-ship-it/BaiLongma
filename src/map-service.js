@@ -1,4 +1,4 @@
-import { deleteSecret, getSecret, hasSecret, setSecret } from './capabilities/secret-store.js'
+import { getSecret, hasSecret, updateSecrets } from './capabilities/secret-store.js'
 
 const PROVIDER = 'amap'
 const KEY_REF = 'map-service:amap:js-key'
@@ -17,15 +17,16 @@ export function getMapServiceSettings() {
 
 export function setMapServiceSettings({ jsKey, securityCode, clear = false } = {}) {
   if (clear) {
-    deleteSecret(KEY_REF)
-    deleteSecret(SECURITY_REF)
+    updateSecrets([{ ref: KEY_REF, value: '' }, { ref: SECURITY_REF, value: '' }])
     return getMapServiceSettings()
   }
 
   const key = String(jsKey || '').trim()
   const code = String(securityCode || '').trim()
-  if (key) setSecret(KEY_REF, key)
-  if (code) setSecret(SECURITY_REF, code)
+  const updates = []
+  if (key) updates.push({ ref: KEY_REF, value: key })
+  if (code) updates.push({ ref: SECURITY_REF, value: code })
+  updateSecrets(updates)
   return getMapServiceSettings()
 }
 

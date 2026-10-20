@@ -158,6 +158,65 @@ assert.deepEqual(parsed.usage, {
 })
 assert.equal(responseStreamError(parsed), null)
 
+// A completed response must not authorize malformed calls. Runtime's legacy
+// JSON fallback would otherwise turn invalid arguments into a {} invocation.
+for (const args of [undefined, null, {}, '', ' ', '{"path":', '{bad}', 'null', '[]', 'true', '42', '"text"']) {
+  const malformed = createResponsesEventAccumulator()
+  malformed.consume({
+    type: 'response.completed',
+    response: { output: [functionItem, { ...functionItem, id: 'fc_invalid', call_id: 'call_invalid', arguments: args }] },
+  })
+  const error = responseStreamError(malformed.result())
+  assert.ok(error, `must reject invalid function arguments ${JSON.stringify(args)}`)
+  assert.match(error.message, /valid JSON object/)
+  assert.equal(error.hadContent, true, 'do not silently retry a malformed tool round')
+}
+for (const args of ['{}', ' {"path":"a.txt"} ', '{"nested":{"list":[1,null,true]}}']) {
+  const valid = createResponsesEventAccumulator()
+  valid.consume({
+    type: 'response.completed',
+    response: { output: [{ ...functionItem, arguments: args }] },
+  })
+  assert.equal(responseStreamError(valid.result()), null)
+}
+for (const items of [
+  [{ ...functionItem, call_id: undefined }],
+  [{ ...functionItem, call_id: 42 }],
+  [{ ...functionItem, name: '' }],
+  [functionItem, { ...functionItem, id: 'fc_duplicate' }],
+]) {
+  const invalid = createResponsesEventAccumulator()
+  invalid.consume({ type: 'response.completed', response: { output: items } })
+  assert.match(responseStreamError(invalid.result())?.message || '', /invalid tool call metadata/)
+}
+// Gateways may only send output-item events and omit terminal output. The same
+// validation must apply to the accumulated calls, not just response.output.
+for (const item of [
+  { ...functionItem, arguments: '{"path":' },
+  { ...functionItem, call_id: undefined },
+]) {
+  const invalid = createResponsesEventAccumulator()
+  invalid.consume({ type: 'response.output_item.added', output_index: 0, item })
+  invalid.consume({ type: 'response.completed', response: {} })
+  assert.ok(responseStreamError(invalid.result()))
+}
+for (const itemId of ['fc_without_call_id', undefined]) {
+  const invalid = createResponsesEventAccumulator()
+  invalid.consume({
+    type: 'response.output_item.added', output_index: 0,
+    item: { type: 'function_call', id: itemId, name: 'read_file', arguments: '' },
+  })
+  invalid.consume({
+    type: 'response.function_call_arguments.delta', output_index: 0,
+    item_id: itemId, delta: '{"path":"a.txt"}',
+  })
+  invalid.consume({ type: 'response.completed', response: { output: [] } })
+  const result = invalid.result()
+  assert.equal(result.toolCalls[0].arguments, '{"path":"a.txt"}')
+  assert.equal(result.toolCalls[0].id, '', 'an item ID or output-index key must not become a call_id')
+  assert.match(responseStreamError(result)?.message || '', /invalid tool call metadata/)
+}
+
 const textAccumulator = createResponsesEventAccumulator()
 textAccumulator.consume({ type: 'response.output_text.delta', sequence_number: 1, output_index: 0, item_id: 'msg_1', content_index: 0, delta: 'Hello' })
 textAccumulator.consume({ type: 'response.output_text.done', sequence_number: 2, output_index: 0, item_id: 'msg_1', content_index: 0, text: 'Hello' })

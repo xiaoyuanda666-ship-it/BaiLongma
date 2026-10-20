@@ -237,7 +237,7 @@ export function createResponsesEventAccumulator({
   const upsertToolCall = (item = {}, outputIndex = 0) => {
     const key = itemKey(item, outputIndex)
     const existing = toolCalls.get(key) || {
-      id: item.call_id || item.id || key,
+      id: item.call_id || '',
       itemId: item.id || key,
       name: '',
       arguments: '',
@@ -347,10 +347,10 @@ export function createResponsesEventAccumulator({
     const callsFromItems = finalItems
       .filter(item => item?.type === 'function_call')
       .map((item, outputIndex) => ({
-        id: item.call_id || item.id || `call_${outputIndex}`,
+        id: item.call_id || '',
         itemId: item.id || '',
         name: item.name || '',
-        arguments: typeof item.arguments === 'string' ? item.arguments : '{}',
+        arguments: typeof item.arguments === 'string' ? item.arguments : '',
         outputIndex,
       }))
     const finalToolCalls = callsFromItems.length > 0
@@ -390,7 +390,29 @@ export function responseStreamError(parsed) {
     || parsed?.outputItems?.length
     || parsed?.toolCalls?.length,
   )
-  if (!parsed || parsed.terminalType === 'response.completed') return null
+  if (!parsed) return null
+  if (parsed.terminalType === 'response.completed') {
+    const calls = parsed.toolCalls || []
+    let message = ''
+    // call_id links tool results to the provider's original request; item IDs
+    // and generated placeholders cannot substitute for a missing call_id.
+    if (calls.some(call => typeof call.id !== 'string' || !call.id.trim()
+      || typeof call.name !== 'string' || !call.name.trim())
+      || new Set(calls.map(call => call.id)).size !== calls.length) {
+      message = 'Responses API returned incomplete or invalid tool call metadata'
+    } else {
+      for (const call of calls) {
+        let args
+        try { args = JSON.parse(call.arguments) } catch {}
+        if (!args || typeof args !== 'object' || Array.isArray(args)) {
+          message = `Tool call ${call.id} arguments must be a valid JSON object`
+          break
+        }
+      }
+    }
+    if (!message) return null
+    return Object.assign(new Error(message), { code: 'ERESPONSEFAILED', hadContent: hadOutput })
+  }
   if (parsed.terminalType === 'response.incomplete') {
     const reason = parsed.response?.incomplete_details?.reason || 'unknown reason'
     const error = new Error(`Responses API output incomplete: ${reason}`)

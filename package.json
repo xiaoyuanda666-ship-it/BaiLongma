@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.152",
+  "version": "2.2.155",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -62,6 +62,7 @@
     "test:browser-challenge": "node ./src/test-browser-challenge-guard.js",
     "test:no-fake-detection": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-no-fake-tool-detection.js\"",
     "test:config-upgrade": "node ./src/test-config-upgrade.js",
+    "test:settings": "node --test ./src/test-config-persistence.js ./src/test-settings-routes.js ./src/test-settings-autosave-ui.js ./src/test-settings-secret-persistence.js ./src/test-rule-store-persistence.js",
     "test:model-catalog": "node --test ./src/test-model-catalog.js",
     "test:llm-settings-flow": "node ./src/test-llm-settings-flow.js",
     "test:llm-responses": "node ./src/test-llm-responses.js && node ./src/test-llm-responses-loop.js",
@@ -392,7 +393,7 @@
     "publish": [
       {
         "provider": "generic",
-        "url": "https://updates.bailongma.ai/stable/${os}/${arch}",
+        "url": "https://bailongma.top/updates/stable/${os}/${arch}",
         "channel": "latest"
       }
     ],

@@ -1,4 +1,6 @@
+import crypto from 'crypto'
 import fs from 'fs'
+import path from 'path'
 import { paths } from '../paths.js'
 
 export const DEFAULT_CONTEXT_RULES = [
@@ -84,17 +86,28 @@ export const DEFAULT_CONTEXT_RULES = [
   },
 ]
 
-function readConfig() {
+function readConfig({ strict = false } = {}) {
   try {
-    if (!fs.existsSync(paths.configFile)) return {}
-    return JSON.parse(fs.readFileSync(paths.configFile, 'utf8'))
-  } catch {
+    const config = JSON.parse(fs.readFileSync(paths.configFile, 'utf8'))
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      throw new Error('Configuration must be a JSON object: config.json')
+    }
+    return config
+  } catch (error) {
+    if (strict && error.code !== 'ENOENT') throw error
     return {}
   }
 }
 
 function writeConfig(config) {
-  fs.writeFileSync(paths.configFile, JSON.stringify(config, null, 2), 'utf8')
+  const tmp = `${paths.configFile}.${crypto.randomUUID()}.tmp`
+  fs.mkdirSync(path.dirname(paths.configFile), { recursive: true })
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(config, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    fs.renameSync(tmp, paths.configFile)
+  } finally {
+    fs.rmSync(tmp, { force: true })
+  }
 }
 
 export function normalizeRule(rule = {}, fallbackKind = 'context') {
@@ -129,15 +142,15 @@ function mergeRules(...groups) {
   return [...byId.values()]
 }
 
-export function loadContextRules({ includeDefaults = true, includeLegacy = true } = {}) {
-  const config = readConfig()
+export function loadContextRules({ includeDefaults = true, includeLegacy = true, strict = false } = {}) {
+  const config = readConfig({ strict })
   const current = Array.isArray(config.contextRules) ? config.contextRules : []
   const legacy = includeLegacy && Array.isArray(config.keywordContextRules) ? config.keywordContextRules : []
   return mergeRules(includeDefaults ? DEFAULT_CONTEXT_RULES : [], legacy, current)
 }
 
 export function saveContextRules(rules = []) {
-  const config = readConfig()
+  const config = readConfig({ strict: true })
   const normalized = Array.isArray(rules)
     ? rules.map(rule => normalizeRule(rule, 'context')).filter(Boolean)
     : []
@@ -146,15 +159,15 @@ export function saveContextRules(rules = []) {
   return normalized
 }
 
-export function loadAutomationRules() {
-  const config = readConfig()
+export function loadAutomationRules({ strict = false } = {}) {
+  const config = readConfig({ strict })
   return Array.isArray(config.automationRules)
     ? config.automationRules.map(rule => normalizeRule(rule, 'automation')).filter(Boolean)
     : []
 }
 
 export function saveAutomationRules(rules = []) {
-  const config = readConfig()
+  const config = readConfig({ strict: true })
   const normalized = Array.isArray(rules)
     ? rules.map(rule => normalizeRule(rule, 'automation')).filter(Boolean)
     : []
@@ -165,7 +178,9 @@ export function saveAutomationRules(rules = []) {
 
 export function upsertRule(kind = 'context', rule = {}) {
   const isAutomation = kind === 'automation'
-  const rules = isAutomation ? loadAutomationRules() : loadContextRules({ includeDefaults: false, includeLegacy: false })
+  const rules = isAutomation
+    ? loadAutomationRules({ strict: true })
+    : loadContextRules({ includeDefaults: false, includeLegacy: false, strict: true })
   const normalized = normalizeRule({ ...rule, kind }, kind)
   if (!normalized) throw new Error('invalid rule: id, provider/action.type, and patterns are required')
   const next = rules.filter(existing => existing.id !== normalized.id)
@@ -178,11 +193,13 @@ export function upsertRule(kind = 'context', rule = {}) {
 
 export function updateRule(kind = 'context', id = '', patch = {}) {
   const isAutomation = kind === 'automation'
-  const rules = isAutomation ? loadAutomationRules() : loadContextRules({ includeDefaults: false, includeLegacy: false })
+  const rules = isAutomation
+    ? loadAutomationRules({ strict: true })
+    : loadContextRules({ includeDefaults: false, includeLegacy: false, strict: true })
   const targetId = String(id || '').trim()
   const index = rules.findIndex(rule => rule.id === targetId)
   const inherited = !isAutomation && index < 0
-    ? loadContextRules().find(rule => rule.id === targetId)
+    ? loadContextRules({ strict: true }).find(rule => rule.id === targetId)
     : null
   if (index < 0 && !inherited) throw new Error(`rule "${targetId}" was not found`)
   const base = index >= 0 ? rules[index] : inherited
@@ -199,7 +216,9 @@ export function updateRule(kind = 'context', id = '', patch = {}) {
 
 export function deleteRule(kind = 'context', id = '') {
   const isAutomation = kind === 'automation'
-  const rules = isAutomation ? loadAutomationRules() : loadContextRules({ includeDefaults: false, includeLegacy: false })
+  const rules = isAutomation
+    ? loadAutomationRules({ strict: true })
+    : loadContextRules({ includeDefaults: false, includeLegacy: false, strict: true })
   const targetId = String(id || '').trim()
   const next = rules.filter(rule => rule.id !== targetId)
   if (next.length === rules.length) throw new Error(`rule "${targetId}" was not found`)
