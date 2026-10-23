@@ -10,6 +10,7 @@ import { parseMessageInput } from './injector/message-input.js'
 import { runMemoryInjector } from '../injectors/memory-injector.js'
 import { runToolInjector } from '../injectors/tool-injector.js'
 import { runInformationInjector } from '../injectors/information-injector.js'
+import { measurePerformance } from '../runtime/performance-trace.js'
 
 // —— 对外门面：保持 injector.js 作为统一入口，原有 import 路径不变 ——
 export { extractKeywords }
@@ -70,32 +71,33 @@ export function mergeInjectorResults({ memory = {}, tool = {}, information = {} 
   }
 }
 
-export async function runInjector({ message, state, hint = '', currentChannel = '' }) {
+export async function runInjector({ message, state, hint = '', currentChannel = '', fastUserPath = false }) {
   const parsed = parseMessageInput(String(message || ''))
 
   // 工具连续性会参与策略记忆与自我快照计算，所以工具注入器先产出 actionLog；
   // 之后记忆注入和轻量信息注入可以并行。
-  const tool = await runToolInjector({
+  const tool = await measurePerformance('injector.tools', () => runToolInjector({
     messageBody: parsed.messageBody,
     isTickMessage: parsed.isTick,
     senderId: parsed.senderId,
     state,
     currentChannel,
-  })
+  }))
   const [memory, information] = await Promise.all([
-    runMemoryInjector({
+    measurePerformance('injector.memory', () => runMemoryInjector({
       messageBody: parsed.messageBody,
       isTickMessage: parsed.isTick,
       senderId: parsed.senderId,
       state,
       hint,
       actionLog: tool.actionLog,
-    }),
-    runInformationInjector({
+      fastUserPath,
+    })),
+    measurePerformance('injector.information', () => runInformationInjector({
       message: parsed.messageBody,
       userId: parsed.senderId || undefined,
       isTick: parsed.isTick,
-    }),
+    })),
   ])
 
   return mergeInjectorResults({ memory, tool, information })

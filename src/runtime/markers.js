@@ -43,7 +43,12 @@ const LOW_CONFIDENCE_INTERNAL_LINE_RE = [
   /^I\s+(?:need to|should|will|can)\s+(?:check|look|think|figure|inspect)\b/i,
 ]
 
-const INTERNAL_PREFIX_RE = /^(?:用户|user|结合上下文|考虑到|最可能|最自然|话题|当前|让我|我先|我需要|我来|the user|given|considering|i need|i should|i will|i can)/i
+const INTERNAL_PREFIXES = [
+  '用户', 'user', '结合上下文', '考虑到', '最可能', '最自然', '话题', '当前',
+  '让我', '我先', '我需要', '我来', 'the user', 'given', 'considering',
+  'i need', 'i should', 'i will', 'i can',
+]
+const INTERNAL_PREFIX_RE = new RegExp(`^(?:${INTERNAL_PREFIXES.join('|')})`, 'i')
 
 function classifyLooseInternalLine(line) {
   const s = String(line || '').trim()
@@ -56,8 +61,18 @@ function classifyLooseInternalLine(line) {
 }
 
 function startsLikeLooseInternalPrelude(text) {
-  const s = String(text || '').trimStart()
-  return !!s && INTERNAL_PREFIX_RE.test(s)
+  const s = String(text || '').trimStart().toLowerCase()
+  // Streaming chunks can split even the prefix itself ("用" + "户…").
+  return !!s && (INTERNAL_PREFIX_RE.test(s) || INTERNAL_PREFIXES.some(prefix => prefix.startsWith(s)))
+}
+
+function hasCompletedUserFacingSentence(text) {
+  // A decimal point or ellipsis is not enough evidence of sentence completion.
+  // Use a semantic text boundary, never elapsed time, to release held prose.
+  const boundary = String(text || '').match(/[。！？!?]+["'”’」』）)]*|(?<![\d.])\.(?=\s|$)/)
+  if (!boundary) return false
+  const prefix = String(text).slice(0, boundary.index + boundary[0].length)
+  return !!sanitizeAssistantReplyForDelivery(prefix)
 }
 
 export function stripLooseThinkingPrelude(text) {
@@ -185,7 +200,14 @@ export function createAssistantReplyStreamSanitizer() {
 
     const newlineMatch = buffer.match(/\r?\n/)
     if (!newlineMatch && !force) {
-      if (startsLikeLooseInternalPrelude(buffer) && buffer.length < 800) return ''
+      if (startsLikeLooseInternalPrelude(buffer) && buffer.length < 800) {
+        if (!hasCompletedUserFacingSentence(buffer)) return ''
+        const sanitized = sanitizeAssistantReplyForDelivery(buffer)
+        if (!sanitized) return ''
+        buffer = ''
+        passthrough = true
+        return sanitized
+      }
       passthrough = true
       const out = buffer
       buffer = ''
@@ -196,6 +218,12 @@ export function createAssistantReplyStreamSanitizer() {
     if (!force && !sanitized && startsLikeLooseInternalPrelude(buffer) && buffer.length < 1600) {
       return ''
     }
+    // After hidden lines are removed, the remaining first answer can itself be
+    // an incomplete suspicious prefix. Do not let a preceding newline bypass
+    // the same protection applied to a fresh stream.
+    if (!force && sanitized && !/\r?\n/.test(sanitized)
+      && startsLikeLooseInternalPrelude(sanitized) && buffer.length < 1600
+      && !hasCompletedUserFacingSentence(sanitized)) return ''
 
     buffer = ''
     passthrough = true

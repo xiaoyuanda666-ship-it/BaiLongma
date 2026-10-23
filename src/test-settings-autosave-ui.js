@@ -122,6 +122,68 @@ for (const newModel of ["new-model", "__custom_model__"]) {
 
 // TTS preview must use the same full payload as autosave and abort on a failed
 // save, instead of playing with a previous configuration.
+{
+  const fields = new Map([
+    ["settings-custom-baseurl", element("https://gateway.invalid/v1")],
+    ["settings-custom-model", element("custom-model")],
+  ]);
+  const reasoningSelect = element("effort");
+  const apiFormatSelect = element("responses");
+  let saves = 0;
+  const context = vm.createContext({
+    document: { getElementById: id => fields.get(id) || null },
+    apiFormatSelect, customReasoningSelect: reasoningSelect,
+    cachedLlm: { provider: "custom", apiFormat: "responses", reasoningControl: "omit" },
+    thinkingToggle: element(), thinkingHint: element(), t: key => key,
+    llmAutosave: { schedule() { saves += 1; } },
+  });
+  vm.runInContext(section("  function syncThinkingApiFormatUI(", "  function applyCustomProviderUI("), context);
+  vm.runInContext(section('  apiFormatSelect?.addEventListener("change"', "  const agentNameAutosave = "), context);
+  context.syncThinkingApiFormatUI();
+  assert.equal(context.thinkingToggle.disabled, true, "unknown custom endpoint does not claim the thinking toggle works");
+  context.cachedLlm.reasoningControl = "effort";
+  context.syncThinkingApiFormatUI();
+  assert.equal(context.thinkingToggle.disabled, false);
+  assert.equal(context.thinkingHint.textContent, "settings.customThinkingEffortHint");
+  for (const id of fields.keys()) {
+    reasoningSelect.value = "effort";
+    await fields.get(id).dispatch("input");
+    assert.equal(reasoningSelect.value, "omit", "editing endpoint/model resets the capability draft");
+  }
+  reasoningSelect.value = "effort";
+  await reasoningSelect.dispatch("change");
+  assert.equal(saves, 1, "explicit capability selection is saved immediately");
+  apiFormatSelect.value = "chat-completions";
+  await apiFormatSelect.dispatch("change");
+  assert.equal(reasoningSelect.disabled, true, "Responses capability is unavailable for Chat Completions");
+}
+
+{
+  const requests = [];
+  const fields = new Map([
+    ["settings-custom-baseurl", element("https://gateway.invalid/v1")],
+    ["settings-custom-model", element("custom-model")],
+  ]);
+  const context = vm.createContext({
+    API: "", document: { getElementById: id => fields.get(id) || null },
+    providerSelect: element("custom"), apiFormatSelect: element("responses"),
+    customReasoningSelect: element("effort"), llmKeyInput: element("saved-key"),
+    cachedProviders: { custom: { apiKey: "saved-key" } }, cachedLlm: {},
+    cachedMinimax: {}, llmFeedback: null,
+    createSettingsAutosave: save => ({ save }),
+    refreshConfigSummary() {}, syncThinkingApiFormatUI() {},
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return response({ ok: true, provider: "custom", reasoningControl: "effort" });
+    },
+  });
+  vm.runInContext(section("  const llmAutosave = ", "\n  bindDebouncedAutosave([\n    llmKeyInput,"), context);
+  await vm.runInContext("llmAutosave.save()", context);
+  assert.equal(requests[0].reasoningControl, "effort");
+  assert.equal(requests[0].apiKey, undefined, "capability-only UI save does not resend an unchanged key");
+  assert.equal(context.cachedProviders.custom.reasoningControl, "effort");
+}
+
 async function ttsPreviewFixture({ failSave = false, createAutosave = true } = {}) {
   const elements = new Map([
     "tts-provider-select", "tts-voice-select", "tts-test-btn", "tts-test-status",

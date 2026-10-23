@@ -7,6 +7,7 @@
 import { searchMemories, getMemoriesByDateRange } from '../db.js'
 import { extractKeywords } from './keywords.js'
 import { parseTemporalHints } from './temporal-parser.js'
+import { markPerformance, measurePerformance } from '../runtime/performance-trace.js'
 
 // 旧导出路径兼容；解析实现只有一个真相源，避免外部渠道 canonicalId 规则再次漂移。
 export { parseMessageInput } from './injector/message-input.js'
@@ -77,6 +78,7 @@ export async function searchRelevantMemories({
   focusKeywords = 8,
   contextKeywords = 10,
   perKeyword = 3,
+  fastUserPath = false,
 }) {
   if (!focusText) return []
 
@@ -124,18 +126,25 @@ export async function searchRelevantMemories({
 
   // 向量召回兜底：focusText 算 embedding，找 FTS5 没召回到的 top-N 语义相似记忆，
   // 追加到 focus 桶末尾。失败/超时/未配置时静默跳过，行为完全等同 FTS5-only。
-  // 注：硬超时挡在主 LLM 调用之前，慢一点都会被用户感知为"卡顿"。
-  //     远程 provider 800ms（网络方差）；local 离线推理无网络方差但 CPU 慢，放宽到 ~1500ms，
-  //     由 getEmbeddingTimeoutMs() 按 provider 返回。focusText 是 query，传 isQuery:true。
+  // 实时用户消息最多等 120ms；超时沿用已经完成的 FTS 结果，推理在后台继续并填充缓存。
+  // 非实时调用保留配置预算（默认 1500ms），避免影响后台语义检索的完整性。
   let vecAppended = []
   try {
-    const { computeEmbedding, isEmbeddingConfigured, getEmbeddingTimeoutMs } = await import('../embedding.js')
+    const { computeEmbedding, isEmbeddingConfigured, getEmbeddingTimeoutMs, waitForEmbedding } = await import('../embedding.js')
     if (isEmbeddingConfigured() && focusText) {
-      const timeoutMs = getEmbeddingTimeoutMs()
-      const queryEmb = await Promise.race([
-        computeEmbedding(focusText, { isQuery: true }),
-        new Promise(resolve => setTimeout(() => resolve(null), timeoutMs)),
-      ])
+      const timeoutMs = getEmbeddingTimeoutMs({ fastUserPath })
+      let timedOut = false
+      let queryEmb
+      try {
+        const result = await measurePerformance('embedding.wait', () => waitForEmbedding(
+          measurePerformance('embedding.compute', () => computeEmbedding(focusText, { isQuery: true, readyOnly: fastUserPath })),
+          timeoutMs,
+        ))
+        queryEmb = result.embedding
+        timedOut = result.timedOut
+      } finally {
+        markPerformance('embedding.result', { timedOut, available: !!queryEmb, budgetMs: timeoutMs, fastUserPath })
+      }
       if (queryEmb) {
         const { searchByEmbedding } = await import('../db.js')
         const vecHits = searchByEmbedding(queryEmb, Math.min(focusLimit, 10))

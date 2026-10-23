@@ -3,7 +3,7 @@ export function createModelConnection({ readConfig, transport } = {}) {
     throw new TypeError('Model connection requires readConfig and transport.openStream ports')
   }
   return Object.freeze({
-    openStream({ protocol, params, signal, connection }) {
+    openStream({ protocol, params, signal, connection, onTiming }) {
       // Keep turn-scoped snapshots stable through a tool chain. Callers without
       // a snapshot use current settings. Revocation takes effect immediately.
       const current = readConfig()
@@ -15,6 +15,7 @@ export function createModelConnection({ readConfig, transport } = {}) {
         protocol,
         params,
         signal,
+        onTiming,
       })
     },
   })

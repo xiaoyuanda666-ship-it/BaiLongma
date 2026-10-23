@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Japlos v2 · Release Console</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+<header class="topbar"><div><div class="eyebrow">LOCAL RELEASE OPERATIONS</div><h1>Release Console · Japlos v2</h1><nav aria-label="产品"><a href="/">Bailongma</a> · <a href="/japlos-v2" aria-current="page">Japlos v2</a></nav></div><div class="header-meta"><span class="badge active" id="version">VERSION · —</span><span class="badge neutral" id="state" role="status">连接中</span></div></header>
+<main>
+<section class="panel span-2"><div class="section-head"><h2>Japlos v2 发布前检查</h2></div><p>读取项目 VERSION 与对应版本的实际更新包，使用 Japlos v2 的 Sparkle 更新规则。</p><p class="muted" id="root"></p><fieldset id="architectures"><legend>检查架构</legend><label class="check"><input type="checkbox" value="arm64" checked> Apple Silicon · arm64</label><label class="check"><input type="checkbox" value="x64" checked> Intel · x86_64</label></fieldset><div class="header-meta"><button class="button secondary" data-action="scan">扫描更新包</button><button class="button secondary" data-action="preflight">运行完整检查</button><button class="button dry" data-action="dry-run">只做 Dry Run</button></div><p class="footnote">完整检查会挂载安装包，验证 App、内置 daemon、版本、资源、Developer ID、Sparkle 签名和 Apple 公证。Dry Run 只校验本地发布输入。此产品页面不执行上传或发布。</p></section>
+<section class="panel span-2"><div class="section-head"><h2>更新包状态</h2><span id="summary" class="badge neutral">等待扫描</span></div><div class="table-wrap"><table><thead><tr><th>架构</th><th>文件</th><th>大小</th><th>SHA-512</th><th>状态</th></tr></thead><tbody id="files"></tbody></table></div><p class="footnote">更新源：<a href="https://bailongma.top/updates/japlos-v2/stable/mac/arm64/appcast.xml">arm64 appcast</a> · <a href="https://bailongma.top/updates/japlos-v2/stable/mac/x64/appcast.xml">x64 appcast</a></p></section>
+<section class="panel span-2"><div class="section-head"><h2>检查结果</h2><span id="time" class="muted"></span></div><p class="notice" id="scope">扫描通过仅表示清单和文件匹配；完整检查不包含线上版本、下载与 Range 验收。</p><div id="checks" aria-live="polite">等待检查…</div></section>
+</main><div id="toast" role="status" aria-live="polite"></div><script src="/japlos.js" type="module"></script>
+</body></html>

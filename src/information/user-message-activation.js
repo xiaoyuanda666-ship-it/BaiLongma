@@ -59,7 +59,15 @@ export function enqueueInboundMessageForMigration(entry = {}, {
     enqueue,
   })
   if (result.event?.id) entry.informationEventId = result.event.id
-  if (result.handled) return result.entry || entry
+  if (result.handled) {
+    // A deduped, passive, or already-leased event may be handled without a new
+    // queue entry. It has no current model turn to close this trace later.
+    if (!result.entry) {
+      entry.performanceTrace?.mark('ingress.activation_deferred')
+      entry.performanceTrace?.finish({ status: 'staged' })
+    }
+    return result.entry || entry
+  }
   return enqueueLegacyEntry(entry, { enqueue, db })
 }
 

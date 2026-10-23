@@ -7,6 +7,7 @@ import { insertActionLog } from './db.js'
 import { isTerminalInternalToolRound } from './runtime/tool-protocol.js'
 import { sanitizeAssistantReplyForDelivery, createAssistantReplyStreamSanitizer } from './runtime/markers.js'
 import { beginTurn } from './runtime/turn-trace.js'
+import { getPerformanceTrace, getPerformanceStage, markPerformance, measurePerformance } from './runtime/performance-trace.js'
 import { sanitizeJsonForTransport } from './runtime/json-unicode.js'
 import { createMergedAbortSignal } from './capabilities/abort-utils.js'
 import { filterStrictEvaluationTools, isToolForbiddenInStrictEvaluation, makeStrictForbiddenToolResult } from './runtime/strict-evaluation.js'
@@ -62,8 +63,8 @@ function injectFoundToolSchemas(result, toolSchemas, strictEvaluation = null, to
 }
 
 function captureModelSettings() {
-  const { provider, model, apiKey, baseURL, apiFormat } = config
-  return Object.freeze({ provider, model, apiKey, baseURL, apiFormat: getLLMProtocol(apiFormat).id })
+  const { provider, model, apiKey, baseURL, apiFormat, reasoningControl } = config
+  return Object.freeze({ provider, model, apiKey, baseURL, reasoningControl, apiFormat: getLLMProtocol(apiFormat).id })
 }
 
 function normalizeTemperatureForProvider(temperature, model, provider) {
@@ -77,6 +78,7 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
   const providerTemperature = normalizeTemperatureForProvider(temperature, model, modelSettings.provider)
   return getLLMProtocol(modelSettings.apiFormat).buildRequest({
     provider: modelSettings.provider,
+    reasoningControl: modelSettings.reasoningControl,
     messages,
     toolSchemas,
     temperature: providerTemperature,
@@ -90,9 +92,22 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, modelSettings = captureModelSettings(), model = modelSettings.model }) {
+async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, modelSettings = captureModelSettings(), model = modelSettings.model, round = 0 }) {
+  const timing = getPerformanceTrace()
+  const modelAttempt = timing?.nextAttempt() || 0
+  const auxiliary = /^(prepare|context|injector|prefeed)\./.test(getPerformanceStage())
+  let fetchAttempt = 0
+  let usageAvailable = false
+  const seen = new Set()
+  const firstDelta = (kind, value) => {
+    if (!value || seen.has(kind)) return
+    seen.add(kind)
+    const meta = { modelAttempt, fetchAttempt, round, auxiliary }
+    if (!seen.has('delta')) { seen.add('delta'); timing?.mark('model.first_delta', meta) }
+    timing?.mark(`model.first_${kind}`, meta)
+  }
   const protocol = getLLMProtocol(modelSettings.apiFormat)
-  const requestParams = sanitizeJsonForTransport(
+  const requestParams = measurePerformance('model.request_build', () => sanitizeJsonForTransport(
     buildLLMRequestParams({
       modelSettings,
       model,
@@ -108,7 +123,14 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
         `[LLM] Repaired ${count} lone UTF-16 surrogate code unit${count === 1 ? '' : 's'} before sending request`,
       ),
     },
-  )
+  ))
+  timing?.mark('model.request.ready', {
+    modelAttempt, round, auxiliary, messageCount: messages.length, toolCount: toolSchemas?.length || 0,
+    // This is serialized characters, not an invented token estimate.
+    messageChars: timing ? JSON.stringify(messages).length : 0,
+    toolSchemaChars: timing ? JSON.stringify(toolSchemas || []).length : 0,
+    thinking,
+  })
   // ── 空闲超时（连接卡死保护）──
   // provider 连接开着却长时间不吐任何增量 = 停摆。每收到一个 chunk 就重置计时；超时则中止本轮，
   // 交给 streamOnceWithRetry 重试，避免把整个 turn 干耗到 index.js 的 180s watchdog 才被发现。
@@ -172,6 +194,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
 
   const accumulator = protocol.createAccumulator({
     onReasoningDelta: text => {
+      firstDelta('reasoning', text)
       emittedReasoning += text
       if (!thinkDone) {
         inThink = true
@@ -180,6 +203,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       }
     },
     onCommentaryDelta: text => {
+      firstDelta('commentary', text)
       emittedCommentary += text
       inThink = false
       thinkDone = true
@@ -187,6 +211,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       onStream?.({ event: 'chunk', text })
     },
     onTextDelta: text => {
+      firstDelta('text', text)
       emittedText += text
       if (inThink && !thinkDone) {
         inThink = false
@@ -196,11 +221,13 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       emitTextChunk(text)
     },
     onFunctionCallStarted: call => {
+      firstDelta('tool', call.name)
       flushTextStream()
       if (streamStarted) { onStream?.({ event: 'end' }); streamStarted = false; activeStreamMode = null }
       if (call.name) onStream?.({ event: 'tool_preparing', name: call.name })
     },
-    onFunctionArgumentsDelta: call => {
+    onFunctionArgumentsDelta: (call, delta) => {
+      firstDelta('tool', delta)
       const key = call.itemId || call.id
       const previewState = writeFilePreviewStates.get(key) || {}
       previewState.session ||= writeFilePreviewSession
@@ -223,15 +250,22 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     protocol: protocol.id,
     params: requestParams,
     signal: reqController.signal,
+    onTiming: event => {
+      if (event.attempt) fetchAttempt = event.attempt
+      timing?.mark(`model.fetch.${event.event}`, { ...event, modelAttempt, fetchAttempt, round, auxiliary })
+    },
   })
   for await (const event of stream) {
     armIdle()  // 收到增量，重置空闲计时（正常长流式生成因此不受影响）
     if (signal?.aborted) break
+    const usage = event?.usage || event?.response?.usage
+    if (usage && typeof usage === 'object' && Object.keys(usage).length) usageAvailable = true
     accumulator.consume(event)
   }
   if (signal?.aborted) throw Object.assign(new Error('Aborted'), { name: 'AbortError' })
 
   } catch (err) {
+    timing?.mark('model.attempt.error', { modelAttempt, fetchAttempt, round, auxiliary, aborted: signal?.aborted === true })
     const partial = accumulator.result()
     // 空闲超时（我们自己的看门狗触发）且调用方并未中止 —— 当作瞬时错误上抛，由 streamOnceWithRetry 重试，
     // 而不是误判成"用户中止"(aborted:true) 把本轮静默放弃。
@@ -261,9 +295,16 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     throw err
   } finally {
     cleanupIdle()
+    timing?.mark('model.attempt.finished', { modelAttempt, fetchAttempt, round, auxiliary })
   }
 
   const parsed = accumulator.result()
+  // Some providers emit only a completed item. Do not fabricate an earlier TTFT.
+  firstDelta('reasoning', parsed.reasoningContent)
+  firstDelta('commentary', parsed.commentaryContent)
+  firstDelta('text', parsed.content)
+  firstDelta('tool', parsed.toolCalls?.[0]?.name)
+  timing?.mark('model.usage', { modelAttempt, round, auxiliary, usageAvailable, ...parsed.usage })
   if (!emittedReasoning && parsed.reasoningContent) {
     if (streamStarted) onStream?.({ event: 'end' })
     onStream?.({ event: 'start', mode: 'think' })
@@ -284,7 +325,10 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   flushTextStream()
   if (streamStarted) onStream?.({ event: 'end' })
   const streamError = protocol.streamError(parsed)
-  if (streamError && (parsed.status !== 'incomplete' || !parsed.content.trim())) throw streamError
+  if (streamError && (parsed.status !== 'incomplete' || !parsed.content.trim())) {
+    timing?.mark('model.attempt.error', { modelAttempt, fetchAttempt, round, auxiliary, terminalError: true })
+    throw streamError
+  }
   if (parsed.usage.totalTokens > 0) {
     recordUsage(parsed.usage.totalTokens)
     const promptTotal = parsed.usage.inputTokens
@@ -365,6 +409,7 @@ async function streamOnceWithRetry(args) {
       lastErr = err
       if (attempt < MAX_ATTEMPTS - 1) {
         const delay = BACKOFFS_MS[attempt]
+        markPerformance('model.retry', { applicationAttempt: attempt + 1, delayMs: delay })
         args.onRetry?.({
           attempt: attempt + 1,
           nextAttempt: attempt + 2,
@@ -373,7 +418,7 @@ async function streamOnceWithRetry(args) {
           error: err.message || String(err),
         })
         console.warn(`[LLM] 瞬时错误 "${(err.message || '').slice(0, 80)}"，${delay}ms 后第 ${attempt + 2} 次尝试`)
-        await abortableSleep(delay, args.signal)
+        await measurePerformance('model.retry_backoff', () => abortableSleep(delay, args.signal))
       }
     }
   }
@@ -1031,7 +1076,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
 
   // 回合上下文追踪：把本 turn 每一轮模型看到的 messages[] 与思考/输出原样记下，供 /turn-trace
   // 后台逐回合回放（专为排查"agent 把自己的话和用户的话搞混"这类生成层问题）。永不影响主流程。
-  const trace = beginTurn({
+  const trace = measurePerformance('trace.begin', () => beginTurn({
+    performanceId: getPerformanceTrace()?.id,
     provider: modelSettings.provider,
     model: modelSettings.model,
     apiFormat: protocol.id,
@@ -1048,7 +1094,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     outputContract: toolContext?.outputContract || (mustReply ? 'user_reply' : 'internal'),
     informationContext: toolContext?.informationContextAudit || null,
     tools,
-  })
+  }))
 
   let allContent = ''
   // 可挽救草稿：社交渠道第一轮已写出一条完整回复、但还没 send_message 投递时，nudge 会把它从 allContent
@@ -1150,6 +1196,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     const roundInputOffset = messages.length
 
     let roundResult
+    const endRoundTiming = getPerformanceTrace()?.span(`model.round.${round}`)
     try {
       roundResult = _streamOnceForTest
         ? await _streamOnceForTest({
@@ -1176,6 +1223,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             signal,
             onRetry,
             onStream,  // 所有轮次均流式推送，让 UI 实时反映工具链执行过程中的模型输出
+            round,
           })
     } catch (err) {
       // 只要**前面的轮次已攒到可投递的回复**（典型：社交渠道第一轮已出答案、第二轮包 send_message 时
@@ -1187,6 +1235,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         break
       }
       throw err
+    } finally {
+      endRoundTiming?.()
     }
     if (roundResult.model) activeModel = roundResult.model
     if (!modelAccepted) {
@@ -1633,7 +1683,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
           // 真正开始执行前通知 UI —— 让用户知道当前停留在哪一步的工具上
           onToolExecute?.(tc.name, normalizedArgs)
-          result = await runTool(tc.name, normalizedArgs, { ...toolContext, signal })
+          result = await measurePerformance(`tool.${tc.name}`, () => runTool(tc.name, normalizedArgs, { ...toolContext, signal }))
           const detectedChallenge = detectBrowserChallenge(tc.name, result)
           if (detectedChallenge) {
             browserChallenge ||= detectedChallenge
@@ -2047,10 +2097,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     }
   }
 
-  trace.end({ messages, delivered, aborted })
+  markPerformance('model.turn.finished', { delivered, aborted })
+  measurePerformance('trace.persist', () => trace.end({ messages, delivered, aborted }))
   return { content: allContent, toolResult: lastToolResult, aborted, delivered }
   } finally {
     // 异常 / abort / 任何提前退出路径的兜底收尾（end 内部幂等，正常路径已 end 过则无副作用）。
-    trace.end({ messages, delivered, aborted: signal?.aborted })
+    measurePerformance('trace.persist', () => trace.end({ messages, delivered, aborted: signal?.aborted }))
   }
 }

@@ -75,6 +75,23 @@ const openAIWithoutThinking = buildResponsesRequest({
 })
 assert.deepEqual(openAIWithoutThinking.reasoning, { effort: 'none' })
 
+// A model name alone cannot establish what a custom gateway accepts.
+for (const model of ['deepseek-flash', 'gpt-5', 'local-model']) {
+  for (const thinking of [false, true]) {
+    const unknownGateway = buildResponsesRequest({ provider: 'custom', model, thinking })
+    assert.equal(unknownGateway.reasoning, undefined)
+    const optedIn = buildResponsesRequest({ provider: 'custom', model, thinking, reasoningControl: 'effort' })
+    assert.deepEqual(optedIn.reasoning, { effort: thinking ? 'high' : 'none' })
+    assert.equal(optedIn.include, undefined)
+  }
+}
+assert.equal(buildResponsesRequest({
+  provider: 'custom', model: 'deepseek-flash', thinking: false, reasoningControl: 'unknown',
+}).reasoning, undefined)
+assert.deepEqual(buildResponsesRequest({
+  provider: 'deepseek', model: 'deepseek-v4-pro', thinking: false, reasoningControl: 'omit',
+}).reasoning, { effort: 'low' })
+
 assert.deepEqual(toResponsesInput([
   { role: 'assistant', phase: 'commentary', content: 'I will inspect it.' },
   { role: 'assistant', phase: 'final_answer', content: 'It is fixed.' },

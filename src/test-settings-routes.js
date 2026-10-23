@@ -26,6 +26,11 @@ function createRoutes({ env = {}, allowAccess = true } = {}) {
     jsonResponse,
     readJsonBody,
     emitEvent() {},
+    saveLLMSettings: async updates => {
+      state.saves.push({ ...updates })
+      return { provider: 'custom', reasoningControl: updates.reasoningControl }
+    },
+    switchModel: () => { throw new Error('Capability-only settings must use saveLLMSettings') },
     pushMessage() {},
     QRCode: { toDataURL: async value => `qr:${value}` },
     getNetworkConfig: () => ({ ...state.network }),
@@ -80,6 +85,15 @@ function createRoutes({ env = {}, allowAccess = true } = {}) {
     },
   }
 }
+
+test('model route forwards an explicit gateway reasoning capability even without other changes', async () => {
+  const routes = createRoutes()
+  const result = await routes.post('/settings/model', { reasoningControl: 'effort' })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.reasoningControl, 'effort')
+  assert.equal(routes.state.saves.length, 1)
+  assert.equal(routes.state.saves[0].reasoningControl, 'effort')
+})
 
 test('security and LAN settings save together and retain the restart hint with QR codes', async () => {
   const routes = createRoutes()

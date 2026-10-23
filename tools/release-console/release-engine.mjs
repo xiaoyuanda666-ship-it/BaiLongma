@@ -13,15 +13,9 @@ import {
   resolveDistArtifact,
 } from './core.mjs'
 
-export const RELEASE_CONSTANTS = Object.freeze({
-  sshHost: 'xiaobailong-update-hk',
-  origin: 'https://updates.bailongma.ai',
-  downloadOrigin: 'https://download.bailongma.ai',
-  bucket: 'bailongma-updates-hk-prod',
-  serverRoot: '/srv/bailongma-updates',
-  updaterHeader: 'BailongmaUpdater/2',
-  channel: 'stable',
-})
+import { UPDATE_SERVER } from '../../scripts/update-server-config.mjs'
+
+export const RELEASE_CONSTANTS = UPDATE_SERVER
 
 const SHA_CACHE = new Map()
 
@@ -159,33 +153,17 @@ export async function readGitState(root) {
 }
 
 export async function getSystemStatus({ root, version }) {
-  const [git, ssh, health, gateway, downloadHttps, ...remote] = await Promise.all([
+  const [git, ssh, health, ...remote] = await Promise.all([
     readGitState(root),
-    probe('ssh', async () => {
+    probe('官网 SSH', async () => {
       await runProcess('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', RELEASE_CONSTANTS.sshHost, 'true'], { cwd: root, timeoutMs: 15_000 })
-      return 'reachable'
+      return RELEASE_CONSTANTS.sshHost
     }),
-    probe('hong-kong-health', async () => {
+    probe('官网更新服务 HTTPS', async () => {
       const response = await fetchWithTimeout(`${RELEASE_CONSTANTS.origin}/healthz`)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      return 'healthy'
-    }),
-    probe('oss-gateway', async () => {
-      const failures = []
-      for (const arch of ALLOWED_ARCHS) {
-        try {
-          const remoteVersion = await getRemoteVersion(arch, { accelerated: true })
-          if (remoteVersion) return `${arch} redirect and read succeeded`
-        } catch (error) {
-          failures.push(`${arch}: ${error.message}`)
-        }
-      }
-      throw new Error(failures.join('; ') || 'No readable manifest through gateway')
-    }),
-    probe('download-https', async () => {
-      const response = await fetchWithTimeout(RELEASE_CONSTANTS.downloadOrigin, { method: 'HEAD', redirect: 'manual' })
       await response.body?.cancel()
-      return `TLS/HTTP ${response.status}`
+      return RELEASE_CONSTANTS.origin
     }),
     ...ALLOWED_ARCHS.map(arch => probe(`remote-${arch}`, () => getRemoteVersion(arch))),
   ])
@@ -196,7 +174,7 @@ export async function getSystemStatus({ root, version }) {
     if (!result.ok && /^HTTP 404$/i.test(result.error || '')) return [arch, 'absent']
     return [arch, 'unavailable']
   }))
-  return { git, version, probes: [ssh, health, gateway, downloadHttps], remoteVersions, remoteVersionStates, remoteProbes: remote }
+  return { git, version, probes: [ssh, health], remoteVersions, remoteVersionStates, remoteProbes: remote }
 }
 
 async function runCheck(command, args, options = {}) {
@@ -317,6 +295,10 @@ export function applyRemoteVersionGate(check, version, remoteVersion, remoteVers
   check.firstRelease = remoteVersionState === 'absent'
   check.localVersionHigher = check.firstRelease
     || Boolean(remoteVersionState === 'present' && check.remoteVersion && compareReleaseVersions(version, check.remoteVersion) > 0)
+  check.versionMessage = check.firstRelease ? '官网尚无此架构版本，可首次发布'
+    : remoteVersionState !== 'present' ? '无法读取官网版本'
+    : compareReleaseVersions(version, check.remoteVersion) === 0 ? `官网已有 ${check.remoteVersion}，不能覆盖同版本，请使用新版本号`
+    : check.localVersionHigher ? `官网当前 ${check.remoteVersion}` : `官网 ${check.remoteVersion} 高于本地，禁止降级`
   return check
 }
 
@@ -370,7 +352,7 @@ export async function createMacReleasePlan({ root, productName, version, archs, 
     localFiles: scan.records.map(record => record.filePath),
     checks: ['artifact completeness and version', 'CPU architecture', 'codesign and Developer Team', 'Hardened Runtime and entitlements', 'Apple notarization ticket', 'stapler validation', 'Gatekeeper assessment', 'SHA-512 and blockmap validation', 'remote version monotonicity'],
     serverDirectories: archs.map(arch => `${RELEASE_CONSTANTS.serverRoot}/stable/mac/${arch}`),
-    ossObjects: [...immutable.map(item => item.object), ...manifests.map(item => item.object)],
+    downloadUrls: [...immutable.map(item => item.object), ...manifests.map(item => item.object)].map(object => `${RELEASE_CONSTANTS.origin}/${object}`),
     immutable,
     manifests,
     metadataSwitch: 'After every immutable file for every selected architecture is uploaded and verified, publish all latest-mac.yml manifests.',

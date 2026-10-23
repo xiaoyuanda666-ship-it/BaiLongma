@@ -2,6 +2,7 @@
 import { API, getUiClientId, isUiClientTarget } from "./api-client.js";
 import { bootstrapScene } from "../scene-shell/bootstrap.js";
 import { initChat, friendlyChannelLabel } from "./chat.js";
+import { clientRequestPerformance } from "./request-performance.js";
 import { initPanelCollapse } from "./panel-collapse.js";
 import { ThoughtStream } from "./thought-stream.js";
 import { initVoicePanel } from "./voice-panel.js";
@@ -2027,6 +2028,7 @@ function handle({ type, data = {}, ts = null }) {
       applyHeartbeatConfig(data);
       break;
     case "message_received": {
+      clientRequestPerformance.correlate(data);
       // 新用户轮开始后，上一轮人物卡的简介更新窗口立即失效。只有本轮再次
       // 调用 person_card_mode，随后的有效人物说明才允许更新当前卡片。
       cancelPersonCardAssistantEnrichment();
@@ -2092,6 +2094,7 @@ function handle({ type, data = {}, ts = null }) {
       setL3State(t("runtime.l3Failed"), "failed");
       break;
     case "stream_start":
+      clientRequestPerformance.correlate(data);
       setVoiceThinking(true);
       if (currentPath !== "l1") {
         revealCognitionStream();
@@ -2131,8 +2134,10 @@ function handle({ type, data = {}, ts = null }) {
       if (data.mode === "commentary") currentStream().appendCommentary(data.text);
       // 正文流：累积 + 实时重渲染气泡（剥离协议标记 / 藏半截标记）；语音轮喂给逐句合成队列
       if (data.mode === "text" && liveReplyActive) {
+        clientRequestPerformance.textReceived(data);
         liveRawText += data.text;
-        chat.updateLiveJarvisMsg(cleanStreamText(liveRawText));
+        const body = chat.updateLiveJarvisMsg(cleanStreamText(liveRawText));
+        clientRequestPerformance.textRendered(data, body);
         if (sttsActive && isStreamingTTSTurn(data)) feedStreamingTTS(liveRawText);
       }
       break;
@@ -2323,11 +2328,13 @@ function handle({ type, data = {}, ts = null }) {
         const viaLabel = friendlyChannelLabel(data.channel);
         const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
         const messageId = data.conversation_id || data.conversationId || "";
+        clientRequestPerformance.textReceived(data);
         // 若本轮正文已流式进了实时气泡：用权威全文定稿同一个气泡，避免新建重复气泡
         if (chat.hasLiveJarvisMsg()) {
-          chat.finalizeLiveJarvisMsg(content, { messageId });
+          chat.finalizeLiveJarvisMsg(content, { messageId, performance: data });
         } else {
-          addMsg("jarvis", content, { messageId });
+          const bubble = addMsg("jarvis", content, { messageId });
+          clientRequestPerformance.textRendered(data, bubble?.querySelector(".msg-body"));
         }
         const speechText = toPlainSpeech(data.content);
         const voiceDecision = voiceReplyCoordinator.finalMessage(data, speechText);

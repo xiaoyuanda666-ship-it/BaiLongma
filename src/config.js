@@ -539,7 +539,7 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
-function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT) {
+function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT, reasoningControl = 'omit') {
   return getLLMProtocol(apiFormat).buildRequest({
     provider,
     model,
@@ -547,6 +547,7 @@ function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT) {
     temperature: 0,
     maxTokens: 32,
     thinking: false,
+    reasoningControl,
     omitSampling: shouldOmitSamplingForProviderModel(provider, model),
     stream: false,
   })
@@ -636,6 +637,19 @@ function writeLlmProviderConfig(provider, record) {
   writeJsonObjectFile(file, record)
 }
 
+function normalizeReasoningControl(value = 'omit') {
+  if (value === 'omit' || value === 'effort') return value
+  throw new Error('Unsupported reasoning control: expected "omit" or "effort"')
+}
+
+function resolveCustomReasoningControl(value, stored, baseURL, model) {
+  if (value !== undefined) return normalizeReasoningControl(value)
+  // This is a capability of a saved endpoint/model pair, never a global default.
+  return stored?.baseURL?.trim() === baseURL && stored?.model?.trim() === model
+    ? normalizeReasoningControl(stored.reasoningControl)
+    : 'omit'
+}
+
 function resolveLlmRecord(raw, fallbackProvider) {
   if (!raw || typeof raw !== 'object') return null
   let apiFormat
@@ -651,6 +665,7 @@ function resolveLlmRecord(raw, fallbackProvider) {
       apiKey: typeof raw.apiKey === 'string' && raw.apiKey ? raw.apiKey : 'none',
       model: raw.model,
       baseURL: raw.baseURL,
+      reasoningControl: raw.reasoningControl === 'effort' ? 'effort' : 'omit',
     }
   }
   if (!PROVIDER_CONFIG[provider]) return null
@@ -737,6 +752,7 @@ function withoutLegacyLlmFields(obj) {
     model: _model,
     baseURL: _baseURL,
     apiFormat: _apiFormat,
+    reasoningControl: _reasoningControl,
     activatedAt: _activatedAt,
     ...rest
   } = obj || {}
@@ -767,6 +783,7 @@ function persistLlmProviderConfig(record) {
       apiKey: String(record.apiKey || '').trim() || 'none',
       model: String(record.model || '').trim(),
       baseURL: String(record.baseURL || '').trim(),
+      reasoningControl: normalizeReasoningControl(record.reasoningControl),
       activatedAt: record.activatedAt || new Date().toISOString(),
     })
     return
@@ -1025,8 +1042,9 @@ function loadFromEnv() {
   return null
 }
 
-function applyConfig(provider, apiKey, model, customBaseURL, apiFormat = DEFAULT_LLM_API_FORMAT) {
+function applyConfig(provider, apiKey, model, customBaseURL, apiFormat = DEFAULT_LLM_API_FORMAT, reasoningControl = 'omit') {
   config.apiFormat = normalizeLLMApiFormat(apiFormat)
+  config.reasoningControl = provider === 'custom' ? normalizeReasoningControl(reasoningControl) : 'omit'
   if (provider === 'custom') {
     config.provider = 'custom'
     config.model = String(model || '').trim()
@@ -1135,6 +1153,7 @@ export const config = {
   },
   provider: null,
   apiFormat: DEFAULT_LLM_API_FORMAT,
+  reasoningControl: 'omit',
   model: null,
   apiKey: null,
   baseURL: null,
@@ -1218,7 +1237,7 @@ if (parsedConfig) {
 
 const storedLlm = resolveStoredLlm(parsedConfig)
 if (storedLlm) {
-  applyConfig(storedLlm.provider, storedLlm.apiKey, storedLlm.model, storedLlm.baseURL, storedLlm.apiFormat)
+  applyConfig(storedLlm.provider, storedLlm.apiKey, storedLlm.model, storedLlm.baseURL, storedLlm.apiFormat, storedLlm.reasoningControl)
   if (storedLlm.provider !== 'custom' && storedLlm.model) {
     const normalized = normalizeModel(storedLlm.model, storedLlm.provider)
     if (normalized !== storedLlm.model) {
@@ -1243,7 +1262,8 @@ if (storedLlm) {
   } catch {}
 })()
 
-export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat }) {
+export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat, reasoningControl }) {
+  if (reasoningControl !== undefined) normalizeReasoningControl(reasoningControl)
   const p = String(provider || AUTO_PROVIDER).toLowerCase()
   const format = normalizeLLMApiFormat(apiFormat === undefined
     ? resolveStoredLlmForProvider(p)?.apiFormat
@@ -1255,13 +1275,16 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
     const normalizedModel = String(model || '').trim()
     if (!normalizedModel) throw new Error('Custom endpoint requires a model name')
     const normalizedKey = String(apiKey || '').trim() || 'none'
+    const control = resolveCustomReasoningControl(
+      reasoningControl, resolveStoredLlmForProvider('custom'), normalizedBaseURL, normalizedModel,
+    )
 
     const { default: OpenAI } = await import('openai')
     const client = new OpenAI({ apiKey: normalizedKey, baseURL: normalizedBaseURL, timeout: PROBE_TIMEOUT_MS })
     try {
       await withTimeout(
         format === 'responses'
-          ? client.responses.create(buildPingParams('custom', normalizedModel, format))
+          ? client.responses.create(buildPingParams('custom', normalizedModel, format, control))
           : client.chat.completions.create(buildPingParams('custom', normalizedModel, format)),
         PROBE_TIMEOUT_MS,
         'custom',
@@ -1277,6 +1300,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
       apiKey: normalizedKey,
       model: normalizedModel,
       baseURL: normalizedBaseURL,
+      reasoningControl: control,
       models: [{ id: normalizedModel, label: normalizedModel, deprecated: false }],
     }
   }
@@ -1329,6 +1353,7 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
 export function commitPreparedActivation(prepared) {
   const p = String(prepared?.provider || '').toLowerCase()
   const apiFormat = normalizeLLMApiFormat(prepared?.apiFormat)
+  const reasoningControl = normalizeReasoningControl(prepared?.reasoningControl)
 
   if (p === 'custom') {
     const normalizedBaseURL = String(prepared.baseURL || '').trim()
@@ -1343,13 +1368,15 @@ export function commitPreparedActivation(prepared) {
       apiKey: normalizedKey,
       model: normalizedModel,
       baseURL: normalizedBaseURL,
+      reasoningControl,
       activatedAt: new Date().toISOString(),
     })
-    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL, apiFormat)
+    applyConfig('custom', normalizedKey, normalizedModel, normalizedBaseURL, apiFormat, reasoningControl)
     return {
       provider: 'custom',
       apiFormat,
       baseURL: normalizedBaseURL,
+      reasoningControl,
       model: normalizedModel,
       models: [{ id: normalizedModel, label: normalizedModel, deprecated: false }],
     }
@@ -1383,8 +1410,8 @@ export function commitPreparedActivation(prepared) {
   }
 }
 
-export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat }) {
-  const prepared = await prepareActivation({ provider, apiKey, model, baseURL, apiFormat })
+export async function activate({ provider = AUTO_PROVIDER, apiKey, model, baseURL, apiFormat, reasoningControl }) {
+  const prepared = await prepareActivation({ provider, apiKey, model, baseURL, apiFormat, reasoningControl })
   return commitPreparedActivation(prepared)
 }
 
@@ -1394,6 +1421,7 @@ export function getActivationStatus() {
   return {
     activated: !config.needsActivation,
     apiFormat: config.apiFormat,
+    reasoningControl: config.reasoningControl,
     provider: config.provider,
     model: config.model,
     baseURL: config.provider === 'custom' ? config.baseURL : undefined,
@@ -1423,6 +1451,7 @@ export function getProviderSummaries() {
   result.custom = {
     label: 'Custom Endpoint',
     apiFormat: custom?.apiFormat || DEFAULT_LLM_API_FORMAT,
+    reasoningControl: custom?.reasoningControl || 'omit',
     models: [],
     defaultModel: '',
     configured: !!custom,
@@ -1495,6 +1524,7 @@ export function deactivate() {
   writeStoredConfig({ ...withoutLegacyLlmFields(existing), provider: null })
   config.provider = null
   config.apiFormat = DEFAULT_LLM_API_FORMAT
+  config.reasoningControl = 'omit'
   config.model = null
   config.apiKey = null
   config.baseURL = null
@@ -1506,16 +1536,19 @@ export function switchModel(model) {
   if (config.provider === 'custom') {
     const trimmed = String(model || '').trim()
     if (!trimmed) throw new Error('Model name cannot be empty')
+    const reasoningControl = trimmed === config.model ? config.reasoningControl : 'omit'
     persistLlmProviderConfig({
       provider: 'custom',
       apiFormat: config.apiFormat,
       apiKey: config.apiKey,
       model: trimmed,
       baseURL: config.baseURL,
+      reasoningControl,
       activatedAt: readLlmProviderConfig('custom')?.activatedAt,
     })
     config.model = trimmed
-    return { provider: 'custom', model: trimmed, apiFormat: config.apiFormat, baseURL: config.baseURL }
+    config.reasoningControl = reasoningControl
+    return { provider: 'custom', model: trimmed, apiFormat: config.apiFormat, baseURL: config.baseURL, reasoningControl }
   }
   const normalized = normalizeModel(model, config.provider)
   persistLlmProviderConfig({
@@ -1540,19 +1573,22 @@ export function switchProviderConfig({ provider, model } = {}) {
   if (p === 'custom') {
     const nextModel = String(model || stored.model || '').trim()
     if (!nextModel) throw new Error('Model name cannot be empty')
+    const reasoningControl = resolveCustomReasoningControl(undefined, stored, stored.baseURL.trim(), nextModel)
     persistActiveLlmConfig({
       provider: 'custom',
       apiFormat: stored.apiFormat,
       apiKey: stored.apiKey || 'none',
       model: nextModel,
       baseURL: stored.baseURL,
+      reasoningControl,
       activatedAt: readLlmProviderConfig('custom')?.activatedAt,
     })
-    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL, stored.apiFormat)
+    applyConfig('custom', stored.apiKey || 'none', nextModel, stored.baseURL, stored.apiFormat, reasoningControl)
     return {
       provider: 'custom',
       apiFormat: stored.apiFormat,
       baseURL: stored.baseURL,
+      reasoningControl,
       model: nextModel,
       models: [{ id: nextModel, label: nextModel, deprecated: false }],
     }
@@ -1575,9 +1611,10 @@ export function switchProviderConfig({ provider, model } = {}) {
   }
 }
 
-export async function saveLLMSettings({ provider, apiKey, model, baseURL, apiFormat } = {}) {
+export async function saveLLMSettings({ provider, apiKey, model, baseURL, apiFormat, reasoningControl } = {}) {
   if (apiFormat !== undefined) normalizeLLMApiFormat(apiFormat)
-  const p = String(provider || (apiFormat !== undefined ? config.provider : null) || AUTO_PROVIDER).toLowerCase()
+  if (reasoningControl !== undefined) normalizeReasoningControl(reasoningControl)
+  const p = String(provider || (apiFormat !== undefined || reasoningControl !== undefined ? config.provider : null) || AUTO_PROVIDER).toLowerCase()
   const trimmedKey = String(apiKey || '').trim()
   const stored = resolveStoredLlmForProvider(p)
   const nextApiFormat = normalizeLLMApiFormat(apiFormat === undefined ? stored?.apiFormat : apiFormat)
@@ -1592,6 +1629,7 @@ export async function saveLLMSettings({ provider, apiKey, model, baseURL, apiFor
       model: nextModel,
       baseURL: nextBaseURL,
       apiFormat: nextApiFormat,
+      reasoningControl,
     })
     return commitPreparedActivation(prepared)
   }

@@ -1,6 +1,41 @@
 import { createMarkdownBody } from "./markdown.js";
 import { getUiClientId } from "./api-client.js";
 import { formatDateTime, t } from "./i18n/index.js";
+import { clientRequestPerformance } from "./request-performance.js";
+
+async function postTimedMessage(url, payload, prepareStartedAt) {
+  const serializeStartedAt = performance.now();
+  const body = JSON.stringify(payload);
+  const dispatchAt = performance.now();
+  const clientPrepareMs = serializeStartedAt - prepareStartedAt;
+  const clientSerializeMs = dispatchAt - serializeStartedAt;
+  if (url.endsWith("/message")) {
+    clientRequestPerformance.begin(payload.client_message_id, prepareStartedAt);
+    clientRequestPerformance.dispatched(payload);
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Bailongma-Client-Prepare-Ms": clientPrepareMs.toFixed(3),
+      "X-Bailongma-Client-Serialize-Ms": clientSerializeMs.toFixed(3),
+    },
+    body,
+  });
+  clientRequestPerformance.accepted({
+    client_message_id: payload.client_message_id,
+    request_id: response.headers.get("X-Bailongma-Request-ID"),
+  });
+  // POST acknowledgement is distinct from a model token. No message content,
+  // paths, or credentials are included in this diagnostic record.
+  console.info("[performance-client]", {
+    requestId: response.headers.get("X-Bailongma-Request-ID"),
+    clientPrepareMs: Math.round(clientPrepareMs * 100) / 100,
+    clientSerializeMs: Math.round(clientSerializeMs * 100) / 100,
+    dispatchToAcceptedHeadersMs: Math.round((performance.now() - dispatchAt) * 100) / 100,
+  });
+  return response;
+}
 
 // 把数据库/事件里的细粒度 channel 名转成 UI 友好的简化标签
 export function friendlyChannelLabel(channel) {
@@ -828,6 +863,7 @@ export function initChat({
   }
 
   async function stageDroppedResourceFiles(files = []) {
+    const prepareStartedAt = performance.now();
     const selected = Array.from(files || []).filter(file => file instanceof File);
     if (!selected.length) return;
     const previews = selected.slice(0, MAX_DROPPED_RESOURCES).map(droppedFilePreview);
@@ -860,16 +896,12 @@ export function initChat({
         size: file.size || 0,
         data_url: await readFileAsDataUrl(file),
       })));
-      const response = await fetch(`${apiBase}/message/resources`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from_id: "ID:000001",
-          client_id: getUiClientId(),
-          client_message_id: clientMessageId,
-          resources,
-        }),
-      });
+      const response = await postTimedMessage(`${apiBase}/message/resources`, {
+        from_id: "ID:000001",
+        client_id: getUiClientId(),
+        client_message_id: clientMessageId,
+        resources,
+      }, prepareStartedAt);
       let responseBody = {};
       try { responseBody = await response.json(); } catch {}
       if (!response.ok) throw new Error(responseBody.error || `HTTP ${response.status}`);
@@ -927,6 +959,7 @@ export function initChat({
   });
 
   async function send({ channel = null, label = null, text = null } = {}) {
+    const prepareStartedAt = performance.now();
     if (inputLocked) return;
     const fromInput = (text == null);
     const rawContent = (fromInput ? msgInput.value : text).trim();
@@ -982,11 +1015,7 @@ export function initChat({
           text_length: backendText.length,
         });
       }
-      const resp = await fetch(`${apiBase}/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const resp = await postTimedMessage(`${apiBase}/message`, payload, prepareStartedAt);
       if (!resp.ok) {
         let message = `HTTP ${resp.status}`;
         try {
@@ -1005,6 +1034,7 @@ export function initChat({
       }
       reconcileSentMessage(clientMessageId, responseBody.conversation_id || responseBody.conversationId);
     } catch (error) {
+      clientRequestPerformance.failed({ client_message_id: clientMessageId });
       console.warn("[send]", error.message);
       addMsg("jarvis", t("shell.sendFailed"));
       openChat(true);
@@ -1275,8 +1305,10 @@ export function initChat({
     const shouldScrollToBottom = isNearChatBottom();
     const children = Array.from(liveEl.children);
     for (let i = 1; i < children.length; i++) children[i].remove();
-    liveEl.appendChild(createMarkdownBody(text));
+    const body = createMarkdownBody(text);
+    liveEl.appendChild(body);
     scrollChatToBottomIfFollowing(shouldScrollToBottom);
+    return body;
   }
 
   // text 为字符串则替换为权威全文；为 null 仅去掉 live 标记（保留已流出的内容）
@@ -1294,7 +1326,9 @@ export function initChat({
       if (normalizedId) liveEl.dataset.messageId = normalizedId;
       const children = Array.from(liveEl.children);
       for (let i = 1; i < children.length; i++) children[i].remove();
-      liveEl.appendChild(createMarkdownBody(text));
+      const body = createMarkdownBody(text);
+      liveEl.appendChild(body);
+      if (options.performance) clientRequestPerformance.textRendered(options.performance, body);
     }
     liveEl.classList.remove("msg-live");
     liveEl = null;

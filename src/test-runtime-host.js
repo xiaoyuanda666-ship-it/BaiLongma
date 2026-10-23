@@ -151,6 +151,13 @@ test('real turn builds model context from prepared geography without UI or netwo
   setConfig('current_task_steps', '[]')
   let runTurn
   const modelCalls = []
+  const { createPerformanceTrace, markPerformance } = await import('./runtime/performance-trace.js')
+  const { eventJournal } = await import('./composition/event-services.js')
+  const trace = createPerformanceTrace({ channel: 'test' })
+  trace.mark('request.received')
+  trace.mark('queue.enqueued')
+  const streamEvents = []
+  const unsubscribe = eventJournal.subscribe(event => streamEvents.push(JSON.parse(event.payload)))
   await createAgentRuntime({
     prepareRuntime: async () => ({ startupSkills: [], geoResult: { location: { country_code: 'CN', timezone: 'Asia/Shanghai' } } }),
     createLoop(options) {
@@ -159,16 +166,36 @@ test('real turn builds model context from prepared geography without UI or netwo
     },
     async callModel(args) {
       modelCalls.push(args)
+      args.onStream({ event: 'start', mode: 'think' })
+      args.onStream({ event: 'chunk', text: 'synthetic reasoning' })
+      args.onStream({ event: 'end' })
+      assert.equal(trace.snapshot().summary.receivedToFirstTextBroadcastMs, null)
+      args.onStream({ event: 'start', mode: 'text' })
+      args.onStream({ event: 'chunk', text: ' ' })
+      assert.equal(trace.snapshot().summary.receivedToFirstTextBroadcastMs, null, 'empty body is not a visible first word')
+      markPerformance('model.first_text')
+      args.onStream({ event: 'chunk', text: '你好' })
+      args.onStream({ event: 'end' })
       return { content: '', toolResult: null, aborted: true, delivered: false }
     },
   })
   await runTurn('你好', 'startup geography regression', {
     content: '你好', fromId: 'ID:000001', channel: 'TUI', priority: 100,
+    clientMessageId: 'runtime-performance-message', performanceTrace: trace,
   })
+  unsubscribe()
   assert.equal(modelCalls.length, 1, 'real runTurn must reach the model after building prompt/context')
   assert.equal(modelCalls[0].message, '你好')
   assert.ok(modelCalls[0].systemPrompt.length > 0)
   assert.ok(modelCalls[0].messages.length > 0)
+  const summary = trace.snapshot().summary
+  assert.ok(summary.receivedToFirstTextBroadcastMs >= summary.receivedToFirstTextMs)
+  assert.ok(summary.firstTextToBroadcastMs >= 0)
+  assert.equal(trace.snapshot().events.find(event => event.name === 'embedding.result')?.fastUserPath, true)
+  const correlated = streamEvents.filter(event => ['message_received', 'stream_start', 'stream_chunk', 'stream_end'].includes(event.type))
+  assert.ok(correlated.length >= 8)
+  assert.ok(correlated.every(event => event.data.request_id === trace.id
+    && event.data.client_message_id === 'runtime-performance-message'))
 })
 
 test.after(async () => {

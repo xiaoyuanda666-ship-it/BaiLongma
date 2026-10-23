@@ -1,4 +1,5 @@
 import { browserBackend, BROWSERSKILL_CONTEXT } from '../mcp/browser-backend.js'
+import { measurePerformance } from '../runtime/performance-trace.js'
 // =============================================================================
 // capability-registry.js —— 能力机制（Capability Mechanism）唯一真相源
 //
@@ -253,6 +254,10 @@ const HOTSPOT_KEYWORD_RE = /热点|热搜|热门|新闻|今日|趋势|榜单|头
 const WORLDCUP_KEYWORD_RE = /世界杯|赛况|比分|赛程|对阵|积分榜|小组赛|淘汰赛|揭幕战|进球|几比几|world ?cup|worldcup|fifa/i
 const TYPHOON_KEYWORD_RE = /台风|热带气旋|台风路径|台风预警|风圈|登陆台风|typhoon|tropical cyclone/i
 const MACOS_SYSTEM_MUSIC_RE = /(?:apple\s*music|music\.app|系统(?:里的|的)?音乐|mac(?:os)?(?:系统)?(?:里的|的)?music|音乐播放器|正在播(?:什么|哪首|歌曲|音乐)|当前歌曲|当前曲目|放首|放歌|来首|听歌|换首|播放音乐|暂停音乐|继续播放(?:音乐|这首歌)?|恢复播放(?:音乐|这首歌)?|停止播放(?:音乐|这首歌)?|上一首|下一首|切歌|换一首|play\s+(?:music|a?\s*song)|pause\s+(?:music|the\s*(?:song|track))|resume\s+(?:music|the\s*(?:song|track))|next track|previous track|^(?:请|现在|先|再|直接|把它)?\s*(?:播放|暂停|继续|恢复|停止)\s*(?:一下|吧)?[。.!！?？]*$)/i
+const MACOS_CURRENT_TRACK_QUESTION_RE = /(?:这首歌|这首曲子|这支曲子|这是什么(?:歌|曲子)|(?:现在|当前|正在)(?:在)?(?:播放|放|播)(?:的)?(?:是)?(?:什么|哪首)|what\s+(?:song|track|music)\s+(?:is\s+(?:this|that|playing)|are\s+(?:we|you)\s+(?:playing|listening))|what(?:'s|’s|\s+is)\s+(?:(?:currently|now)\s+)?playing|who\s+(?:sings|is\s+singing)\s+(?:this|that)|who(?:'s|’s|\s+is)\s+the\s+(?:artist|singer)\s+(?:of|for)\s+(?:this|that))/i
+function isMacOSMusicIntent(text = '') {
+  return MACOS_SYSTEM_MUSIC_RE.test(text) || MACOS_CURRENT_TRACK_QUESTION_RE.test(text)
+}
 
 // ---- 工作流块（prompt 注入用；从 prompt.js / index.js 搬来，文本逐字保留）----
 const WEATHER_CONTEXT_BLOCK = `### Weather Surface Rules
@@ -387,11 +392,14 @@ export const CAPABILITIES = [
     summary: '读取并控制 Mac 的 Music.app，返回真实播放/暂停状态、当前歌曲和播放位置；macOS 不使用白龙马内置音乐播放器。',
     triggers: ['mac music', 'apple music', 'music.app', '音乐播放器', '播放音乐', '暂停', '继续播放', '下一首', '上一首', '切歌'],
     tools: MACOS_SYSTEM_MUSIC_TOOLS,
-    detect: (ctx) => MACOS_SYSTEM_MUSIC_RE.test(ctx.rawText || ''),
-    toolWhen: (ctx) => MACOS_SYSTEM_MUSIC_RE.test(ctx.rawText || ''),
+    detect: (ctx) => isMacOSMusicIntent(ctx.rawText || ''),
+    toolWhen: (ctx) => isMacOSMusicIntent(ctx.rawText || ''),
     context: MACOS_SYSTEM_MUSIC_CONTEXT_BLOCK,
-    // Always read state on macOS, even for a terse follow-up such as “暂停”.
-    prefeed: () => buildMacOSMusicRuntimeContext(),
+    // Music questions and terse controls such as “暂停” need a fresh snapshot.
+    // Unrelated chat must not wait for a process check or AppleScript.
+    prefeed: (ctx) => buildMacOSMusicRuntimeContext({
+      relevant: isMacOSMusicIntent(ctx.rawText || ''),
+    }),
   }] : []),
   {
     id: 'weather',
@@ -505,7 +513,7 @@ export async function runCapabilityPrefeed(ctx = {}) {
   const withPrefeed = allCapabilities().filter(c => typeof c.prefeed === 'function')
   const results = await Promise.all(withPrefeed.map(async (c) => {
     try {
-      const text = await c.prefeed(ctx)
+      const text = await measurePerformance(`prefeed.${c.id}`, () => c.prefeed(ctx))
       return [c.id, typeof text === 'string' ? text : '']
     } catch {
       return [c.id, '']

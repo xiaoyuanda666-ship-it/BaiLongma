@@ -10,6 +10,11 @@ import {
   persistDroppedChatResources,
 } from '../../chat-resources.js'
 import { jsonResponse, readJsonBody } from '../utils.js'
+import {
+  createPerformanceTrace,
+  measurePerformance,
+  runWithPerformanceTrace,
+} from '../../runtime/performance-trace.js'
 
 const INBOUND_MESSAGE_DEDUPE_TTL_MS = 10_000
 const INBOUND_MESSAGE_FALLBACK_DEDUPE_MS = 1_500
@@ -47,15 +52,40 @@ function claimInboundMessage({ fromId, channel, content, clientMessageId }) {
   return { claimed: true, key }
 }
 
+function clientDurationHeader(req, name) {
+  const value = req.headers[name]
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  const duration = Number(value)
+  return Number.isFinite(duration) && duration >= 0 && duration <= 600_000 ? duration : undefined
+}
+
 export async function handleMessageRoutes(req, res, url) {
   if (req.method !== 'POST') return false
+  if (url.pathname !== '/message' && url.pathname !== '/message/resources') return false
 
+  const trace = createPerformanceTrace({
+    channel: url.pathname === '/message/resources' ? CHAT_RESOURCE_CHANNEL : 'API',
+    clientPrepareMs: clientDurationHeader(req, 'x-bailongma-client-prepare-ms'),
+    clientSerializeMs: clientDurationHeader(req, 'x-bailongma-client-serialize-ms'),
+  })
+  trace.mark('request.received')
+  // Headers contain local monotonic durations only; renderer and server clocks
+  // are never subtracted. Return this server ID for client/server correlation.
+  res.setHeader('X-Bailongma-Request-ID', trace.id)
+  return runWithPerformanceTrace(trace, () => handleTrackedMessageRoutes(req, res, url, trace))
+}
+
+async function handleTrackedMessageRoutes(req, res, url, trace) {
   if (url.pathname === '/message/resources') {
     let resourceClaim = null
+    let status = 'staged'
     try {
       // Base64 adds roughly one third; leave room for JSON fields while retaining a
       // strict total decoded-resource limit in persistDroppedChatResources.
-      const body = await readJsonBody(req, { maxBytes: Math.ceil(MAX_CHAT_RESOURCE_TOTAL_BYTES * 1.45) })
+      const body = await measurePerformance('ingress.read_body', () => readJsonBody(req, {
+        maxBytes: Math.ceil(MAX_CHAT_RESOURCE_TOTAL_BYTES * 1.45),
+      }))
+      trace.mark('request.body_read')
       const fromId = body.from_id || body.fromId || 'ID:000001'
       const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
       const clientId = normalizeUiClientId(
@@ -64,7 +94,7 @@ export async function handleMessageRoutes(req, res, url) {
           ?? req.headers['x-bailongma-client-id']
           ?? '',
       )
-      const resources = persistDroppedChatResources(body.resources)
+      const resources = measurePerformance('ingress.resource_files', () => persistDroppedChatResources(body.resources))
       const content = buildChatResourceDisplayContent(resources)
       resourceClaim = claimInboundMessage({
         fromId,
@@ -73,16 +103,18 @@ export async function handleMessageRoutes(req, res, url) {
         clientMessageId,
       })
       if (!resourceClaim.claimed) {
-        jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
+        status = 'rejected'
+        trace.mark('request.duplicate')
+        jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName(), request_id: trace.id })
         return true
       }
 
-      const staged = persistInboundMessage(fromId, content, CHAT_RESOURCE_CHANNEL, {
+      const staged = measurePerformance('ingress.persist', () => persistInboundMessage(fromId, content, CHAT_RESOURCE_CHANNEL, {
         clientId,
         clientMessageId: normalizeClientMessageId(clientMessageId),
         resourceState: 'pending',
         resourceMetadata: resources,
-      })
+      }))
       emitEvent('message_in', {
         from_id: staged.fromId,
         content,
@@ -91,11 +123,14 @@ export async function handleMessageRoutes(req, res, url) {
         conversation_id: staged.conversationId,
         client_id: clientId,
         client_message_id: normalizeClientMessageId(clientMessageId),
+        request_id: trace.id,
         resource_state: 'pending',
         resources,
       })
+      trace.mark('request.accepted')
       jsonResponse(res, 200, {
         ok: true,
+        request_id: trace.id,
         agent_name: getAgentName(),
         conversation_id: staged.conversationId,
         client_id: clientId,
@@ -105,24 +140,29 @@ export async function handleMessageRoutes(req, res, url) {
         resources,
       })
     } catch (error) {
+      status = 'error'
       if (resourceClaim?.claimed && resourceClaim.key) recentInboundMessages.delete(resourceClaim.key)
-      jsonResponse(res, error?.statusCode || 400, { error: error?.message || 'failed to stage resources' })
+      jsonResponse(res, error?.statusCode || 400, { error: error?.message || 'failed to stage resources', request_id: trace.id })
+    } finally {
+      trace.finish({ status })
     }
     return true
   }
 
-  if (url.pathname !== '/message') return false
-
   let claim = null
+  let handedOff = false
+  let status = 'rejected'
   try {
     // Allow base64 chat images while bounding the complete JSON envelope.
-    const body = await readJsonBody(req, { maxBytes: 30 * 1024 * 1024 })
+    const body = await measurePerformance('ingress.read_body', () => readJsonBody(req, { maxBytes: 30 * 1024 * 1024 }))
+    trace.mark('request.body_read')
     const { from_id = 'ID:000001', content = '', channel = 'API' } = body
+    trace.channel = typeof channel === 'string' && /^[a-z0-9_-]{1,40}$/i.test(channel) ? channel : 'unknown'
     const trimmed = String(content || '').trim()
-    const enhanced = appendInboundChatMediaMarkdown(trimmed, body)
+    const enhanced = measurePerformance('ingress.media', () => appendInboundChatMediaMarkdown(trimmed, body))
     const queuedContent = enhanced.content
     if (!queuedContent.trim()) {
-      jsonResponse(res, 400, { error: 'content or image required' })
+      jsonResponse(res, 400, { error: 'content or image required', request_id: trace.id })
       return true
     }
     const clientMessageId = body.client_message_id ?? body.clientMessageId ?? ''
@@ -134,13 +174,14 @@ export async function handleMessageRoutes(req, res, url) {
     )
     claim = claimInboundMessage({ fromId: from_id, channel, content: queuedContent, clientMessageId })
     if (!claim.claimed) {
-      jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName() })
+      trace.mark('request.duplicate')
+      jsonResponse(res, 200, { ok: true, duplicate: true, agent_name: getAgentName(), request_id: trace.id })
       return true
     }
     const strictEvaluation = body.strict_evaluation ?? body.strictEvaluation
       ?? (String(body.evaluation_mode || body.evaluationMode || '').toLowerCase() === 'strict' ? true : undefined)
     const forbiddenTools = body.forbidden_tools ?? body.forbiddenTools
-    const meta = {}
+    const meta = { performanceTrace: trace }
     if (strictEvaluation !== undefined) meta.strictEvaluation = strictEvaluation
     if (Array.isArray(forbiddenTools)) meta.forbiddenTools = forbiddenTools
     if (enhanced.media.length) meta.attachments = enhanced.media
@@ -148,11 +189,12 @@ export async function handleMessageRoutes(req, res, url) {
     if (clientMessageId) meta.clientMessageId = normalizeClientMessageId(clientMessageId)
     // 资源消息本身从不入队。只有这条真实文字/语音消息到达时才消费它们，
     // 并把权威资源行附在 queue entry 上，保证本轮工具选择和提示能拿到路径。
-    const pendingResources = getPendingConversationResources(from_id)
+    const pendingResources = measurePerformance('ingress.pending_resources', () => getPendingConversationResources(from_id))
     if (pendingResources.length) meta.pendingResources = pendingResources
     const queued = pushMessage(from_id, queuedContent, channel, meta)
+    handedOff = true
     if (pendingResources.length) {
-      markConversationResourcesConsumed(pendingResources.map(row => row.id))
+      measurePerformance('ingress.consume_resources', () => markConversationResourcesConsumed(pendingResources.map(row => row.id)))
       emitEvent('resources_consumed', {
         conversation_ids: pendingResources.map(row => row.id),
         instruction_conversation_id: queued?.conversationId || 0,
@@ -175,10 +217,13 @@ export async function handleMessageRoutes(req, res, url) {
       conversation_id: conversationId,
       client_id: clientId,
       client_message_id: normalizeClientMessageId(clientMessageId),
+      request_id: trace.id,
       attachments: enhanced.media,
     })
+    trace.mark('request.accepted')
     jsonResponse(res, 200, {
       ok: true,
+      request_id: trace.id,
       agent_name: getAgentName(),
       conversation_id: conversationId,
       client_id: clientId,
@@ -186,8 +231,13 @@ export async function handleMessageRoutes(req, res, url) {
       attachments: enhanced.media,
     })
   } catch (e) {
+    status = 'error'
     if (claim?.claimed && claim.key) recentInboundMessages.delete(claim.key)
-    jsonResponse(res, e.statusCode === 413 ? 413 : 400, { error: e.message })
+    jsonResponse(res, e.statusCode === 413 ? 413 : 400, { error: e.message, request_id: trace.id })
+  } finally {
+    // The runtime owns queued trace completion. Invalid and duplicate messages
+    // have no turn and must be closed at the ingress boundary.
+    if (!handedOff) trace.finish({ status })
   }
   return true
 }

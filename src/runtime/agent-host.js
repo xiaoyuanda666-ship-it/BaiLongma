@@ -82,6 +82,7 @@ import { configureBrowserDownloadJobRecovery } from '../capabilities/tools/brows
 import { prepareAgentRuntime } from './startup-preparation.js'
 import { createActivationLifecycle } from './activation-lifecycle.js'
 import { snapshotAgentState } from './state-snapshot.js'
+import { createPerformanceTrace, getPerformanceTrace, runWithPerformanceTrace, markPerformance, measurePerformance, withoutPerformanceTrace } from './performance-trace.js'
 
 const L2_CONTEXT_HOURS = 24 * 7
 
@@ -672,6 +673,24 @@ export async function createAgentRuntime({
   }
 
   async function runTurn(input, label, msg = null) {
+    const timing = msg?.performanceTrace && !msg.performanceTrace.finished
+      ? msg.performanceTrace
+      : createPerformanceTrace({ channel: msg?.channel || 'tick' })
+    if (msg) msg.performanceTrace = timing
+    return runWithPerformanceTrace(timing, async () => {
+      timing.mark('turn.started')
+      try {
+        return await runTurnMeasured(input, label, msg)
+      } catch (error) {
+        timing.finish({ status: error?.name === 'AbortError' ? 'aborted' : 'error' })
+        throw error
+      } finally {
+        timing.finish()
+      }
+    }, 'turn')
+  }
+
+  async function runTurnMeasured(input, label, msg = null) {
     const sessionRef = newSessionRef()
     if (msg) msg.turnId = sessionRef
     const turnStartedAtMs = Date.now()
@@ -704,6 +723,14 @@ export async function createAgentRuntime({
     const priority = getProcessPriority(msg)
     const fastUserPath = isFastUserMessage(msg)
     const controller = new AbortController()
+    const performanceTrace = getPerformanceTrace()
+    const performanceEventIds = {
+      request_id: performanceTrace?.id || '',
+      client_message_id: msg?.clientMessageId || '',
+    }
+    controller.signal.addEventListener('abort', () => {
+      if (controller.signal.reason === 'watchdog timeout') performanceTrace?.finish({ status: 'watchdog' })
+    }, { once: true })
     let llmResult = null
     let toolCallLog = []
     let voiceTurn = false
@@ -716,7 +743,9 @@ export async function createAgentRuntime({
     const finishTurn = (content = '') => {
       if (isTick || isInformationTurn || silentSignal || terminalEmitted) return
       terminalEmitted = true
+      markPerformance('delivery.response')
       emitEvent('response', {
+        ...performanceEventIds,
         sessionRef,
         label,
         content: isScheduledTask ? '' : content,
@@ -748,6 +777,7 @@ export async function createAgentRuntime({
         })
       } else {
         emitEvent('message_received', {
+          ...performanceEventIds,
           label,
           input: input.slice(0, 300),
           turn_id: sessionRef,
@@ -771,7 +801,7 @@ export async function createAgentRuntime({
       let keyConfigFailDir = null
       if (isUserTurn && msg) {
         const recentCtx = getRecentConversationTimeline(5, 1).map(r => r.content || '').join(' ')
-        const autoConfigResult = await tryAutoConfigureKey(semanticInput, recentCtx)
+        const autoConfigResult = await measurePerformance('prepare.key_configuration', () => tryAutoConfigureKey(semanticInput, recentCtx))
         if (autoConfigResult?.ok) {
           // Delete the user message from DB (no key trace left)
           getDB().prepare(
@@ -808,11 +838,12 @@ export async function createAgentRuntime({
       // 但天气 surface 是确定性 UI 能力,不能完全依赖模型是否记得调用 ui_set。
 
       // 1. Injector
-      const injection = await runInjector({
+      const injection = await measurePerformance('prepare.injector', () => runInjector({
         message: injectorInput,
         state,
         currentChannel: contextChannel,
-      })
+        fastUserPath,
+      }))
       if (msg?.pendingResources?.length) {
         // 即使用户把“聊天消息上下文条数”调到 1，也不能把本轮刚消费的资源挤出窗口。
         // 它们是当前指令的输入，不是可被普通历史裁剪掉的旧聊天。
@@ -883,11 +914,11 @@ export async function createAgentRuntime({
         // 前台切走 → 旧前台做一次增量摘要（fire-and-forget；只增加表示，不隐藏任何对话）。
         if (threadResult?.switchedFrom) {
           const switched = threadResult.switchedFrom
-          ;(async () => {
+          ;withoutPerformanceTrace(async () => {
             try {
               await summarizeThread(switched, { sessionRef, emitEvent, saveState })
             } catch {}
-          })().catch(() => {})
+          }).catch(() => {})
         }
 
         // 弱信号候选（与某后台线索重叠=1）→ 后台 LLM 仲裁。
@@ -896,7 +927,7 @@ export async function createAgentRuntime({
           const createdThread = threadResult.thread
           const candidate = threadResult.ambiguousWith
           const body = msg?.content || semanticInput || ''
-          ;(async () => {
+          ;withoutPerformanceTrace(async () => {
             try {
               const verdict = await classifyThreadAttribution({
                 newMessage: body,
@@ -925,7 +956,7 @@ export async function createAgentRuntime({
                 event: 'refined',
               })
             } catch {}
-          })().catch(() => {})
+          }).catch(() => {})
         }
       } catch (e) {
         // 线索判断不应该影响主流程；任何异常吞掉、记录日志即可
@@ -997,7 +1028,7 @@ export async function createAgentRuntime({
       const temporalRecallText = formatTemporalRecall(injection.temporalRecall)
 
       // Real-time user messages take the fast path: skip heavy context gathering to avoid slowdowns from task background.
-      const runtimeInjectionPromise = runRuntimeInjector({
+      const runtimeInjectionPromise = measurePerformance('prepare.runtime_context', () => runRuntimeInjector({
         message: semanticInput,
         task: state.task,
         taskKnowledge: taskKnowledgeText,
@@ -1005,17 +1036,17 @@ export async function createAgentRuntime({
         fastUserPath,
         excludedInformationProviders: injection.informationProviderIds || [],
         signal: controller.signal,
-      })
+      }))
       // Knowledge evidence is retrieved independently from memories.  TICK
       // turns deliberately do not pull documents merely because a region exists;
       // an explicit question, document signal, or eligible task follow-up does.
-      const knowledgeInjectionPromise = runKnowledgeInjector({
+      const knowledgeInjectionPromise = measurePerformance('prepare.knowledge', () => runKnowledgeInjector({
         query: (isTick || isInformationTurn) ? '' : (msg?.content || semanticInput),
         task: state.task,
         source: isTick ? 'tick' : (isInformationTurn ? 'information' : 'turn'),
-      })
+      }))
       const weatherSurfacePromise = (isUserTurn && msg && !silentSignal)
-        ? projectWeatherSurfaceForTurn(msg.content || semanticInput)
+        ? measurePerformance('prepare.weather', () => projectWeatherSurfaceForTurn(msg.content || semanticInput))
         : Promise.resolve(null)
       const [runtimeInjection, knowledgeInjection] = await Promise.all([
         runtimeInjectionPromise,
@@ -1193,7 +1224,7 @@ export async function createAgentRuntime({
       //   看当前 user 是否有 WECHAT 历史；目前依赖 currentChannel === 'WECHAT' 来触发）。
       // TODO: Wave 2 后续接入 —— hasActiveFocus 暂时按 false 传（需要把 focus banner active
       //   状态做进 state，目前依赖 keyword 触发）。
-      const systemPrompt = buildSystemPrompt({
+      const systemPrompt = measurePerformance('prepare.system_prompt', () => buildSystemPrompt({
         agentName,
         persona,
         birthTime,
@@ -1210,7 +1241,7 @@ export async function createAgentRuntime({
         // 编程纪律内化的信号源二/三：task 文本 + 最近动作摘要（TICK 干活轮也能命中）
         currentTaskText: state.task || '',
         recentActionsSummary: recentToolActions.map(a => a?.summary || '').join(' | '),
-      })
+      }))
 
       const currentTime = nowTimestamp()
       const existenceDesc = describeExistence(birthTime)
@@ -1329,7 +1360,7 @@ export async function createAgentRuntime({
         channel: contextChannel,
       }
 
-      informationSourceShadow = await observeInformationSourceShadow({
+      informationSourceShadow = await measurePerformance('prepare.information_shadow', () => observeInformationSourceShadow({
         request: informationSourceRequest,
         legacyComponents: {
           ...informationSourceLegacyComponents,
@@ -1347,15 +1378,15 @@ export async function createAgentRuntime({
           'self',
           'capability',
         ],
-      })
+      }))
       if (informationSourceShadow.observed) {
         emitEvent('information_source_shadow', informationSourceShadow.audit)
       }
 
-      informationSourceRender = await renderInformationSourceContext({
+      informationSourceRender = await measurePerformance('prepare.information_render', () => renderInformationSourceContext({
         request: informationSourceRequest,
         legacyComponents: informationSourceLegacyComponents,
-      })
+      }))
       if (informationSourceRender.rendered) {
         const renderedContext = applyInformationSourceRender({
           components: supplementalInformation.components,
@@ -1394,7 +1425,7 @@ export async function createAgentRuntime({
         console.log(`[排除层] ${summary} | 参照系="${gateResult.meta.referenceFrame}"`)
       }
 
-      let contextBlock = buildContextBlock(gateResult.args)
+      let contextBlock = measurePerformance('prepare.context_block', () => buildContextBlock(gateResult.args))
       const strictEvaluationContext = buildStrictEvaluationContext(strictEvaluation)
       if (strictEvaluationContext) {
         contextBlock = [contextBlock, strictEvaluationContext].filter(Boolean).join('\n\n')
@@ -1423,7 +1454,7 @@ export async function createAgentRuntime({
         runtimeLane,
       })
 
-      let llmMessages = buildMessagesWithContext(contextBlock)
+      let llmMessages = measurePerformance('prepare.messages', () => buildMessagesWithContext(contextBlock))
 
       // Memory refresh injection (L1 user messages only)
       // 实时用户消息（fastUserPath）跳过：刷新流程会先跑一次评估 LLM 调用，对实时聊天是硬性延迟税
@@ -1432,7 +1463,7 @@ export async function createAgentRuntime({
       const shouldRefreshTick = isTick && !!state.task && tickSinceLastRefresh >= 5
       if (shouldRefreshL1 || shouldRefreshTick) {
         try {
-          const refreshResult = await runMemoryRefreshLoop({
+          const refreshResult = await measurePerformance('prepare.memory_refresh', () => runMemoryRefreshLoop({
             originalQuery: shouldRefreshL1 ? msg.content : state.task,
             baseMemories: injection.memories,
             formattedBaseMemories: memoriesText,
@@ -1442,7 +1473,7 @@ export async function createAgentRuntime({
             ),
             signal: controller.signal,
             maxRounds: shouldRefreshTick ? 2 : 3,
-          })
+          }))
           state.pendingConfidenceHint = refreshResult?.confidence ?? null
           if (shouldRefreshTick) state.lastTaskRefreshTick = state.tickCounter
           throwIfAborted(controller.signal)
@@ -1636,6 +1667,12 @@ export async function createAgentRuntime({
       // 后端不再整段补一次 autoSpeakForVoiceReply，避免重复念。
       let curStreamMode = null
       let sawTextStream = false
+      let sawVisibleText = false
+      markPerformance('prepare.complete', {
+        fastUserPath, systemChars: systemPrompt.length, contextChars: contextBlock.length,
+        informationChars: informationContextText.length, messageCount: llmMessages.length,
+        historyCount: injection.conversationWindow?.length || 0, toolCount: turnTools.length,
+      })
       llmResult = await callModel({
         systemPrompt,
         message: semanticInput,
@@ -1754,6 +1791,7 @@ export async function createAgentRuntime({
             //   打进聊天气泡（社交渠道回复在 send_message 工具参数里，正文流非回复，不实时显示）。
             // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
             emitEvent('stream_start', {
+              ...performanceEventIds,
               mode,
               phase: mode === 'commentary' ? 'commentary' : (mode === 'text' ? 'final_answer' : 'reasoning'),
               // A completion-looking draft is not user-visible evidence.  Keep
@@ -1773,7 +1811,16 @@ export async function createAgentRuntime({
           } else if (event === 'chunk') {
             if (capabilityDemoTurn && curStreamMode === 'text') return
             if (curStreamMode === 'text') sawTextStream = true
+            // This is the first sanitized body chunk broadcast for the local
+            // chat bubble. Provider reasoning/private action drafts do not
+            // count; actual DOM presentation is measured in the renderer.
+            if (!sawVisibleText && curStreamMode === 'text' && localReply
+              && !toolContext.actionContract && String(text || '').trim()) {
+              sawVisibleText = true
+              markPerformance('delivery.first_text')
+            }
             emitEvent('stream_chunk', {
+              ...performanceEventIds,
               text,
               mode: curStreamMode,
               phase: curStreamMode === 'commentary' ? 'commentary' : (curStreamMode === 'text' ? 'final_answer' : 'reasoning'),
@@ -1786,6 +1833,7 @@ export async function createAgentRuntime({
               return
             }
             emitEvent('stream_end', {
+              ...performanceEventIds,
               mode: curStreamMode,
               phase: curStreamMode === 'commentary' ? 'commentary' : (curStreamMode === 'text' ? 'final_answer' : 'reasoning'),
               turn_id: sessionRef,
@@ -1812,6 +1860,7 @@ export async function createAgentRuntime({
       throwIfAborted(controller.signal)
       if (!isInformationTurn) commitInformationConsumption(injection.categories?.information || injection)
     } catch (err) {
+      markPerformance(err.name === 'AbortError' ? 'turn.aborted' : 'turn.error')
       if (err.name === 'AbortError') {
         console.log('[system] LLM processing interrupted (new message arrived)')
         llmResult = { content: '', toolResult: null, aborted: true, delivered: false }
@@ -1847,6 +1896,7 @@ export async function createAgentRuntime({
     }
 
     if (llmResult.aborted) {
+      markPerformance('turn.aborted')
       // WeChat-style interruption: discard partial output; the next round will naturally pick up this context from conversationWindow.
       // Mark this Tick as aborted so cadence/awakening accounting is retried on the next heartbeat.
       console.log('[system] Current processing interrupted by new message — partial output discarded')

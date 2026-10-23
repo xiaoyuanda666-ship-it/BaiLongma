@@ -23,6 +23,7 @@ import { buildPersonCardRuntimeContext, buildPersonCardPanelStateContext } from 
 import { buildDocRuntimeContext, buildDocPanelStateContext, detectDocTopic } from '../docs.js'
 import { runCapabilityPrefeed } from '../capabilities/capability-registry.js'
 import { PRIMARY_USER_ID, formatPresenceForPrompt } from '../identity.js'
+import { measurePerformance } from '../runtime/performance-trace.js'
 import { formatTerminalStreamContext } from '../terminal-stream.js'
 import { sceneStore } from '../scene/scene-store.js'
 import { getAIVideoPanelState } from '../capabilities/tools/media.js'
@@ -125,7 +126,7 @@ export async function runRuntimeInformationInjector({
 
   const capCtx = { text: text.toLowerCase(), rawText: text }
   const gatherContextPromise = (task && !fastUserPath)
-    ? gatherContext({ task, taskKnowledge, memories, message: text, signal })
+    ? measurePerformance('context.gather', () => gatherContext({ task, taskKnowledge, memories, message: text, signal }))
     : Promise.resolve([])
 
   const [
@@ -133,8 +134,8 @@ export async function runRuntimeInformationInjector({
     capPrefeed,
     taskExtraContextItemsRaw,
   ] = await Promise.all([
-    buildKeywordRuntimeContext(text, { excludedProviders: excludedInformationProviders }),
-    runCapabilityPrefeed(capCtx),
+    measurePerformance('context.keyword', () => buildKeywordRuntimeContext(text, { excludedProviders: excludedInformationProviders })),
+    measurePerformance('context.capability_prefeed', () => runCapabilityPrefeed(capCtx)),
     gatherContextPromise,
   ])
 

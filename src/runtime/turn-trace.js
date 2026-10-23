@@ -96,6 +96,7 @@ function sanitizeMeta(meta = {}) {
       .map(([key, valueCount]) => [pick(key, 80), count(valueCount)]),
   )
   return {
+    performanceId: pick(meta.performanceId, 80),
     label: pick(meta.label, 60) || 'turn',
     provider: pick(meta.provider, 80),
     model: pick(meta.model, 120),

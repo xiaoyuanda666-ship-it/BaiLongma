@@ -122,6 +122,22 @@
   mark.agent { background: rgba(242,177,90,.22); color: #ffd596; border-radius: 3px; padding: 0 2px; }
   mark.marker { background: rgba(95,179,246,.18); color: #bfe0ff; border-radius: 3px; padding: 0 2px; }
   .hint { color: var(--accent); font-size: 11px; margin: 6px 0 0; }
+  .performance { padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .performance h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+  .perf-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 6px; }
+  .perf-metric { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+  .perf-label { color: var(--dim); font-size: 11px; }
+  .perf-value { font-size: 15px; margin-top: 3px; }
+  .perf-primary .perf-value { color: var(--c-user); }
+  .perf-note { color: var(--dim); font-size: 11px; margin: 8px 0 0; overflow-wrap: anywhere; }
+  .performance details { margin-top: 8px; }
+  .performance summary { cursor: pointer; color: var(--dim); }
+  .perf-table-wrap { overflow: auto; max-height: 320px; }
+  .perf-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
+  .perf-table th, .perf-table td { padding: 5px 7px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .perf-table th { color: var(--dim); font-weight: 400; }
+  .perf-table .number { text-align: right; white-space: nowrap; }
+  .perf-table .sql { overflow-wrap: anywhere; min-width: 180px; }
 </style>
 </head>
 <body>
@@ -222,13 +238,111 @@ async function loadDetail(id) {
   renderList()
   detailEl.innerHTML = `<div class="empty">${tFn('trace.loading')}</div>`
   try {
-    const r = await fetch('/admin/traces/' + encodeURIComponent(id))
-    const data = await r.json()
+    const [traceResult, performanceResult] = await Promise.allSettled([
+      fetch('/admin/traces/' + encodeURIComponent(id)).then(r => r.json()),
+      fetch('/admin/performance?limit=80').then(async r => {
+        if (!r.ok) throw new Error('performance unavailable')
+        return r.json()
+      }),
+    ])
+    if (activeId !== id) return
+    if (traceResult.status === 'rejected') throw traceResult.reason
+    const data = traceResult.value
     if (!data.ok) throw new Error(data.error || 'not found')
-    renderDetail(data.trace)
+    const performanceTrace = performanceResult.status === 'fulfilled'
+      ? performanceResult.value.traces?.find(item => item.id === data.trace.meta?.performanceId)
+      : null
+    renderDetail(data.trace, performanceTrace, performanceResult.status === 'rejected')
   } catch (e) {
+    if (activeId !== id) return
     detailEl.innerHTML = `<div class="empty">${tFn('trace.loadFailed', { error: esc(e.message) })}</div>`
   }
+}
+
+const finiteNumber = value => typeof value === 'number' && Number.isFinite(value)
+function fmtMs(value) {
+  if (!finiteNumber(value)) return '—'
+  return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(2)} ms`
+}
+function fmtNumber(value) {
+  return finiteNumber(value) ? value.toLocaleString('zh-CN', { maximumFractionDigits: 0 }) : '—'
+}
+function fmtBytes(value) {
+  if (!finiteNumber(value)) return '—'
+  return value >= 1024 * 1024 ? `${(value / (1024 * 1024)).toFixed(2)} MiB`
+    : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`
+}
+
+function performanceHtml(trace, timing, unavailable = false) {
+  if (!timing) {
+    const reason = unavailable ? '性能记录暂时无法读取。'
+      : trace.meta?.performanceId ? '对应性能记录已过保留窗口，或尚未写入。'
+        : '此回合没有性能埋点，旧记录无法补算。'
+    return `<section class="performance"><h2>请求耗时</h2><p class="perf-note">${reason} 缺失耗时显示为 —。</p></section>`
+  }
+  const summary = timing.summary || {}
+  const client = timing.client || {}
+  const events = timing.events || []
+  const firstRequest = events.find(event => event.name === 'model.request.ready' && event.auxiliary !== true) || {}
+  const firstDispatch = events.find(event => event.name === 'model.fetch.dispatch' && event.auxiliary !== true) || {}
+  const prepared = events.find(event => event.name === 'prepare.complete') || {}
+  const usage = events.filter(event => event.name === 'model.usage' && event.usageAvailable !== false)
+  const totalUsage = key => {
+    const values = usage.map(event => event[key])
+    return values.length && values.every(finiteNumber) ? values.reduce((sum, value) => sum + value, 0) : null
+  }
+  const clientTotal = finiteNumber(client.clientPrepareMs) && finiteNumber(client.clientSerializeMs)
+    ? client.clientPrepareMs + client.clientSerializeMs : null
+  const queries = timing.queries || []
+  const maxSql = summary.databaseMaxMs
+  const metric = (label, value, primary = false) => `<div class="perf-metric${primary ? ' perf-primary' : ''}">
+    <div class="perf-label">${label}</div><div class="perf-value">${value}</div></div>`
+  const status = { running: '进行中', ok: '完成', error: '失败', aborted: '中断', rejected: '未入队', staged: '暂存', superseded: '被替代', watchdog: '超时' }[timing.status] || timing.status
+  const spans = [...(timing.spans || [])].sort((a, b) => a.atMs - b.atMs)
+  const spanNames = {
+    'ingress.read_body': '读取请求体', 'ingress.media': '处理附件',
+    'ingress.resource_files': '资源落盘', 'ingress.persist': '保存入站消息',
+    'ingress.pending_resources': '查询待消费资源', 'ingress.consume_resources': '标记资源已消费',
+    'ingress.information_activation': '发布信息并激活队列',
+    'prepare.key_configuration': '检查配置', 'prepare.injector': '注入上下文',
+    'injector.tools': '选择工具', 'injector.memory': '检索记忆', 'injector.information': '检索信息',
+    'prepare.runtime_context': '运行时上下文', 'prepare.knowledge': '知识检索', 'prepare.weather': '天气数据',
+    'prepare.information_shadow': '信息来源校验', 'prepare.information_render': '渲染信息',
+    'prepare.context_block': '拼装上下文', 'prepare.messages': '组装模型消息',
+    'prepare.memory_refresh': '刷新记忆', 'model.request_build': '构造模型请求',
+    'model.retry_backoff': '重试等待', 'trace.persist': '保存回合记录',
+  }
+  return `<section class="performance">
+    <h2>请求耗时 <span class="tag">${esc(status)}</span></h2>
+    <div class="perf-grid">
+      ${metric('服务端接收 → 首次发给模型', fmtMs(summary.receivedToDispatchMs), true)}
+      ${metric('首增量对应请求发出 → 首增量', fmtMs(summary.dispatchToFirstDeltaMs), true)}
+      ${metric('首次发出 → 首增量（含重试）', fmtMs(summary.firstDispatchToFirstDeltaMs), true)}
+      ${metric('前端准备 + JSON 序列化', fmtMs(clientTotal))}
+      ${metric('入口处理 → 入队', fmtMs(summary.ingressMs))}
+      ${metric('排队 → 开始处理', fmtMs(summary.queueMs))}
+      ${metric('本地准备 → 首次发给模型', fmtMs(summary.prepareMs))}
+      ${metric('服务端接收 → 首正文', fmtMs(summary.receivedToFirstTextMs))}
+      ${metric('服务端接收 → 正文广播', fmtMs(summary.receivedToFirstTextBroadcastMs))}
+      ${metric('首正文 → 正文广播', fmtMs(summary.firstTextToBroadcastMs))}
+      ${metric('数据库累计 / 操作数', `${fmtMs(summary.databaseMs)} / ${fmtNumber(summary.databaseOperations)}`)}
+    </div>
+    <p class="perf-note">前端准备 ${fmtMs(client.clientPrepareMs)}，序列化 ${fmtMs(client.clientSerializeMs)}；客户端与服务端分别计时，未将两端时钟相减。本地上下文准备 ${fmtMs(summary.contextPrepareMs)}，包含在本地准备耗时内。首增量可能是思考、正文或工具参数；首正文也不代表完整答案。</p>
+    <p class="perf-note">首次请求：消息 ${fmtNumber(firstRequest.messageCount)} 条 / ${fmtNumber(firstRequest.messageChars)} 字符，工具 ${fmtNumber(firstRequest.toolCount)} 个 / ${fmtNumber(firstRequest.toolSchemaChars)} 字符；HTTP 请求体 ${fmtBytes(firstDispatch.requestBytes)}。系统提示 ${fmtNumber(prepared.systemChars)} 字符，历史 ${fmtNumber(prepared.historyCount)} 条。</p>
+    <p class="perf-note">模型用量（${usage.length} 次统计合计）：输入 ${fmtNumber(totalUsage('inputTokens'))} tokens，输出 ${fmtNumber(totalUsage('outputTokens'))}，缓存命中 ${fmtNumber(totalUsage('cachedTokens'))}，推理 ${fmtNumber(totalUsage('reasoningTokens'))}。SQL 最大单次 ${fmtMs(maxSql)}。</p>
+    <details><summary>阶段耗时（${spans.length} 项）</summary>
+      <p class="perf-note">各阶段包含嵌套和并行工作，耗时不能相加；“起点”以服务端本次记录开始为基准。— 表示缺失或尚未发生。</p>
+      <div class="perf-table-wrap"><table class="perf-table"><thead><tr><th>阶段</th><th class="number">起点</th><th class="number">耗时</th></tr></thead><tbody>
+      ${spans.map(span => `<tr><td>${esc(spanNames[span.name] || span.name)}</td><td class="number">+${fmtMs(span.atMs)}</td><td class="number">${fmtMs(span.durationMs)}</td></tr>`).join('') || '<tr><td colspan="3">暂无阶段记录</td></tr>'}
+      </tbody></table></div>
+    </details>
+    <details><summary>SQL 耗时明细（按累计耗时，最多 20 项）</summary>
+      <div class="perf-table-wrap"><table class="perf-table"><thead><tr><th>阶段 / SQL 指纹</th><th class="number">次数</th><th class="number">累计</th><th class="number">单次最大</th></tr></thead><tbody>
+      ${queries.map(query => `<tr><td class="sql">${esc(spanNames[query.stage] || query.stage)} · ${esc(query.operation)}<br>${esc(query.fingerprint)}</td><td class="number">${fmtNumber(query.count)}</td><td class="number">${fmtMs(query.totalMs)}</td><td class="number">${fmtMs(query.maxMs)}</td></tr>`).join('') || '<tr><td colspan="4">暂无查询记录</td></tr>'}
+      </tbody></table></div>
+    </details>
+    <p class="perf-note">request ${esc(timing.id)}${timing.dropped ? ` · ${fmtNumber(timing.dropped)} 项超出记录上限` : ''}</p>
+  </section>`
 }
 
 function msgHtml(m, idx) {
@@ -259,7 +373,7 @@ function msgHtml(m, idx) {
   </div>`
 }
 
-function renderDetail(t) {
+function renderDetail(t, timing = null, performanceUnavailable = false) {
   const m = t.meta || {}
   const finalMsgs = t.messages || []
   let html = `<div class="meta-bar">
@@ -271,6 +385,7 @@ function renderDetail(t) {
       ${m.silentSignal ? '<span class="k"> · </span><span class="tag silent">silent</span>' : ''}</div>
     ${m.userMessage ? `<div class="line"><span class="k">${tFn('trace.userMessage')}</span><span class="um">${esc(m.userMessage)}</span></div>` : ''}
   </div>`
+  html += performanceHtml(t, timing, performanceUnavailable)
 
   if (!t.rounds || !t.rounds.length) {
     html += `<div class="empty">${tFn('trace.noModelCalls')}</div>`
@@ -333,7 +448,10 @@ function renderDetail(t) {
   })
 }
 
-$('#refresh').addEventListener('click', loadList)
+$('#refresh').addEventListener('click', async () => {
+  await loadList()
+  if (activeId) await loadDetail(activeId)
+})
 $('#clear').addEventListener('click', async () => {
   if (!confirm(tFn('trace.clearConfirm'))) return
   await fetch('/admin/traces-clear', { method: 'POST' })

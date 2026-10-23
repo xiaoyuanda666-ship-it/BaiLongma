@@ -68,7 +68,7 @@ function renderPreflight(preflight) {
   app.preflight=preflight
   const container=$('#preflightGrid'); container.className='preflight-grid'
   container.innerHTML=(preflight?.checks||[]).map(check=>`<article class="arch-check"><div class="section-head"><h3>macOS ${esc(check.arch)}</h3><span class="badge ${check.stableEligible?'ok':'bad'}">${check.stableEligible?'STABLE READY':'STABLE BLOCKED'}</span></div><div class="check-grid">
-    ${checkItem('文件完整',check.complete)}${checkItem('版本一致',check.versionMatch)}${checkItem(check.firstRelease?'首次发布':'高于远端',check.localVersionHigher,check.firstRelease?'远端清单确认不存在':check.remoteVersion?`远端 ${check.remoteVersion}`:'远端状态未知')}
+    ${checkItem('文件完整',check.complete)}${checkItem('版本一致',check.versionMatch)}${checkItem(check.firstRelease?'首次发布':'高于远端',check.localVersionHigher,check.versionMessage || (check.firstRelease?'官网清单确认不存在':check.remoteVersion?`官网 ${check.remoteVersion}`:'官网状态未知'))}
     ${checkItem('CPU 架构',check.cpuArchitecture?.ok,check.cpuArchitecture?.actual||'未知')}${checkItem('codesign',check.codesign?.ok)}${checkItem('Developer Team',Boolean(check.developerTeam),check.developerTeam||'未识别')}
     ${checkItem('Hardened Runtime',check.hardenedRuntime)}${checkItem('Entitlements',check.entitlements?.ok)}${checkItem('Apple 公证',check.notarization?.ok)}
     ${checkItem('stapler validate',check.stapler?.ok)}${checkItem('Gatekeeper',check.gatekeeper?.ok)}${checkItem('blockmap',check.blockmaps?.ok)}
@@ -82,8 +82,8 @@ function renderPlan(plan) {
   $('#planView').className='plan'
   $('#planView').innerHTML=`<div class="plan-group"><h3>本地读取 · ${plan.localFiles.length} 个文件</h3><ul>${plan.localFiles.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
   <div class="plan-group"><h3>检查</h3><ul>${plan.checks.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>
-  <div class="plan-group"><h3>香港源站目录</h3><ul>${plan.serverDirectories.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
-  <div class="plan-group"><h3>OSS Objects · 不可变文件 ${plan.immutable.length} 个</h3><ul>${plan.ossObjects.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
+  <div class="plan-group"><h3>官网服务器目录</h3><ul>${plan.serverDirectories.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
+  <div class="plan-group"><h3>官网下载地址 · 不可变文件 ${plan.immutable.length} 个</h3><ul>${plan.downloadUrls.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
   <div class="plan-group"><h3>latest-mac.yml · 灰度 ${plan.stagingPercentage}%</h3>${plan.manifests.map(item=>`<strong>${esc(item.arch)}</strong><pre>${esc(item.content)}</pre>`).join('')}</div>
   <div class="plan-group"><h3>正式切换点</h3><p>${esc(plan.metadataSwitch)}</p></div>`
   updateActions()
@@ -101,8 +101,8 @@ function renderState(task) {
   const progress=app.task?.progress||{}; const total=Number(progress.totalBytes)||0, uploaded=Number(progress.uploadedBytes)||0
   $('#progressBar').style.width=`${total?Math.min(100,uploaded/total*100):current==='SUCCEEDED'?100:0}%`
   $('#progressStats').textContent=`${bytes(uploaded)} / ${bytes(total)} · ${bytes(progress.speed||0)}/s · ETA ${progress.etaSeconds==null?'—':`${progress.etaSeconds}s`}`
-  const services=app.task?.services||{oss:'pending',hongKong:'pending',validation:'pending'}
-  $('#serviceStatuses').innerHTML=`<span>OSS: ${esc(services.oss)}</span><span>香港源站: ${esc(services.hongKong)}</span><span>验证: ${esc(services.validation)}</span>`
+  const services=app.task?.services||{website:'pending',validation:'pending'}
+  $('#serviceStatuses').innerHTML=`<span>官网服务器: ${esc(services.website)}</span><span>验证: ${esc(services.validation)}</span>`
   if (app.task?.preflight) renderPreflight(app.task.preflight)
   if (app.task?.logs) { app.logs=app.task.logs; renderLogs() }
   updateActions()

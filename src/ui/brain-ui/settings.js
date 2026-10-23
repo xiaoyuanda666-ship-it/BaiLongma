@@ -364,6 +364,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   const autosaveStatusText = document.getElementById("settings-autosave-status-text");
   const providerSelect  = document.getElementById("settings-provider-select");
   const apiFormatSelect = document.getElementById("settings-api-format");
+  const customReasoningSelect = document.getElementById("settings-custom-reasoning-control");
   const modelSelect     = document.getElementById("settings-model-select");
   const refreshModelsBtn = document.getElementById("settings-refresh-models");
   const modelCatalogStatus = document.getElementById("settings-model-catalog-status");
@@ -777,8 +778,16 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
   function syncThinkingApiFormatUI() {
     const usesServerDefaults = cachedLlm?.apiFormat === "chat-completions";
-    if (thinkingToggle) thinkingToggle.disabled = usesServerDefaults;
-    if (thinkingHint) thinkingHint.textContent = t(usesServerDefaults ? "settings.chatThinkingHint" : "settings.thinkingHint");
+    const customDefaults = cachedLlm?.provider === "custom" && cachedLlm?.reasoningControl !== "effort";
+    if (thinkingToggle) thinkingToggle.disabled = usesServerDefaults || customDefaults;
+    if (thinkingHint) thinkingHint.textContent = t(usesServerDefaults
+      ? "settings.chatThinkingHint"
+      : customDefaults ? "settings.customThinkingDefaultHint"
+        : cachedLlm?.provider === "custom" ? "settings.customThinkingEffortHint" : "settings.thinkingHint");
+  }
+
+  function syncCustomReasoningControlUI() {
+    if (customReasoningSelect) customReasoningSelect.disabled = apiFormatSelect?.value !== "responses";
   }
 
   function applyCustomProviderUI(providerOrLlm) {
@@ -787,6 +796,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       : (providerOrLlm?.provider || "auto");
     const providerCfg = getProviderConfigForUI(provider, typeof providerOrLlm === "object" ? providerOrLlm : cachedLlm);
     if (apiFormatSelect) apiFormatSelect.value = providerCfg.apiFormat || "responses";
+    if (customReasoningSelect) customReasoningSelect.value = providerCfg.reasoningControl || "omit";
+    syncCustomReasoningControlUI();
     const customSection = document.getElementById("settings-custom-llm-section");
     const modelRow = document.getElementById("settings-model-row");
     const officialCustomModelRow = document.getElementById("settings-official-custom-model-row");
@@ -1845,8 +1856,21 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   apiFormatSelect?.addEventListener("change", () => {
+    syncCustomReasoningControlUI();
     llmAutosave.schedule({ immediate: true });
   });
+
+  customReasoningSelect?.addEventListener("change", () => {
+    llmAutosave.schedule({ immediate: true });
+  });
+  // A different endpoint/model has not yet been verified to support this field.
+  for (const id of ["settings-custom-baseurl", "settings-custom-model"]) {
+    for (const event of ["input", "change"]) {
+      document.getElementById(id)?.addEventListener(event, () => {
+        if (customReasoningSelect) customReasoningSelect.value = "omit";
+      });
+    }
+  }
 
   const agentNameAutosave = createSettingsAutosave(async () => {
     const nextName = agentNameInput?.value?.trim() || "";
@@ -1885,6 +1909,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     if (provider === "custom") {
       body.baseURL = document.getElementById("settings-custom-baseurl")?.value?.trim();
       body.model = document.getElementById("settings-custom-model")?.value?.trim();
+      body.reasoningControl = customReasoningSelect?.value || "omit";
       if (!body.baseURL || !body.model) {
         return { skipped: true, message: "补全 Base URL 和模型名称后会自动保存" };
       }
@@ -1920,6 +1945,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       model: data.model || body.model || cachedLlm?.model,
       baseURL: data.baseURL || body.baseURL || cachedLlm?.baseURL,
       apiFormat: data.apiFormat || body.apiFormat,
+      reasoningControl: data.reasoningControl || (provider === "custom" ? body.reasoningControl : "omit"),
       apiKey: body.apiKey ?? (apiKey || selectedCfg.apiKey || ""),
       activated: true,
     };
@@ -1930,6 +1956,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         model: cachedLlm.model,
         baseURL: cachedLlm.baseURL,
         apiFormat: cachedLlm.apiFormat,
+        reasoningControl: cachedLlm.reasoningControl,
         apiKey: cachedLlm.apiKey,
       };
     }

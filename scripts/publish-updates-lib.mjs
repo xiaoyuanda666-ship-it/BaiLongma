@@ -6,8 +6,9 @@ import readline from 'node:readline/promises'
 import zlib from 'node:zlib'
 import { spawnSync } from 'node:child_process'
 
-const BUCKET = 'bailongma-updates-hk-prod'
-const UPDATE_ORIGIN = 'https://updates.bailongma.ai'
+import { UPDATE_SERVER } from './update-server-config.mjs'
+
+const UPDATE_ORIGIN = UPDATE_SERVER.origin
 const UPDATER_HEADER = 'BailongmaUpdater/2'
 const SSH_OPTIONS = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
 
@@ -32,7 +33,7 @@ function parseArgs(argv, supportedArchs) {
     dryRun: false,
     skipSmoke: false,
     yes: false,
-    host: process.env.BAILONGMA_UPDATE_SSH_HOST || 'xiaobailong-update-hk',
+    host: UPDATE_SERVER.sshHost,
   }
 
   for (const arg of argv) {
@@ -284,7 +285,7 @@ done
 `
   const output = run('ssh', [...SSH_OPTIONS, host, 'sh', '-s', '--', config.platform, config.manifestName, ...archs], {
     capture: true,
-    input: remoteScript,
+    input: websitePublishScript(),
     cwd: root,
   })
   return new Map(output.split('\n').filter(Boolean).map(line => {
@@ -334,16 +335,15 @@ function createInventory(metadataDir, artifacts) {
   return inventoryPath
 }
 
-function publishRemote(root, host, remoteDir, config, version, productName, inventoryName, archs) {
-  const remoteScript = String.raw`set -euf
+export function websitePublishScript() {
+  return String.raw`set -euf
 stage=$1
 version=$2
-bucket=$3
-platform=$4
-product=$5
-manifest_name=$6
-inventory_name=$7
-shift 7
+platform=$3
+product=$4
+manifest_name=$5
+inventory_name=$6
+shift 6
 
 case "$stage" in
   /srv/bailongma-release-staging.*) ;;
@@ -357,7 +357,6 @@ case "$inventory_name" in *[!A-Za-z0-9._-]*|'') echo "unsafe inventory" >&2; exi
 inventory="$stage/$inventory_name"
 test -s "$inventory"
 command -v flock >/dev/null
-command -v ossutil >/dev/null
 command -v sha512sum >/dev/null
 
 exec 9>/run/lock/bailongma-update-publish.lock
@@ -411,34 +410,22 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   [ "$kind" = artifact ] || continue
   origin_dir="/srv/bailongma-updates/stable/$platform/$arch"
   origin_file="$origin_dir/$remote_name"
-  object="oss://$bucket/stable/$platform/$arch/$remote_name"
   test ! -e "$origin_file" || { echo "origin artifact already exists: $platform/$arch/$remote_name" >&2; exit 3; }
-  if ossutil stat "$object" >/dev/null 2>&1; then
-    echo "OSS artifact already exists: $platform/$arch/$remote_name" >&2
-    exit 3
-  fi
 done < "$inventory"
 
 while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected_size content_type; do
   [ "$kind" = artifact ] || continue
   file="$stage/$stage_name"
   origin_dir="/srv/bailongma-updates/stable/$platform/$arch"
-  object="oss://$bucket/stable/$platform/$arch/$remote_name"
   install -d -m 755 "$origin_dir"
-  ossutil cp "$file" "$object" --meta "Cache-Control:public, max-age=31536000, immutable#Content-Type:$content_type"
-  temp_origin="$origin_dir/.${remote_name}.release-$$"
+  temp_origin="$origin_dir/.$remote_name.release-$$"
   install -m 644 "$file" "$temp_origin"
   mv "$temp_origin" "$origin_dir/$remote_name"
 done < "$inventory"
 
-verify_dir=$(mktemp -d "$stage/verify.XXXXXX")
-trap 'rm -rf -- "$verify_dir"' EXIT HUP INT TERM
 while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected_size content_type; do
   [ "$kind" = artifact ] || continue
-  downloaded="$verify_dir/$arch-$remote_name"
-  ossutil cp "oss://$bucket/stable/$platform/$arch/$remote_name" "$downloaded"
-  test "$(sha512sum "$downloaded" | awk '{print $1}')" = "$expected_hash"
-  test "$(wc -c < "$downloaded" | tr -d ' ')" = "$expected_size"
+  test "$(wc -c < "/srv/bailongma-updates/stable/$platform/$arch/$remote_name" | tr -d ' ')" = "$expected_size"
   test "$(sha512sum "/srv/bailongma-updates/stable/$platform/$arch/$remote_name" | awk '{print $1}')" = "$expected_hash"
 done < "$inventory"
 
@@ -446,32 +433,30 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   [ "$kind" = manifest ] || continue
   file="$stage/$stage_name"
   origin_dir="/srv/bailongma-updates/stable/$platform/$arch"
-  object="oss://$bucket/stable/$platform/$arch/$remote_name"
-  ossutil cp -f "$file" "$object" --meta "Cache-Control:no-store, no-cache, must-revalidate#Content-Type:$content_type"
-  downloaded="$verify_dir/$arch-$remote_name"
-  ossutil cp -f "$object" "$downloaded"
-  test "$(sha512sum "$downloaded" | awk '{print $1}')" = "$expected_hash"
-  temp_origin="$origin_dir/.${remote_name}.release-$$"
+  temp_origin="$origin_dir/.$remote_name.release-$$"
   install -m 644 "$file" "$temp_origin"
   mv "$temp_origin" "$origin_dir/$remote_name"
 done < "$inventory"
 `
+}
+
+function publishRemote(root, host, remoteDir, config, version, productName, inventoryName, archs) {
   run('ssh', [
     ...SSH_OPTIONS,
     host,
-    'sh', '-s', '--', remoteDir, version, BUCKET, config.platform, productName,
+    'sh', '-s', '--', remoteDir, version, config.platform, productName,
     config.manifestName, inventoryName, ...archs,
-  ], { input: remoteScript, cwd: root })
+  ], { input: websitePublishScript(), cwd: root })
 }
 
 async function requestFollowingRedirects(url, { headers = {}, expectedFinalStatus, body = 'text' }) {
   let current = new URL(url)
   for (let redirect = 0; redirect <= 5; redirect += 1) {
     const requestHeaders = { ...headers }
-    if (current.hostname !== 'updates.bailongma.ai') delete requestHeaders['X-Bailongma-Updater']
+    if (current.origin !== new URL(UPDATE_ORIGIN).origin) delete requestHeaders['X-Bailongma-Updater']
     let response
     try {
-      response = await fetch(current, { headers: requestHeaders, redirect: 'manual' })
+      response = await fetch(current, { headers: requestHeaders, redirect: 'manual', signal: AbortSignal.timeout(120_000) })
     } catch (error) {
       throw new Error(`HTTPS verification request failed for ${current.hostname}: ${error?.cause?.code || error.message}`)
     }
@@ -479,7 +464,7 @@ async function requestFollowingRedirects(url, { headers = {}, expectedFinalStatu
       const location = response.headers.get('location')
       if (!location) throw new Error('Update gateway returned a redirect without Location')
       current = new URL(location, current)
-      if (!['updates.bailongma.ai', 'download.bailongma.ai'].includes(current.hostname)) {
+      if (current.origin !== new URL(UPDATE_ORIGIN).origin || !current.pathname.startsWith('/updates/')) {
         throw new Error(`Update gateway redirected to unexpected host: ${current.hostname}`)
       }
       continue
@@ -515,7 +500,7 @@ async function verifyPublished(config, artifacts) {
       expectedFinalStatus: 200,
     })
     if (legacy.text.trim() !== expectedMetadata) throw new Error(`${artifact.arch} origin metadata verification failed`)
-    if (accelerated.text.trim() !== expectedMetadata) throw new Error(`${artifact.arch} OSS metadata verification failed`)
+    if (accelerated.text.trim() !== expectedMetadata) throw new Error(`${artifact.arch} website updater-header metadata verification failed`)
 
     const fullDownload = await requestFollowingRedirects(`${baseUrl}/${artifact.primary.remoteName}`, {
       headers: { 'X-Bailongma-Updater': UPDATER_HEADER },
@@ -534,10 +519,10 @@ async function verifyPublished(config, artifacts) {
     const contentRange = range.headers.get('content-range') || ''
     const match = contentRange.match(/^bytes 0-1023\/(\d+)$/)
     if (!match || Number(match[1]) !== artifact.primary.size || range.bytes.length !== 1024) {
-      throw new Error(`${artifact.arch} OSS Range verification returned invalid length metadata`)
+      throw new Error(`${artifact.arch} website Range verification returned invalid length metadata`)
     }
     console.log(
-      `[publish:${config.platform}] ${artifact.arch} origin/OSS manifests, remote SHA-512, and HTTP Range verified`,
+      `[publish:${config.platform}] ${artifact.arch} website manifests, remote SHA-512, and HTTP Range verified`,
     )
   }
 }
@@ -671,7 +656,7 @@ export async function publishUpdates({
       }
       return relative.split(path.sep).join('/')
     })
-    console.log(`[publish:${platform}] uploading ${uploadFiles.length} files to Hong Kong staging`)
+    console.log(`[publish:${platform}] uploading ${uploadFiles.length} files to website server staging`)
     const uploadSizes = uploadFiles.map(filePath => fs.statSync(filePath).size)
     const totalUploadBytes = uploadSizes.reduce((sum, size) => sum + size, 0)
     let uploadedBytes = 0

@@ -521,14 +521,22 @@ function cleanupAudio() {
 }
 
 function sendMessage() {
+  const prepareStartedAt = performance.now()
   const text = (finalText || currentText).trim()
   if (!text || !backendPort) return
   clearTimeout(sendTimer)
   showSendHint(false)
+  const serializeStartedAt = performance.now()
+  const body = JSON.stringify({ from_id: 'ID:000001', content: text, channel: 'FocusBanner' })
+  const dispatchAt = performance.now()
   fetch(`${backendSecure ? 'https' : 'http'}://127.0.0.1:${backendPort}/message`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from_id: 'ID:000001', content: text, channel: 'FocusBanner' }),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Bailongma-Client-Prepare-Ms': (serializeStartedAt - prepareStartedAt).toFixed(3),
+      'X-Bailongma-Client-Serialize-Ms': (dispatchAt - serializeStartedAt).toFixed(3),
+    },
+    body,
   }).then(() => {
     const el = document.getElementById('voiceTranscript')
     el.classList.add('sent')

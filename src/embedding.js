@@ -12,43 +12,20 @@
 
 import crypto from 'crypto'
 import { getEmbeddingCredentials } from './config.js'
+import { isLocalEmbeddingReady } from './embedding-local.js'
 
 const MAX_CACHE_ENTRIES = 200
 const MIN_TEXT_LENGTH = 2
+export const REALTIME_EMBEDDING_BUDGET_MS = 120
 
 // LRU 缓存：key = sha256(text + '' + model + isQuery 标记)，value = Buffer
 // 用 Map 的插入顺序近似 LRU：每次读到命中就 delete + set，让它移到尾部；
 // 写入超限时删 Map.keys().next().value （最旧的 key）
-const cache = new Map()
-
 function cacheKey(text, model) {
   return crypto
     .createHash('sha256')
     .update(text + '' + (model || ''))
     .digest('hex')
-}
-
-function cacheGet(key) {
-  if (!cache.has(key)) return null
-  const value = cache.get(key)
-  // 重新插入，bump 到尾部
-  cache.delete(key)
-  cache.set(key, value)
-  return value
-}
-
-function cacheSet(key, value) {
-  if (cache.has(key)) cache.delete(key)
-  cache.set(key, value)
-  while (cache.size > MAX_CACHE_ENTRIES) {
-    const oldestKey = cache.keys().next().value
-    if (oldestKey === undefined) break
-    cache.delete(oldestKey)
-  }
-}
-
-export function clearEmbeddingCache() {
-  cache.clear()
 }
 
 // 是否已配置 embedding。本地模型零配置：只要拿得到 model（默认或 config 指定）即视为已配置。
@@ -64,46 +41,91 @@ export function isEmbeddingConfigured() {
 
 // 向量召回的有效超时（ms）。注入器拿它做硬超时预算。
 // 本地离线推理无网络方差但 CPU 慢，默认 1500ms；用户可在 config 的 embedding.timeoutMs 覆盖。
-export function getEmbeddingTimeoutMs() {
+export function getEmbeddingTimeoutMs({ fastUserPath = false } = {}) {
+  let timeoutMs = 1500
   try {
     const cred = getEmbeddingCredentials()
-    if (cred && Number.isFinite(cred.timeoutMs) && cred.timeoutMs > 0) return cred.timeoutMs
+    if (cred && Number.isFinite(cred.timeoutMs) && cred.timeoutMs > 0) timeoutMs = cred.timeoutMs
   } catch {}
-  return 1500
+  return fastUserPath ? Math.min(timeoutMs, REALTIME_EMBEDDING_BUDGET_MS) : timeoutMs
 }
 
-// 主接口：本地算 embedding。
-// - text 太短 / 为空 → null
-// - 模型未就绪 / 推理失败 → null（静默，上层走 FTS5 兜底）
-// - 成功 → Buffer (包裹 Float32Array 的字节，长度 = dim * 4)
-//
-// opts.isQuery：召回 query 传 true（bge 会套检索指令前缀做非对称检索）；入库 passage 传 false（默认）。
-//               query/passage 向量不同（前缀不同），cacheKey 带 isQuery 区分，避免互相覆盖。
-export async function computeEmbedding(text, { isQuery = false } = {}) {
-  const input = typeof text === 'string' ? text : ''
-  if (!input || input.length < MIN_TEXT_LENGTH) return null
-
-  let cred
+// A deadline limits this caller's wait, not shared local inference. A timed-out
+// computation can still populate the cache and serve another caller.
+export async function waitForEmbedding(embeddingPromise, timeoutMs) {
+  let timeout
   try {
-    cred = getEmbeddingCredentials()
-  } catch {
-    return null
+    return await Promise.race([
+      Promise.resolve(embeddingPromise).then(
+        embedding => ({ embedding, timedOut: false }),
+        () => ({ embedding: null, timedOut: false }),
+      ),
+      new Promise(resolve => {
+        timeout = setTimeout(() => resolve({ embedding: null, timedOut: true }), timeoutMs)
+      }),
+    ])
+  } finally {
+    clearTimeout(timeout)
   }
-  if (!cred || !cred.model) return null
+}
 
-  const keyExtra = isQuery ? ':q' : ':p'
-  const key = cacheKey(input, cred.model + keyExtra)
-  const cached = cacheGet(key)
-  if (cached) return cached
-
-  let buf = null
-  try {
+// Dependencies are explicit so concurrency, deadlines and late cache fills can
+// be tested without loading an ONNX model or downloading assets.
+export function createEmbeddingComputer({
+  getCredentials = getEmbeddingCredentials,
+  isReady = isLocalEmbeddingReady,
+  computeLocal = async (input, options) => {
     const { computeLocalEmbedding } = await import('./embedding-local.js')
-    buf = await computeLocalEmbedding(input, { model: cred.model, isQuery })
-  } catch {
-    return null
-  }
+    return computeLocalEmbedding(input, options)
+  },
+  maxCacheEntries = MAX_CACHE_ENTRIES,
+} = {}) {
+  const cache = new Map()
+  const inFlight = new Map()
+  let generation = 0
 
-  if (buf) cacheSet(key, buf)
-  return buf
+  async function compute(text, { isQuery = false, readyOnly = false } = {}) {
+    const input = typeof text === 'string' ? text : ''
+    if (input.length < MIN_TEXT_LENGTH) return null
+    let credentials
+    try { credentials = getCredentials() } catch { return null }
+    if (!credentials?.model) return null
+    const key = cacheKey(input, credentials.model + (isQuery ? ':q' : ':p'))
+    if (cache.has(key)) {
+      const cached = cache.get(key)
+      cache.delete(key)
+      cache.set(key, cached)
+      return cached
+    }
+    if (inFlight.has(key)) return inFlight.get(key)
+    // Realtime callers must not trigger heavy module/model loading on the main
+    // event loop. Startup warms the pipeline independently; lexical recall is
+    // immediately usable until it is ready.
+    if (readyOnly && !isReady(credentials.model)) return null
+    const startedGeneration = generation
+    const pending = Promise.resolve()
+      .then(() => computeLocal(input, { model: credentials.model, isQuery }))
+      .then(buffer => {
+        if (buffer && generation === startedGeneration) {
+          cache.set(key, buffer)
+          while (cache.size > Math.max(1, maxCacheEntries)) cache.delete(cache.keys().next().value)
+        }
+        return buffer || null
+      }, () => null)
+      .finally(() => {
+        if (inFlight.get(key) === pending) inFlight.delete(key)
+      })
+    inFlight.set(key, pending)
+    return pending
+  }
+  return {
+    computeEmbedding: compute,
+    clearEmbeddingCache() { cache.clear(); generation++ },
+  }
 }
+
+// Query/passage mode and model are part of the key. Concurrent identical
+// requests share one inference; the successful result is retained in the LRU.
+const computer = createEmbeddingComputer()
+export const computeEmbedding = computer.computeEmbedding
+export const clearEmbeddingCache = computer.clearEmbeddingCache

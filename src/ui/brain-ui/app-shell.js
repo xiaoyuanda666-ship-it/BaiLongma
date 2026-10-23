@@ -368,6 +368,14 @@ const createSettingsModal = () => `
                 <label class="settings-label" for="settings-custom-model">模型名称</label>
                 <input class="settings-input" id="settings-custom-model" type="text" placeholder="如 llama3.2, qwen2.5, mistral">
               </div>
+              <div class="settings-row">
+                <label class="settings-label" for="settings-custom-reasoning-control">推理控制支持</label>
+                <select class="settings-select" id="settings-custom-reasoning-control">
+                  <option value="omit">使用端点默认设置</option>
+                  <option value="effort">支持 none / high 推理强度</option>
+                </select>
+              </div>
+              <p class="settings-hint">仅在确认当前端点和模型支持 Responses reasoning.effort 时开启。关闭高强度推理时发送 none，开启时发送 high。更换地址或模型后需重新选择。</p>
             </div>
             <div class="settings-row">
               <label class="settings-label" for="settings-llm-key">API Key</label>

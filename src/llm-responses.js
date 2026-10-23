@@ -112,6 +112,7 @@ export function buildResponsesRequest({
   topP,
   maxTokens,
   thinking = true,
+  reasoningControl = 'omit',
   omitSampling = false,
   stream = true,
 } = {}) {
@@ -133,6 +134,9 @@ export function buildResponsesRequest({
   const normalizedProvider = String(provider || '').toLowerCase()
   const normalizedModel = String(model || '').toLowerCase()
   const supportsReasoningControl = normalizedProvider === 'deepseek'
+    // Custom gateways opt in explicitly; a model name does not establish
+    // support for the endpoint's request schema.
+    || (normalizedProvider === 'custom' && reasoningControl === 'effort')
     || (normalizedProvider === 'openai' && (normalizedModel.startsWith('gpt-5') || /^o\d/.test(normalizedModel)))
   if (supportsReasoningControl) {
     request.reasoning = {

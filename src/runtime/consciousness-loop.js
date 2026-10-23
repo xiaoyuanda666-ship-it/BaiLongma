@@ -73,6 +73,7 @@ export function createConsciousnessLoop({
         // 立即清掉全局 execution 引用，避免后续 message 进来还 abort 同一个 controller
         clearCurrentExecution()
         try { emitEvent('error', { label: 'watchdog', error: `runTurn stuck > ${runTurnWatchdogMs / 1000}s` }) } catch {}
+        msg?.performanceTrace?.finish({ status: 'watchdog' })
         const err = new Error('runTurn watchdog timeout')
         err.name = 'WatchdogTimeoutError'
         reject(err)

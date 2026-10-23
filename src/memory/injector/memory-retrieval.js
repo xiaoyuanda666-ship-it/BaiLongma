@@ -54,12 +54,14 @@ export async function retrieveRelevantMemorySet({
   hasHistory = false,
   hasHint = false,
   confidenceHint = null,
+  fastUserPath = false,
 } = {}) {
   if (!focusText) return []
   const plan = buildMemorySearchPlan({ hasHistory, hasHint, confidenceHint })
   return searchRelevantMemories({
     focusText,
     contextText: conversationText,
+    fastUserPath,
     ...plan,
   })
 }

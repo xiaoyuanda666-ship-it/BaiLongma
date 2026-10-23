@@ -208,6 +208,57 @@ try {
   assert.equal(mod.config.baseURL, 'http://127.0.0.1:11434/v1')
   assert.equal(JSON.parse(fs.readFileSync(path.join(tempUserDir, 'llm', 'custom.json'), 'utf8')).model, 'local-b')
 
+  // Gateway support is explicitly selected, validated, and scoped to its saved
+  // endpoint/model pair. Legacy custom profiles remain on server defaults.
+  const customFile = path.join(tempUserDir, 'llm', 'custom.json')
+  assert.equal(mod.config.reasoningControl, 'omit')
+  assert.equal(requests.at(-1).body.reasoning, undefined)
+  const optedIn = await mod.saveLLMSettings({ reasoningControl: 'effort' })
+  assert.equal(optedIn.reasoningControl, 'effort')
+  assert.deepEqual(requests.at(-1).body.reasoning, { effort: 'none' })
+  assert.equal(mod.getActivationStatus().reasoningControl, 'effort')
+  assert.equal(mod.getProviderSummaries().custom.reasoningControl, 'effort')
+  assert.equal(JSON.parse(fs.readFileSync(customFile, 'utf8')).reasoningControl, 'effort')
+  const customReload = await import(`./config.js?custom-reasoning-reload=${Date.now()}`)
+  assert.equal(customReload.config.reasoningControl, 'effort')
+  assert.equal(mod.switchProviderConfig({ provider: 'minimax' }).provider, 'minimax')
+  assert.equal(mod.config.reasoningControl, 'omit')
+  assert.equal(mod.switchProviderConfig({ provider: 'custom' }).reasoningControl, 'effort')
+  await mod.saveLLMSettings({ provider: 'custom', apiKey: 'rotated-local-key' })
+  assert.equal(mod.config.reasoningControl, 'effort', 'credential edits keep the selected capability')
+  assert.deepEqual(requests.at(-1).body.reasoning, { effort: 'none' })
+
+  // Unsupported opt-in and invalid values leave the prior saved profile intact.
+  await mod.saveLLMSettings({ provider: 'custom', reasoningControl: 'omit' })
+  const customBeforeFailure = fs.readFileSync(customFile, 'utf8')
+  rejectedEndpoint = 'http://127.0.0.1:11434/v1/responses'
+  await assert.rejects(mod.saveLLMSettings({ reasoningControl: 'effort' }), /connection failed/)
+  assert.deepEqual(requests.at(-1).body.reasoning, { effort: 'none' })
+  rejectedEndpoint = null
+  assert.equal(mod.config.reasoningControl, 'omit')
+  assert.equal(fs.readFileSync(customFile, 'utf8'), customBeforeFailure)
+  const beforeInvalidCapability = requests.length
+  for (const reasoningControl of [null, false, 'none', 'auto', '']) {
+    await assert.rejects(mod.saveLLMSettings({ reasoningControl }), /Unsupported reasoning control/)
+    await assert.rejects(mod.prepareActivation({ provider: 'custom', reasoningControl }), /Unsupported reasoning control/)
+    assert.throws(() => mod.commitPreparedActivation({ provider: 'custom', reasoningControl }), /Unsupported reasoning control/)
+  }
+  assert.equal(requests.length, beforeInvalidCapability)
+
+  await mod.saveLLMSettings({ reasoningControl: 'effort' })
+  await mod.saveLLMSettings({ provider: 'custom', baseURL: 'http://127.0.0.1:11435/v1' })
+  assert.equal(mod.config.reasoningControl, 'omit', 'endpoint changes do not inherit capability')
+  assert.equal(requests.at(-1).body.reasoning, undefined)
+  await mod.saveLLMSettings({ provider: 'custom', baseURL: 'http://127.0.0.1:11434/v1', reasoningControl: 'effort' })
+  await mod.saveLLMSettings({ provider: 'custom', model: 'local-a' })
+  assert.equal(mod.config.reasoningControl, 'omit', 'model changes do not inherit capability')
+  assert.equal(requests.at(-1).body.reasoning, undefined)
+  await mod.saveLLMSettings({ reasoningControl: 'effort' })
+  assert.equal(mod.switchModel('local-b').reasoningControl, 'omit')
+  await mod.saveLLMSettings({ reasoningControl: 'effort' })
+  assert.equal(mod.switchProviderConfig({ provider: 'custom', model: 'local-a' }).reasoningControl, 'omit')
+  await mod.saveLLMSettings({ provider: 'custom', model: 'local-b', reasoningControl: 'effort' })
+
   // A format-only update uses the current provider and its saved credentials.
   const customChat = await mod.saveLLMSettings({ apiFormat: 'chat-completions' })
   assert.equal(customChat.provider, 'custom')
@@ -216,6 +267,8 @@ try {
   assert.equal(requests.at(-1).body.stream, false)
   assert(Array.isArray(requests.at(-1).body.messages))
   assert.equal(requests.at(-1).body.input, undefined)
+  assert.equal(requests.at(-1).body.reasoning, undefined, 'Chat Completions never sends the Responses capability')
+  assert.equal(mod.config.reasoningControl, 'effort', 'a saved Responses capability survives format changes')
   assert.equal(mod.getActivationStatus().apiFormat, 'chat-completions')
   assert.equal(mod.getProviderSummaries().custom.apiFormat, 'chat-completions')
   assert.equal(mod.switchModel('local-a').apiFormat, 'chat-completions')

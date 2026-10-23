@@ -89,9 +89,10 @@ try {
   ;({ closeDBForTest } = await import('./db.js'))
   const configure = format => Object.assign(config, {
     provider: 'custom', apiFormat: format, model: 'local-test', baseURL, apiKey: 'local-test-key', needsActivation: false,
+    reasoningControl: 'effort', thinking: false,
   })
   const common = { systemPrompt: 'Read files and answer.', message: 'Read a.txt and b.txt.',
-    tools: ['read_file'], localReply: true, toolContext: { currentTargetId: 'ID:test' } }
+    tools: ['read_file'], thinking: false, localReply: true, toolContext: { currentTargetId: 'ID:test' } }
 
   for (const format of ['responses', 'chat-completions']) {
     configure(format)
@@ -107,7 +108,8 @@ try {
         if (name === 'read_file') {
           // Simulate a settings save between tool rounds. The in-flight chain
           // must not mix credentials, model, endpoint or replay formats.
-          Object.assign(config, { apiFormat: nextFormat, model: 'next-model', baseURL: nextURL, apiKey: 'next-key' })
+          Object.assign(config, { apiFormat: nextFormat, model: 'next-model', baseURL: nextURL, apiKey: 'next-key',
+            reasoningControl: 'omit' })
           return JSON.stringify({ ok: true, content: 'hello', path: args.path })
         }
         assert.equal(name, 'send_message')
@@ -125,6 +127,8 @@ try {
       assert.equal(request.url, format === 'responses' ? '/v1/responses' : '/v1/chat/completions')
       assert.equal(request.authorization, 'Bearer local-test-key')
       assert.equal(request.body.model, 'local-test')
+      assert.deepEqual(request.body.reasoning, format === 'responses' ? { effort: 'none' } : undefined,
+        'reasoning capability is captured before settings change between model rounds')
     }
     const replay = scenario.requests[1].body
     if (format === 'responses') {
@@ -151,7 +155,15 @@ try {
     assert.equal(scenario.requests[0].url, nextFormat === 'responses' ? '/changed/v1/responses' : '/changed/v1/chat/completions')
     assert.equal(scenario.requests[0].authorization, 'Bearer next-key')
     assert.equal(scenario.requests[0].body.model, 'next-model')
+    assert.equal(scenario.requests[0].body.reasoning, undefined, 'the next turn uses the new endpoint capability')
   }
+
+  configure('responses')
+  config.thinking = true
+  scenario = { format: 'responses', mode: 'text', requests: [] }
+  await callLLM({ ...common, tools: [], mustReply: false, thinking: true })
+  assert.deepEqual(scenario.requests[0].body.reasoning, { effort: 'high' },
+    'explicit custom support also honors high reasoning effort')
 
   for (const [format, mode] of [
     ...['incomplete', 'eof', 'error', 'abort', 'malformed'].map(mode => ['chat-completions', mode]),

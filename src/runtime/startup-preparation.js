@@ -13,6 +13,19 @@ import { withStartupTimeout } from './startup-timeout.js'
 import { setStickyEvent } from './events.js'
 
 export async function prepareAgentRuntime({ reportStartupProgress = () => {} } = {}) {
+  // Start local embedding warmup before network environment/MCP preparation.
+  // Loading is shared with retrieval and never delays application readiness.
+  ;(async () => {
+    try {
+      const { getEmbeddingCredentials } = await import('../config.js')
+      const cred = getEmbeddingCredentials()
+      if (cred?.provider === 'local' && cred.model) {
+        const { warmupLocalEmbedding } = await import('../embedding-local.js')
+        await warmupLocalEmbedding(cred.model)
+      }
+    } catch {}
+  })().catch(() => {})
+
   // On first launch, copy sandbox seed files from the resource directory to the user data directory (Electron install)
   reportStartupProgress('resources', 'running', '复制沙箱与音乐资源', '正在准备工作区')
   seedSandboxOnce()
@@ -77,19 +90,6 @@ export async function prepareAgentRuntime({ reportStartupProgress = () => {} } =
   reportStartupProgress('mcp', 'running', '连接已启用的 MCP Server', '正在加载 MCP 工具')
   await withStartupTimeout(startMcpClients(), 30000, '[startup] mcp-clients')
   reportStartupProgress('mcp', 'done', 'MCP 工具已加载', 'MCP 工具已加载')
-
-  // 本地嵌入模型预热：provider==='local' 时后台 fire-and-forget 建好 pipeline（含首次模型下载），
-  // 让首条向量召回不被冷启动撞穿超时。绝不阻塞启动，失败静默（召回会自动退化为 FTS5）。
-  ;(async () => {
-    try {
-      const { getEmbeddingCredentials } = await import('../config.js')
-      const cred = getEmbeddingCredentials()
-      if (cred?.provider === 'local' && cred.model) {
-        const { warmupLocalEmbedding } = await import('../embedding-local.js')
-        warmupLocalEmbedding(cred.model).catch(() => {})
-      }
-    } catch {}
-  })().catch(() => {})
 
   // Load Agent Skills metadata. Full SKILL.md bodies are injected only when a turn matches.
   reportStartupProgress('skills', 'running', '技能目录、SQLite、线程状态', '正在加载技能和记忆')

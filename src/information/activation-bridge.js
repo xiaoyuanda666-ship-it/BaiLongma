@@ -184,6 +184,9 @@ function createActivationEntry({ event, lease, candidates, queueMetadata = {}, d
     informationDeliveryIds: lease.deliveries.map(delivery => delivery.id),
     informationAckPolicies: policies,
     ...metadata,
+    // Runtime instrumentation stays in memory; safeQueueMetadata deliberately
+    // excludes it from persisted/replayed activationQueue JSON.
+    ...(queueMetadata.performanceTrace ? { performanceTrace: queueMetadata.performanceTrace } : {}),
   }
   const domain = activationDomainFromEvent(event)
   if (domain === 'user') {

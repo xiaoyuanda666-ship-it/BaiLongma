@@ -29,6 +29,8 @@ import {
   scanMacArtifacts,
 } from './release-engine.mjs'
 
+import { japlosJob, startJaplosJob } from './japlos-console.mjs'
+
 const consoleDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(consoleDir, '..', '..')
 const pkg = JSON.parse(await fsp.readFile(path.join(root, 'package.json'), 'utf8'))
@@ -190,10 +192,10 @@ class TaskManager {
         if (task.machine.state === 'READY') this.transition(task, 'STAGING', 'Uploading fixed inventory to remote staging')
         this.transition(task, 'UPLOADING_ARTIFACTS', 'Uploading immutable artifacts')
         task.progress = { uploadedBytes: 0, totalBytes: event.totalBytes || 0, speed: 0, etaSeconds: null }
-        task.services.hongKong = 'staging'
+        task.services.website = 'staging'
       } else if (event.type === 'staging' && event.status === 'uploaded') {
         task.progress.uploadedBytes = task.progress.totalBytes
-        task.services.hongKong = 'staged'
+        task.services.website = 'staged'
         task.services.validation = 'verifying-artifacts'
         this.transition(task, 'VERIFYING_ARTIFACTS', 'Remote staging upload complete; validating immutable files')
       } else if (event.type === 'file-progress') {
@@ -210,14 +212,12 @@ class TaskManager {
         if (task.machine.state === 'STAGING') this.transition(task, 'UPLOADING_ARTIFACTS', 'Immutable upload transaction started')
         if (task.machine.state === 'UPLOADING_ARTIFACTS') this.transition(task, 'VERIFYING_ARTIFACTS', 'Verifying immutable artifacts')
         this.transition(task, 'PUBLISHING_METADATA', 'Metadata publication boundary entered; cancellation is now uncertain')
-        task.services.oss = 'publishing'
-        task.services.hongKong = 'publishing'
+        task.services.website = 'publishing'
       } else if (event.type === 'verify-release' && event.status === 'running') {
-        if (task.machine.state === 'PUBLISHING_METADATA') this.transition(task, 'VERIFYING_RELEASE', 'Verifying origin, OSS, HTTPS, SHA-512 and Range')
+        if (task.machine.state === 'PUBLISHING_METADATA') this.transition(task, 'VERIFYING_RELEASE', 'Verifying website HTTPS, SHA-512 and Range')
         task.services.validation = 'verifying-release'
       } else if (event.type === 'verify-release' && event.status === 'passed') {
-        task.services.oss = 'verified'
-        task.services.hongKong = 'verified'
+        task.services.website = 'verified'
         task.services.validation = 'passed'
       }
       this.emitTask(task, { type: 'engine', event, at: message.at })
@@ -243,7 +243,7 @@ class TaskManager {
       logs: [],
       steps: [],
       progress: { uploadedBytes: 0, totalBytes: 0, speed: 0, etaSeconds: null },
-      services: { oss: 'pending', hongKong: 'pending', validation: 'pending' },
+      services: { website: 'pending', validation: 'pending' },
       startedAt: new Date().toISOString(),
       endedAt: null,
       error: null,
@@ -335,7 +335,7 @@ async function refreshSnapshot() {
 }
 
 function serveStatic(req, res, pathname) {
-  const files = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] }
+  const files = { '/japlos-v2': ['japlos.html', 'text/html; charset=utf-8'], '/japlos.js': ['japlos.js', 'text/javascript; charset=utf-8'], '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] }
   const entry = files[pathname]
   if (!entry) return false
   const bytes = fs.readFileSync(path.join(staticDir, entry[0]))
@@ -363,6 +363,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
       return json(res, 200, { token: secrets.token, operator, version: pkg.version, productName: pkg.productName || 'Bailongma', channels: [{ id: 'stable', enabled: true }, { id: 'beta', enabled: false }, { id: 'internal', enabled: false }], stagingPercentages: [5, 10, 25, 50, 100] })
     }
+    if (req.method === 'GET' && url.pathname === '/api/japlos-v2') return json(res, 200, { job: japlosJob() })
     if (req.method === 'GET' && url.pathname === '/api/status') {
       const snapshot = cachedStatus || await refreshSnapshot()
       return json(res, 200, { ...snapshot, preflight: lastPreflight, activeTask: tasks.publicTask() })
@@ -376,6 +377,7 @@ const server = http.createServer(async (req, res) => {
       return
     }
     if (req.method === 'POST') validateWriteRequest(req, { token: secrets.token, port })
+    if (req.method === 'POST' && url.pathname === '/api/japlos-v2') return json(res, 202, { job: startJaplosJob(await readJson(req)) })
     if (req.method === 'POST' && url.pathname === '/api/refresh') {
       const snapshot = await refreshSnapshot()
       return json(res, 200, { ...snapshot, activeTask: tasks.publicTask() })

@@ -42,6 +42,7 @@ export async function runMemoryInjector({
   state = null,
   hint = '',
   actionLog = [],
+  fastUserPath = false,
 } = {}) {
   const injectorStartedAt = Date.now()
   const hasTask = !!state?.task
@@ -64,6 +65,7 @@ export async function runMemoryInjector({
     hasHistory: focus.hasHistory,
     hasHint: !!hint,
     confidenceHint,
+    fastUserPath,
   })
   const taskKnowledge = retrieveTaskKnowledge(hasTask)
   const recall = retrieveRecallMemories(state?.prev_recall)

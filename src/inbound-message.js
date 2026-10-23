@@ -3,6 +3,7 @@ import { normalizeConversationPartyId, upsertEntity, insertConversation } from '
 import { resolveCanonicalUserId } from './identity.js'
 import { enqueueMessage } from './queue.js'
 import { shadowPublishInboundEntry } from './information/shadow-publisher.js'
+import { createPerformanceTrace, measurePerformance, runWithPerformanceTrace } from './runtime/performance-trace.js'
 import {
   enqueueInboundMessageForMigration,
   publishInboundResourceForMigration,
@@ -87,6 +88,19 @@ export function persistInboundMessage(rawFromId, content, channel = 'TUI', meta 
 export function pushMessage(rawFromId, content, channel = 'TUI', meta = {}) {
   // The migration adapter owns the single information publication for queued
   // messages, avoiding a shadow + activation double write when user mode is on.
-  const entry = persistInboundEntry(rawFromId, content, channel, meta, { publishShadow: false })
-  return enqueueInboundMessageForMigration(entry, { enqueue: enqueueMessage })
+  const trace = meta.performanceTrace || createPerformanceTrace({ channel })
+  if (!meta.performanceTrace) trace.mark('request.received')
+  return runWithPerformanceTrace(trace, () => {
+    try {
+      const entry = measurePerformance('ingress.persist', () => persistInboundEntry(
+        rawFromId, content, channel, { ...meta, performanceTrace: trace }, { publishShadow: false },
+      ))
+      return measurePerformance('ingress.information_activation', () => enqueueInboundMessageForMigration(
+        entry, { enqueue: enqueueMessage },
+      ))
+    } catch (error) {
+      trace.finish({ status: 'error' })
+      throw error
+    }
+  })
 }

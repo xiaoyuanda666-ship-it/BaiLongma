@@ -6,6 +6,7 @@ import { paths } from '../../paths.js'
 import { startLoop as defaultStartLoop, stopLoop as defaultStopLoop } from '../../control.js'
 import { clearTraces, getTrace, getTraces, getTraceStatus } from '../../runtime/turn-trace.js'
 import { jsonResponse } from '../utils.js'
+import { readPerformanceTraces } from '../../runtime/performance-trace.js'
 
 function contextFunction(context, name, fallback) {
   const source = context || {}
@@ -46,6 +47,11 @@ function clearSandboxFiles(sandboxPath) {
 
 export async function handleAdminRoutes(req, res, url, context = {}) {
   const admin = getAdminContext(context)
+
+  if (req.method === 'GET' && url.pathname === '/admin/performance') {
+    jsonResponse(res, 200, { ok: true, traces: await readPerformanceTraces(url.searchParams.get('limit')) })
+    return true
+  }
 
   if (req.method === 'GET' && url.pathname === '/admin/traces') {
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '80'), 80)

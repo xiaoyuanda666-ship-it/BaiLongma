@@ -106,8 +106,10 @@ export async function getMacOSMusicStatus({
     }
   }
 
+  let appRunning = null
   try {
-    if (!await isMusicAppRunning(runner)) {
+    appRunning = await isMusicAppRunning(runner)
+    if (!appRunning) {
       return {
         ok: true,
         tool: 'system_music',
@@ -137,11 +139,67 @@ export async function getMacOSMusicStatus({
       platform: 'darwin',
       app: 'Music',
       available: true,
-      app_running: true,
+      app_running: appRunning,
       playback_state: 'unknown',
       error: String(error?.stderr || error?.message || error || 'unable to read Music.app state').trim().slice(0, 400),
     }
   }
+}
+
+// Explicit status questions bypass the TTL. The cache is primarily a shared
+// snapshot for callers that can accept a recent observation; concurrent fresh
+// reads still share one process probe. An action invalidates outstanding reads
+// so a late pre-action result cannot replace its verified post-action state.
+export function createMacOSMusicStatusReader({
+  platform = process.platform,
+  runner = execFileAsync,
+  now = () => performance.now(),
+  ttlMs = 2_000,
+} = {}) {
+  let cached = null
+  let observedAt = 0
+  let pending = null
+  let generation = 0
+  return {
+    peek() {
+      const age = now() - observedAt
+      return cached && age >= 0 && age < ttlMs ? { ...cached } : null
+    },
+    invalidate() {
+      generation++
+      cached = null
+      pending = null
+    },
+    read({ fresh = false } = {}) {
+      const age = now() - observedAt
+      if (!fresh && cached && age >= 0 && age < ttlMs) return Promise.resolve({ ...cached })
+      if (pending) return pending
+      const readGeneration = generation
+      const current = Promise.resolve()
+        .then(() => getMacOSMusicStatus({ platform, runner }))
+        .then(status => {
+          if (generation === readGeneration) {
+            cached = status.ok ? { ...status } : null
+            observedAt = now()
+          }
+          return status
+        })
+        .finally(() => { if (pending === current) pending = null })
+      pending = current
+      return current
+    },
+  }
+}
+
+const statusReaders = new WeakMap()
+function statusReaderFor(platform, runner) {
+  let byPlatform = statusReaders.get(runner)
+  if (!byPlatform) {
+    byPlatform = new Map()
+    statusReaders.set(runner, byPlatform)
+  }
+  if (!byPlatform.has(platform)) byPlatform.set(platform, createMacOSMusicStatusReader({ platform, runner }))
+  return byPlatform.get(platform)
 }
 
 function wait(ms) {
@@ -161,35 +219,40 @@ export async function execSystemMusic(args = {}, context = {}) {
   const runner = typeof context.runSystemMusicProcess === 'function'
     ? context.runSystemMusicProcess
     : execFileAsync
-  const readStatus = () => getMacOSMusicStatus({ platform, runner })
+  const statusReader = context.systemMusicStatusReader || statusReaderFor(platform, runner)
+  const readStatus = () => statusReader.read({ fresh: true })
   const before = await readStatus()
   if (action === 'status') return JSON.stringify({ ...before, action })
   if (platform !== 'darwin') return JSON.stringify({ ...before, action })
 
   // Pause/track navigation must never launch Music.app just to satisfy a
   // command. Play/open/toggle may intentionally open it.
-  if (!before.app_running && ['pause', 'next', 'previous'].includes(action)) {
+  if (before.app_running !== true && ['pause', 'next', 'previous'].includes(action)) {
     return JSON.stringify({
       ...before,
       ok: false,
       action,
       changed: false,
-      error: 'Music.app is not open',
+      error: before.app_running === false ? 'Music.app is not open'
+        : before.error || 'Unable to verify whether Music.app is open',
     })
   }
 
   try {
+    statusReader.invalidate()
     await runner('/usr/bin/osascript', ['-e', ACTION_SCRIPTS[action]], {
       timeout: 6_000,
       windowsHide: true,
       maxBuffer: 64 * 1024,
     })
     await wait(140)
+    statusReader.invalidate()
     let after = await readStatus()
     // The Apple event can return slightly before Music publishes its state.
     if ((action === 'pause' && after.playback_state === 'playing')
       || (action === 'play' && after.playback_state !== 'playing')) {
       await wait(240)
+      statusReader.invalidate()
       after = await readStatus()
     }
     const verified = action === 'pause'
@@ -206,6 +269,7 @@ export async function execSystemMusic(args = {}, context = {}) {
       ...(verified ? {} : { error: after.error || `Music.app did not reach the expected state after ${action}` }),
     })
   } catch (error) {
+    statusReader.invalidate()
     const after = await readStatus()
     return JSON.stringify({
       ...after,
@@ -223,13 +287,21 @@ function formatClock(seconds) {
 }
 
 export async function buildMacOSMusicRuntimeContext(options = {}) {
-  const status = await getMacOSMusicStatus(options)
+  // A normal chat turn must not wait for pgrep/AppleScript or launch a probe.
+  // No observation means no context, never an invented "not_running" state.
+  if (options.relevant === false) return ''
+  const platform = options.platform || process.platform
+  if (platform !== 'darwin') return ''
+  const runner = options.runner || execFileAsync
+  const statusReader = options.statusReader || statusReaderFor(platform, runner)
+  const status = await statusReader.read({ fresh: true })
   if (status.platform !== 'darwin') return ''
-  if (!status.app_running) {
+  if (status.app_running === false) {
     return '[macOS System Music]\nMusic.app is not open. There is no active system music playback.'
   }
   if (!status.ok) {
-    return `[macOS System Music]\nMusic.app is open, but its playback state could not be verified: ${status.error || 'unknown error'}. Do not claim that playback changed without a successful system_music result.`
+    const runningState = status.app_running === true ? 'Music.app is open, but its playback state' : 'Music.app running/playback state'
+    return `[macOS System Music]\n${runningState} could not be verified: ${status.error || 'unknown error'}. Do not claim that playback changed without a successful system_music result.`
   }
   const track = status.title
     ? `Current track: "${status.title}"${status.artist ? ` — ${status.artist}` : ''}${status.album ? ` (${status.album})` : ''}.`

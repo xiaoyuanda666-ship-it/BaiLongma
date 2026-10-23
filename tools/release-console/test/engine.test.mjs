@@ -83,6 +83,11 @@ test('a confirmed missing remote manifest is allowed as a first release, but an 
   assert.equal(unavailable.localVersionHigher, false)
   assert.equal(stableGatePassed(unavailable), false)
 
+  const sameVersion = applyRemoteVersionGate(validCheck(), '2.1.655', '2.1.655', 'present')
+  assert.equal(sameVersion.localVersionHigher, false)
+  assert.equal(stableGatePassed(sameVersion), false)
+  assert.match(sameVersion.versionMessage, /不能覆盖同版本/)
+
   const olderRemote = applyRemoteVersionGate(validCheck(), '2.1.655', '2.1.616', 'present')
   assert.equal(olderRemote.localVersionHigher, true)
   assert.equal(stableGatePassed(olderRemote), true)

@@ -25,13 +25,19 @@ const BGE_QUERY_PREFIX = '为这个句子生成表示以用于检索相关文章
 let _pipelinePromise = null
 // 记录已初始化的模型名，model 变了（用户切到别的 local 模型）就重建。
 let _loadedModel = null
+let _readyModel = null
+
+export function isLocalEmbeddingReady(model) {
+  return !!model && _readyModel === model
+}
 
 // 懒加载并缓存 pipeline。任何失败抛出，由调用方 catch 后置 null 重试。
 async function getPipeline(model) {
   if (_pipelinePromise && _loadedModel === model) return _pipelinePromise
 
   _loadedModel = model
-  _pipelinePromise = (async () => {
+  _readyModel = null
+  const pending = (async () => {
     const { pipeline, env } = await import('@huggingface/transformers')
     // 模型缓存目录指到 userData/data/models（可写），首次下载落这里，之后离线命中。
     env.allowRemoteModels = true          // 首次需联网下载；命中本地缓存后无网也能用
@@ -46,14 +52,22 @@ async function getPipeline(model) {
     // ABI 稳定)，无需 @electron/rebuild，但原生 .node/.dll 必须进 asarUnpack 才能被 dlopen。
     return pipeline('feature-extraction', model, { dtype: 'q8', device: 'cpu' })
   })()
+  _pipelinePromise = pending
+  pending.then(() => {
+    if (_pipelinePromise === pending) _readyModel = model
+  }, () => {})
 
   // 失败时清空单例，让下次调用重试（不要把 rejected 的 Promise 永久缓存）
-  _pipelinePromise.catch(() => {
-    _pipelinePromise = null
-    _loadedModel = null
+  pending.catch(() => {
+    // A failed load for an old model must not discard a newer model's pipeline.
+    if (_pipelinePromise === pending) {
+      _pipelinePromise = null
+      _loadedModel = null
+      _readyModel = null
+    }
   })
 
-  return _pipelinePromise
+  return pending
 }
 
 // 把 Float32Array 转成 Buffer（共享底层 ArrayBuffer，不复制）

@@ -24,6 +24,7 @@ export function removeSupersededUserMessages(entry, { onSuperseded = null } = {}
     try { onSuperseded?.(pending, entry) } catch (error) {
       console.warn('[queue] failed to settle superseded user entry:', error?.message || error)
     }
+    pending.performanceTrace?.finish({ status: 'superseded' })
   }
   return removed
 }
@@ -32,6 +33,11 @@ export function enqueueMessage(entry, queueName = entry?.queueName, options = {}
   const targetQueue = queueName === 'background' ? 'background' : 'user'
   removeSupersededUserMessages(entry, options)
   queues[targetQueue].push(entry)
+  // This must precede the callback: it can synchronously start processing.
+  entry.performanceTrace?.mark('queue.enqueued', {
+    userQueueDepth: queues.user.length,
+    backgroundQueueDepth: queues.background.length,
+  })
   interruptCallback?.(entry)
   return entry
 }
@@ -43,6 +49,7 @@ export function popMessage() {
 export function requeueMessage(msg, retryCount) {
   const queueName = msg?.queueName === 'background' ? 'background' : 'user'
   queues[queueName].unshift({ ...msg, retryCount, queueName })
+  msg?.performanceTrace?.mark('queue.requeued', { retryCount })
 }
 
 export function hasMessages() {
