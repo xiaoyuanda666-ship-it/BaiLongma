@@ -1,3 +1,4 @@
+
 // Key auto-config should not bind a fresh key to stale provider words from chat history.
 //
 // Run: node src/test-key-auto-config.js
@@ -57,7 +58,7 @@ function findTtsProvider(infos, provider) {
 }
 
 {
-  const infos = detectAllKeyInfos('配置火山语音识别 0f9a6c2b-8d91-4f2b-92b0-531c357b24da')
+  const infos = detectAllKeyInfos('配置火山语音识别 01234567-89ab-4cde-8f01-23456789abcd')
   const volc = findAsrProvider(infos, 'volcengine')
   assert(!!volc, 'explicit Volcengine ASR key is detected')
   assert(volc.configUpdates?.voiceProvider === 'volcengine', 'Volcengine ASR auto-config sets voice provider')
@@ -70,7 +71,7 @@ function findTtsProvider(infos, provider) {
 }
 
 {
-  const infos = detectAllKeyInfos('配置豆包 TTS 0f9a6c2b-8d91-4f2b-92b0-531c357b24da')
+  const infos = detectAllKeyInfos('配置豆包 TTS 01234567-89ab-4cde-8f01-23456789abcd')
   const doubao = findTtsProvider(infos, 'doubao')
   assert(!!doubao, 'explicit Doubao TTS key is detected')
   assert(doubao.configUpdates?.ttsVoiceId === DEFAULT_DOUBAO_VOICE_ID, 'Doubao TTS auto-config selects Yunzhou 2.0 by default')
