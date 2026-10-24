@@ -60,6 +60,9 @@ try {
     files: [{ name: 'fixture', offset: 0, checksums: ['fixture'], sizes: [7] }],
   }))))
   const winConfig = platformConfig('win', { root, ...pkg })
+  assert.deepEqual(winConfig.smoke(['x64'])[1], ['scripts/smoke-win-artifacts.mjs', '--require-signing'])
+  assert.deepEqual(winConfig.smoke(['x64'], {allowUnsigned:true})[1], ['scripts/smoke-win-artifacts.mjs'])
+  await assert.rejects(publishUpdates({platform:'mac', root, pkg, argv:['--dry-run','--skip-smoke','--allow-unsigned']}), /only supported for Windows/)
   const winArtifact = { arch: 'x64', ...winConfig.collect('x64') }
   const winMetadata = createMetadata({
     platform: 'win',
@@ -96,7 +99,7 @@ try {
     platform: 'win',
     root,
     pkg,
-    argv: ['--dry-run', '--skip-smoke'],
+    argv: ['--dry-run', '--skip-smoke', '--allow-unsigned'],
   })
   await publishUpdates({
     platform: 'linux',

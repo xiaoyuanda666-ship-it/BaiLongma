@@ -30,6 +30,9 @@ assert.doesNotThrow(() => validateWindowsBuildHost({ platform: 'win32', arch: 'x
 assert.throws(() => validateWindowsBuildHost({ platform: 'darwin', arch: 'arm64' }), /must be built on Windows/)
 assert.throws(() => validateWindowsBuildHost({ platform: 'win32', arch: 'arm64' }), /targets x64/)
 assert.equal(signingIsRequired([], {}), false)
+assert.equal(signingIsRequired(['--allow-unsigned'], {}), false)
+assert.throws(() => signingIsRequired(['--require-signing', '--allow-unsigned'], {}), /conflicts/)
+assert.throws(() => signingIsRequired(['--allow-unsigned'], {BAILONGMA_REQUIRE_WINDOWS_SIGNING:'true'}), /conflicts/)
 assert.equal(signingIsRequired(['--require-signing'], {}), true)
 assert.equal(signingIsRequired([], { BAILONGMA_REQUIRE_WINDOWS_SIGNING: 'true' }), true)
 

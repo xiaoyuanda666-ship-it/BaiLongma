@@ -32,6 +32,7 @@ function parseArgs(argv, supportedArchs) {
     archs: [],
     dryRun: false,
     skipSmoke: false,
+    allowUnsigned: false,
     yes: false,
     host: UPDATE_SERVER.sshHost,
   }
@@ -39,6 +40,7 @@ function parseArgs(argv, supportedArchs) {
   for (const arg of argv) {
     if (arg === '--dry-run') options.dryRun = true
     else if (arg === '--skip-smoke') options.skipSmoke = true
+    else if (arg === '--allow-unsigned') options.allowUnsigned = true
     else if (arg === '--yes') options.yes = true
     else if (arg.startsWith('--arch=')) options.archs.push(arg.slice('--arch='.length))
     else if (arg.startsWith('--host=')) options.host = arg.slice('--host='.length)
@@ -204,8 +206,8 @@ export function platformConfig(platform, { root, productName, version }) {
       expectedHostArch: 'x64',
       supportedArchs: ['x64'],
       manifestName: 'latest.yml',
-      smoke() {
-        return [process.execPath, ['scripts/smoke-win-artifacts.mjs', '--require-signing']]
+      smoke(_archs, { allowUnsigned = false } = {}) {
+        return [process.execPath, ['scripts/smoke-win-artifacts.mjs', ...(allowUnsigned ? [] : ['--require-signing'])]]
       },
       collect() {
         const installer = fileRecord(path.join(distDir, `${productName}-Setup-${version}.exe`))
@@ -269,7 +271,7 @@ export function createMetadata({
   return lines.join('\n')
 }
 
-function readRemoteVersions(root, host, config, archs) {
+export function readRemoteVersions(root, host, config, archs) {
   const remoteScript = String.raw`set -eu
 platform=$1
 manifest=$2
@@ -285,7 +287,7 @@ done
 `
   const output = run('ssh', [...SSH_OPTIONS, host, 'sh', '-s', '--', config.platform, config.manifestName, ...archs], {
     capture: true,
-    input: websitePublishScript(),
+    input: remoteScript,
     cwd: root,
   })
   return new Map(output.split('\n').filter(Boolean).map(line => {
@@ -559,6 +561,9 @@ export async function publishUpdates({
   validateReleaseIdentity(productName, version)
   const config = platformConfig(platform, { root, productName, version })
   const options = parseArgs(argv, config.supportedArchs)
+  if (options.allowUnsigned && platform !== 'win') throw new Error('--allow-unsigned is only supported for Windows')
+  if (options.allowUnsigned && /^(1|true|yes)$/i.test(String(process.env.BAILONGMA_REQUIRE_WINDOWS_SIGNING || ''))) throw new Error('--allow-unsigned conflicts with BAILONGMA_REQUIRE_WINDOWS_SIGNING')
+  if (options.allowUnsigned) console.log('[publish:win] --allow-unsigned: Authenticode verification skipped; architecture, runtime, version, hashes and blockmap checks remain enabled')
   const stagingPercentage = Number(releaseOptions.stagingPercentage ?? 100)
   const releaseNotes = String(releaseOptions.releaseNotes || '')
   const emit = (type, detail = {}) => onEvent({ type, platform, version, at: new Date().toISOString(), ...detail })
@@ -574,7 +579,7 @@ export async function publishUpdates({
 
   if (!options.skipSmoke) {
     emit('check', { name: 'artifact-smoke', status: 'running' })
-    const [command, args] = config.smoke(options.archs)
+    const [command, args] = config.smoke(options.archs, options)
     run(command, args, { cwd: root })
     emit('check', { name: 'artifact-smoke', status: 'passed' })
   }

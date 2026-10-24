@@ -16,6 +16,8 @@
     "dev": "node scripts/start.mjs dev",
     "build": "node scripts/check-native-dependency-versions.mjs && node scripts/prebuild-clean.mjs && node scripts/prepare-node-runtime.mjs && node scripts/build-macos-speech.mjs && node ./node_modules/@electron/rebuild/lib/cli.js -f -w better-sqlite3 -v 33.4.11 && node ./node_modules/electron-builder/cli.js",
     "build:win": "node scripts/build-win.mjs",
+    "build:win:unsigned": "node scripts/build-win.mjs --allow-unsigned",
+    "release:win:unsigned": "node scripts/build-win.mjs --allow-unsigned && node scripts/publish-win-updates.mjs --allow-unsigned",
     "build:win:release": "node scripts/build-win.mjs --require-signing",
     "build:linux": "node scripts/build-linux.mjs",
     "build:mac": "node scripts/build-mac.mjs",

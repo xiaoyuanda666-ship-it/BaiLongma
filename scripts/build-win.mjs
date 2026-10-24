@@ -120,13 +120,19 @@ export function inspectWindowsSignature(filePath) {
 }
 
 export function signingIsRequired(args = process.argv.slice(2), env = process.env) {
-  return args.includes('--require-signing') || /^(1|true|yes)$/i.test(String(env.BAILONGMA_REQUIRE_WINDOWS_SIGNING || ''))
+  const required = args.includes('--require-signing') || /^(1|true|yes)$/i.test(String(env.BAILONGMA_REQUIRE_WINDOWS_SIGNING || ''))
+  if (args.includes('--allow-unsigned') && required) throw new Error('--allow-unsigned conflicts with required Windows signing; remove --require-signing and BAILONGMA_REQUIRE_WINDOWS_SIGNING')
+  return required
 }
 
 function main() {
   validateWindowsBuildHost()
   const { pkg, electronVersion } = packageMetadata()
+  const args = process.argv.slice(2)
+  const unknown = args.filter(arg => !['--require-signing', '--allow-unsigned'].includes(arg))
+  if (unknown.length) throw new Error(`Unknown argument(s): ${unknown.join(', ')}`)
   const requireSigning = signingIsRequired()
+  const allowUnsigned = args.includes('--allow-unsigned')
 
   run(process.execPath, ['scripts/check-native-dependency-versions.mjs'])
   run(process.execPath, ['scripts/prebuild-clean.mjs'])
@@ -141,7 +147,7 @@ function main() {
     path.join(projectRoot, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node'),
     'rebuilt better-sqlite3 binding',
   )
-  run(process.execPath, ['./node_modules/electron-builder/cli.js', '--win', 'nsis', '--x64'])
+  run(process.execPath, ['./node_modules/electron-builder/cli.js', '--win', 'nsis', '--x64', '--publish', 'never'])
 
   const installer = installerPath(pkg.version)
   if (!fs.existsSync(installer) || fs.statSync(installer).size === 0) {
@@ -151,13 +157,18 @@ function main() {
   // a Windows x64 application. Validate dist/win-unpacked/Bailongma.exe, not
   // the installer stub, as the authoritative application architecture.
   assertPeX64(path.join(projectRoot, 'dist', 'win-unpacked', 'Bailongma.exe'), 'packaged Bailongma executable')
-  const signature = inspectWindowsSignature(installer)
-  if (String(signature.Status).toLowerCase() !== 'valid') {
-    const message = `Windows installer signature is ${signature.Status || 'unknown'}: ${signature.StatusMessage || 'no details'}`
-    if (requireSigning) throw new Error(message)
-    console.warn(`[build:win] WARNING: ${message}. Use npm run build:win:release for a signed release gate.`)
+  if (allowUnsigned) {
+    console.log('[build:win] --allow-unsigned: Authenticode verification skipped; all artifact smoke checks remain enabled')
   } else {
-    console.log(`[build:win] installer signature valid: ${signature.Subject || 'subject unavailable'}`)
+    const signature = inspectWindowsSignature(installer)
+    if (String(signature.Status).toLowerCase() !== 'valid') {
+      const message = `Windows installer signature is ${signature.Status || 'unknown'}: ${signature.StatusMessage || 'no details'}`
+      if (requireSigning) throw new Error(message)
+      console.warn(`[build:win] WARNING: ${message}. Use npm run build:win:release for a signed release gate.`)
+    } else {
+      console.log(`[build:win] installer signature valid: ${signature.Subject || 'subject unavailable'}`)
+    }
+
   }
 
   run(process.execPath, ['scripts/smoke-win-artifacts.mjs'])
