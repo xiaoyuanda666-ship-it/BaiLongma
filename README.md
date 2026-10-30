@@ -12,12 +12,26 @@ Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答
 - 记忆系统：基于本地 SQLite 持久化对话、记忆、行动日志、提醒、预取缓存、媒体历史和线程状态，并支持全文检索、语义补充、去重与合并。
 - 动态上下文注入：每轮对话前自动选择相关记忆、最近对话、用户画像、工具结果、UI 信号、预取内容和运行状态。
 - 多模型接入：通过 OpenAI 兼容接口连接 DeepSeek、MiniMax、OpenAI、Qwen、Moonshot、Zhipu、MiMo 以及自定义服务。
+- 图片理解：上传或拖入图片后提问，视觉模型直接接收图片；DeepSeek Pro 可复用现有 Key 调用 Flash 识图。
+- 模型联网搜索：使用 DeepSeek Search / Fetch 或 OpenAI 原生搜索查资料并引用来源，无需浏览器扩展。
 - 工具系统：按需注入工具，支持通信、文件系统、Shell、网页读取、搜索、媒体生成、记忆管理、UI 卡片、任务、提醒、本地 Agent 委托和系统操作。
 - Brain UI：提供聊天、思考流、记忆图、焦点线程、热点面板、文档面板、人物卡片、语音控制、设置页和 ACUI 卡片渲染。
 - 语音能力：支持云端语音识别和多种 TTS 服务，可在 UI 中配置语音输入、语音输出和声音参数。
 - 社交连接器：支持 Discord 与微信桥接，外部消息进入同一个主循环，回复按渠道路由返回。
 - 本地资源感知：启动时收集系统信息、桌面信息、已安装软件、本地 Agent、SSH 与 Git 资源、地理天气和热点内容。
 - 桌面集成：Electron 窗口、托盘、自动更新状态、日志落盘、单实例运行和焦点横幅。
+
+## 图片识别与联网搜索
+
+在模型设置中保存 API Key 后，直接上传图片并提问，或说“帮我搜索最新资料，并附来源链接”。拖入聊天的资源会先保存，等下一条文字或语音指令再处理。
+
+图片通过 Chat Completions 的 `image_url` 或 Responses 的 `input_image` 传输。DeepSeek Flash、GPT 视觉模型、Qwen VL 等已识别的视觉模型直接接收图片；DeepSeek Pro 的 `analyze_image` 使用同账号 `deepseek-flash`，不切换当前对话模型。已配置的独立视觉能力槽优先用于 `analyze_image`；未识别的自定义模型可配置独立视觉能力槽。支持 PNG、JPEG、GIF、WebP，单图最大 20MB；直接传图每次最多 8 张、合计 28MB，超出或读取失败会明确告知模型，仍可分批调用识图工具。
+
+`model_web_search` 优先使用当前支持搜索的服务商，随后尝试已保存的 DeepSeek / OpenAI 配置。DeepSeek 返回搜索摘要和来源，`model_web_fetch` 继续读取原文；OpenAI 使用 Responses `web_search`，保留来源引用。没有适用配置时沿用 BrowserSkill；登录、点击、填写和动态网页仍走浏览器。原生接口按服务商规则计费，不会自动绕过现有工具禁用或自主任务权限。
+
+接口依据：[DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)、[DeepSeek Search / Fetch](https://api-docs.deepseek.com/zh-cn/guides/search/)、[OpenAI Web search](https://developers.openai.com/api/docs/guides/tools-web-search)。
+
+运行 `npm run test:model-vision-web` 可验证传图、协议转换、识图回退、搜索、来源核验、取消与错误处理；测试使用隔离目录和本地模拟 API，不调用真实付费接口。
 
 ## 项目结构
 

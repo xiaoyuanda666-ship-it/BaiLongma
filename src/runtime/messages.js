@@ -3,6 +3,7 @@ import { formatLocalClock, formatLocalDateMinute } from '../time.js'
 import {
   CHAT_RESOURCE_CHANNEL,
   formatConversationResourceForAgent,
+  parseConversationResourceMetadata,
 } from '../chat-resources.js'
 
 function xmlAttr(value) {
@@ -95,6 +96,9 @@ export function formatConversationMessage(row, currentMsg = null, prevChannel = 
       content: formatConversationResourceForAgent(row, {
         activatesCurrentTurn: activatedIds.has(String(row.id || '')),
       }),
+      _image_refs: parseConversationResourceMetadata(row.resource_metadata || row.resourceMetadata)
+        .filter(resource => resource.kind === 'image' || String(resource.mime || '').startsWith('image/'))
+        .map(resource => resource.url).filter(Boolean),
     }
   }
 

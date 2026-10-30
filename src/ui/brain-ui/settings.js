@@ -26,6 +26,7 @@ export function initSettings({
   getTtsVoiceId,
   setTtsVoiceId,
   setOpenSettings,
+  applyHeartbeatConfig,
 } = {}) {
 const themeSwitcher = document.getElementById("theme-switcher");
 const uiLanguageSelect = document.getElementById("settings-ui-language");
@@ -417,6 +418,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   let cachedProviders = null;
   let cachedMinimax = { configured: false };
   let modelCatalogRequestId = 0;
+  let modelCatalogController = null;
 
   function syncContextWindowControls(changed = "load") {
     let chatMessageLimit = Math.min(40, Math.max(1, Number(chatContextSlider?.value) || 20));
@@ -675,6 +677,8 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
   async function refreshProviderModels({ forceRefresh = false } = {}) {
     const requestId = ++modelCatalogRequestId;
+    modelCatalogController?.abort();
+    modelCatalogController = null;
     const provider = providerSelect?.value || "auto";
     const isOfficial = provider !== "auto" && provider !== "custom";
     const supportsCatalog = isOfficial
@@ -699,18 +703,25 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       modelCatalogStatus.textContent = t("dynamic.modelCatalogLoading");
     }
 
+    const controller = new AbortController();
+    modelCatalogController = controller;
+    const apiKey = llmKeyInput?.value?.trim() || "";
+    const isCurrentRequest = () => requestId === modelCatalogRequestId
+      && !controller.signal.aborted
+      && providerSelect?.value === provider
+      && (llmKeyInput?.value?.trim() || "") === apiKey;
     try {
       const body = { provider, forceRefresh };
-      const apiKey = llmKeyInput?.value?.trim();
       if (apiKey) body.apiKey = apiKey;
       const res = await fetch(`${API}/settings/models`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || t("dynamic.modelCatalogLoadFailed"));
-      if (requestId !== modelCatalogRequestId || providerSelect?.value !== provider) return;
+      if (!isCurrentRequest()) return;
 
       const providerCfg = cachedProviders?.[provider] || {};
       const isCustomDraft = modelSelect?.value === CUSTOM_MODEL_VALUE;
@@ -749,12 +760,13 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         modelCatalogStatus.className = `settings-feedback${data.warning ? " error" : ""}`;
       }
     } catch (err) {
-      if (requestId !== modelCatalogRequestId) return;
+      if (!isCurrentRequest()) return;
       if (modelCatalogStatus) {
         modelCatalogStatus.textContent = err.message || t("dynamic.modelCatalogLoadFailed");
         modelCatalogStatus.className = "settings-feedback error";
       }
     } finally {
+      if (modelCatalogController === controller) modelCatalogController = null;
       if (requestId === modelCatalogRequestId && refreshModelsBtn) refreshModelsBtn.disabled = false;
     }
   }
@@ -1822,6 +1834,9 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
 
   function closeSettings() {
     settingsOpenRequestId += 1;
+    modelCatalogRequestId += 1;
+    modelCatalogController?.abort();
+    modelCatalogController = null;
     void flushPendingAutosaves();
     updateSecretVisibility(mapKeyInput, mapKeyToggle, false, "Web 端 Key");
     updateSecretVisibility(mapSecurityInput, mapSecurityToggle, false, "安全密钥");
@@ -1958,13 +1973,32 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         apiFormat: cachedLlm.apiFormat,
         reasoningControl: cachedLlm.reasoningControl,
         apiKey: cachedLlm.apiKey,
+        configured: true,
+        ...(provider === "auto" && Array.isArray(data.models) ? { models: data.models } : {}),
       };
     }
     refreshConfigSummary({ llm: cachedLlm, minimax: cachedMinimax });
     syncThinkingApiFormatUI();
-    if (provider !== "auto" && provider !== "custom") void refreshProviderModels();
+    // Detection can finish after the user has edited the key, provider or
+    // protocol. Only transition the form if it still represents this request.
+    const isCurrentDraft = providerSelect?.value === provider
+      && llmKeyInput.value.trim() === apiKey
+      && (apiFormatSelect?.value || "responses") === body.apiFormat;
+    if (isCurrentDraft) {
+      if (provider === "auto") {
+        providerSelect.value = savedProvider;
+        applyCustomProviderUI(cachedLlm);
+      }
+      if (savedProvider !== "auto" && savedProvider !== "custom") void refreshProviderModels();
+    }
     return { message: "LLM 配置已自动保存" };
   }, { feedback: llmFeedback });
+
+  llmKeyInput?.addEventListener("input", () => {
+    modelCatalogController?.abort();
+    if (refreshModelsBtn) refreshModelsBtn.disabled = false;
+    if (modelCatalogStatus) modelCatalogStatus.textContent = "";
+  });
 
   bindDebouncedAutosave([
     llmKeyInput,

@@ -3430,6 +3430,7 @@ initWechatPopup();
 initFeishuPopup();
 initSettings({
   defaultAgentName: DEFAULT_AGENT_NAME,
+  applyHeartbeatConfig,
   getAgentName: () => agentName,
   setAgentName,
   getTtsStreamingEnabled: isTTSStreamingEnabled,

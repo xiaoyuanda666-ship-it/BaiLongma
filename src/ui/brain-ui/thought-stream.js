@@ -18,6 +18,9 @@ const TOOL_ZH = {
   kill_process: "终止进程",
   list_processes: "列出进程",
   web_search: "搜索网页",
+  model_web_search: "联网搜索",
+  model_web_fetch: "读取网页正文",
+  analyze_image: "识别图片",
   web_read: "读取网页",
   fetch_url: "抓取网页",
   browser_read: "浏览器读取网页",
@@ -98,6 +101,9 @@ const TOOL_ICON = {
   kill_process: "🛑",
   list_processes: "📋",
   web_search: "🔎",
+  model_web_search: "🔎",
+  model_web_fetch: "📄",
+  analyze_image: "🖼️",
   web_read: "🌐",
   fetch_url: "🌐",
   browser_read: "🧭",
@@ -418,7 +424,7 @@ export class ThoughtStream {
   }
 
   formatWebSearchDetail(payload) {
-    const results = Array.isArray(payload.results) ? payload.results : [];
+    const results = Array.isArray(payload.results) ? payload.results : (payload.sources || []);
     if (payload.ok === false) {
       return t("thought.webSearchFailed", {
         error: payload.error || t("thought.noResult"),
@@ -433,7 +439,7 @@ export class ThoughtStream {
     results.slice(0, 3).forEach((item, index) => {
       const host = this.hostFromUrl(item.url);
       const title = this.compactText(item.title || item.url || t("thought.untitledResult"), 70);
-      const snippet = this.compactText(item.snippet || "", 90);
+      const snippet = this.compactText(item.snippet || item.summary || "", 90);
       lines.push(`${index + 1}. ${title}${host ? t("thought.host", { host }) : ""}${snippet ? `: ${snippet}` : ""}`);
     });
     return lines.join(" ");
@@ -519,8 +525,10 @@ export class ThoughtStream {
       case "kill_process":
         return a.pid ? `pid ${a.pid}` : "";
       case "web_search":
+      case "model_web_search":
         return this.compactText(a.query || parsed?.query || "", 60);
       case "web_read":
+      case "model_web_fetch":
       case "fetch_url":
       case "browser_read":
         return this.hostFromUrl(a.url || parsed?.url) || this.compactText(a.url || "", 60);
@@ -712,7 +720,8 @@ export class ThoughtStream {
     const parsed = this.parseJsonResult(result);
 
     // Web tools 保留原有人类化格式器
-    if (parsed?.tool === "web_search" || name === "web_search") return this.formatWebSearchDetail(parsed || {});
+    if (["web_search", "model_web_search"].includes(parsed?.tool) || ["web_search", "model_web_search"].includes(name)) return this.formatWebSearchDetail(parsed || {});
+    if (name === "model_web_fetch") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "web_read" || name === "web_read") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "fetch_url" || name === "fetch_url") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "browser_read" || name === "browser_read") return this.formatBrowserReadDetail(parsed || {});

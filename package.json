@@ -1,7 +1,7 @@
 {
   "name": "bailongma",
   "productName": "Bailongma",
-  "version": "2.2.156",
+  "version": "2.2.157",
   "description": "A continuously running digital consciousness framework",
   "type": "module",
   "main": "electron/main.cjs",
@@ -66,6 +66,8 @@
     "test:config-upgrade": "node ./src/test-config-upgrade.js",
     "test:settings": "node --test ./src/test-config-persistence.js ./src/test-settings-routes.js ./src/test-settings-autosave-ui.js ./src/test-settings-secret-persistence.js ./src/test-rule-store-persistence.js",
     "test:model-catalog": "node --test ./src/test-model-catalog.js",
+    "test:provider-detection": "node --test ./src/test-provider-detection.js",
+    "test:model-vision-web": "node --test ./src/test-model-vision-web.js",
     "test:llm-settings-flow": "node ./src/test-llm-settings-flow.js",
     "test:llm-responses": "node ./src/test-llm-responses.js && node ./src/test-llm-responses-loop.js",
     "test:llm-protocols": "node ./scripts/test-llm-protocols.mjs",

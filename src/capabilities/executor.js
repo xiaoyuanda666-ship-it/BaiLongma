@@ -36,6 +36,7 @@ import { execImportKnowledge, execInspectKnowledgeSource, execManageKnowledgeReg
 import { execManageReminder } from './tools/reminders.js'
 import { execGenerateImage, execGenerateLyrics, execGenerateMusic, execMediaMode, execMusic, execSpeak } from './tools/media.js'
 import { execAnalyzeImage, execManageApiCapability, execRunApiCapability } from './tools/api-capability.js'
+import { execModelWeb } from '../providers/model-web.js'
 import { execManageRule } from './tools/rules.js'
 import { execManageInformationSubscription } from './tools/information-subscriptions.js'
 import { execBrowserSetDisplayMode } from './tools/browser-display.js'
@@ -389,6 +390,9 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execRunApiCapability(args, context)
       case 'analyze_image':
         return await execAnalyzeImage(args, context)
+      case 'model_web_search':
+      case 'model_web_fetch':
+        return await execModelWeb(name, args, context)
       case 'manage_api_capability':
         return execManageApiCapability(args)
       case 'find_tool':

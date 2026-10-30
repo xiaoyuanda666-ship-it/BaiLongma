@@ -178,3 +178,126 @@ test('resolveModelCatalog caches successful lookups and falls back safely', asyn
   assert.deepEqual(fallback.models.map(item => item.id), ['custom-selected-model', 'fallback-model'])
   assert.match(fallback.warning, /offline/)
 })
+
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return { promise, resolve }
+}
+
+const catalogResponse = ids => ({ ok: true, json: async () => ({ data: ids.map(id => ({ id })) }) })
+
+test('concurrent catalog readers and refreshes share a request but keep their own selected model and filter', async () => {
+  clearModelCatalogCache()
+  const gate = deferred()
+  let calls = 0
+  const args = {
+    provider: 'example', baseURL: 'https://example.invalid/v1', apiKey: 'key-a',
+    fetchImpl: async () => { calls++; return gate.promise },
+  }
+  const first = resolveModelCatalog({ ...args, currentModel: 'selected-a', modelFilter: m => m.id !== 'tts' })
+  const second = resolveModelCatalog({ ...args, currentModel: 'selected-b', forceRefresh: true })
+  assert.equal(calls, 1)
+  gate.resolve(catalogResponse(['chat', 'tts']))
+  const [a, b] = await Promise.all([first, second])
+  assert.deepEqual(a.models.map(m => m.id), ['selected-a', 'chat'])
+  assert.deepEqual(b.models.map(m => m.id), ['selected-b', 'chat', 'tts'])
+  const cached = await resolveModelCatalog({ ...args, modelFilter: m => m.id === 'tts' })
+  assert.equal(cached.source, 'cache')
+  assert.deepEqual(cached.models.map(m => m.id), ['tts'])
+  assert.equal(calls, 1)
+})
+
+test('catalog requests are isolated by credential, endpoint and auth type', async () => {
+  clearModelCatalogCache()
+  const gate = deferred()
+  let calls = 0
+  const args = {
+    provider: 'example', baseURL: 'https://example.invalid/v1', apiKey: 'key-a',
+    fetchImpl: async () => { calls++; return gate.promise },
+  }
+  const pending = [
+    resolveModelCatalog(args),
+    resolveModelCatalog({ ...args, apiKey: 'key-b' }),
+    resolveModelCatalog({ ...args, authType: 'api-key' }),
+    resolveModelCatalog({ ...args, baseURL: 'https://other.invalid/v1' }),
+  ]
+  assert.equal(calls, 4)
+  gate.resolve(catalogResponse(['chat']))
+  await Promise.all(pending)
+})
+
+test('a shared failure preserves each reader fallback and allows a subsequent retry', async () => {
+  clearModelCatalogCache()
+  const gate = deferred()
+  let calls = 0
+  const args = {
+    provider: 'example', baseURL: 'https://example.invalid/v1',
+    fetchImpl: async () => { calls++; await gate.promise; throw new Error('offline') },
+  }
+  const pending = ['a', 'b'].map(id => resolveModelCatalog({
+    ...args, currentModel: id, fallbackModels: [{ id: `bundled-${id}` }],
+  }))
+  gate.resolve()
+  const results = await Promise.all(pending)
+  assert.equal(calls, 1)
+  results.forEach((result, index) => {
+    const id = ['a', 'b'][index]
+    assert.equal(result.source, 'fallback')
+    assert.deepEqual(result.models.map(m => m.id), [id, `bundled-${id}`])
+  })
+  const retry = await resolveModelCatalog({ ...args, fetchImpl: async () => catalogResponse(['recovered']) })
+  assert.equal(retry.source, 'dynamic')
+  assert.equal(retry.models[0].id, 'recovered')
+})
+
+test('cache age starts when a lookup finishes and failed refreshes preserve the previous catalog', async () => {
+  clearModelCatalogCache()
+  let time = 1000
+  let calls = 0
+  const args = {
+    provider: 'example', baseURL: 'https://example.invalid/v1', now: () => time, cacheTtlMs: 100,
+    fetchImpl: async () => { calls++; time = 2000; return catalogResponse(['chat']) },
+  }
+  const first = await resolveModelCatalog(args)
+  assert.equal(first.fetchedAt, new Date(2000).toISOString())
+  time = 2050
+  assert.equal((await resolveModelCatalog(args)).source, 'cache')
+  assert.equal(calls, 1)
+  time = 2200
+  const stale = await resolveModelCatalog({ ...args, fetchImpl: async () => { throw new Error('offline') } })
+  assert.equal(stale.source, 'stale-cache')
+  assert.equal(stale.fetchedAt, first.fetchedAt)
+  assert.equal(stale.models[0].id, 'chat')
+})
+
+test('clearing the cache during a lookup prevents a late result from replacing new data', async () => {
+  clearModelCatalogCache()
+  const oldGate = deferred()
+  const newGate = deferred()
+  const args = { provider: 'example', baseURL: 'https://example.invalid/v1' }
+  const old = resolveModelCatalog({ ...args, fetchImpl: () => oldGate.promise })
+  clearModelCatalogCache()
+  const fresh = resolveModelCatalog({ ...args, fetchImpl: () => newGate.promise })
+  oldGate.resolve(catalogResponse(['old']))
+  await old
+  const joined = resolveModelCatalog({ ...args, fetchImpl: () => { throw new Error('must join fresh request') } })
+  newGate.resolve(catalogResponse(['fresh']))
+  assert.equal((await fresh).models[0].id, 'fresh')
+  assert.equal((await joined).source, 'dynamic')
+  const cached = await resolveModelCatalog(args)
+  assert.equal(cached.source, 'cache')
+  assert.equal(cached.models[0].id, 'fresh')
+})
+
+test('an empty filtered view uses bundled fallback without poisoning the shared catalog', async () => {
+  clearModelCatalogCache()
+  const args = {
+    provider: 'example', baseURL: 'https://example.invalid/v1',
+    fetchImpl: async () => catalogResponse(['tts']),
+  }
+  const filtered = await resolveModelCatalog({ ...args, modelFilter: () => false, fallbackModels: [{ id: 'chat' }] })
+  assert.equal(filtered.source, 'fallback')
+  assert.equal(filtered.models[0].id, 'chat')
+  assert.equal((await resolveModelCatalog(args)).models[0].id, 'tts')
+})

@@ -26,10 +26,12 @@ export function summarizeToolExecution(name, args = {}) {
     case 'install_software':
       return `install_software(${String(args.query || args.package_id || args.job_id || '?').slice(0, 100)})`
     case 'web_read':
+    case 'model_web_fetch':
     case 'fetch_url':
     case 'browser_read':
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
     case 'web_search':
+    case 'model_web_search':
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
     case 'browser_navigate':
       return `browser_navigate(${String(args.url || '?').slice(0, 120)})`

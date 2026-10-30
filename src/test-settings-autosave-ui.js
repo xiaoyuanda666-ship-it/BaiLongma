@@ -84,6 +84,7 @@ for (const newModel of ["new-model", "__custom_model__"]) {
   const customInput = element();
   const context = vm.createContext({
     API: "", CUSTOM_MODEL_VALUE: "__custom_model__", modelCatalogRequestId: 0,
+    modelCatalogController: null, AbortController,
     providerSelect, modelSelect, officialCustomModelInput: customInput,
     refreshModelsBtn: element(), modelCatalogStatus: element(), modelCatalogStatusRow: element(),
     llmKeyInput: element(), cachedProviders: { openai: { model: "old-model" } },
@@ -101,6 +102,110 @@ for (const newModel of ["new-model", "__custom_model__"]) {
   await refresh;
   assert.equal(modelSelect.value, newModel, "catalog refresh preserves edits made while loading");
   assert.equal(customInput.value, "");
+}
+
+// Switching provider cancels the previous read. Even a server response that
+// races cancellation must not update the new provider's models or feedback.
+{
+  const requests = [];
+  const rendered = [];
+  const context = vm.createContext({
+    API: "", CUSTOM_MODEL_VALUE: "__custom_model__", modelCatalogRequestId: 0,
+    modelCatalogController: null, AbortController,
+    providerSelect: element("openai"), modelSelect: element("selected"),
+    officialCustomModelInput: element(), llmKeyInput: element("key-a"),
+    refreshModelsBtn: element(), modelCatalogStatus: element(), modelCatalogStatusRow: element(),
+    cachedProviders: { openai: {}, deepseek: {} }, t: key => key,
+    populateModelSelect(models) { rendered.push(models); }, syncOfficialCustomModelRow() {},
+    fetch(_url, options) {
+      const gate = deferred();
+      requests.push({ ...gate, signal: options.signal });
+      return gate.promise;
+    },
+  });
+  vm.runInContext(section("  async function refreshProviderModels(", "  function setLlmKeyVisible("), context);
+  vm.runInContext(section('  llmKeyInput?.addEventListener("input",', "  bindDebouncedAutosave([\n    llmKeyInput,"), context);
+  const oldRead = context.refreshProviderModels();
+  context.providerSelect.value = "deepseek";
+  const newRead = context.refreshProviderModels();
+  assert.equal(requests[0].signal.aborted, true);
+  requests[0].resolve(response({ ok: false, error: "old request failed" }));
+  await oldRead;
+  assert.equal(context.refreshModelsBtn.disabled, true, "old response cannot re-enable a running refresh");
+  assert.equal(context.modelCatalogStatus.textContent, "dynamic.modelCatalogLoading");
+  requests[1].resolve(response({ ok: true, source: "dynamic", models: [{ id: "new" }] }));
+  await newRead;
+  assert.equal(rendered.length, 1);
+  assert.equal(rendered[0][0].id, "new");
+  assert.equal(context.refreshModelsBtn.disabled, false);
+
+  // A different credential on the same provider also invalidates old results.
+  const oldKeyRead = context.refreshProviderModels();
+  context.llmKeyInput.value = "key-b";
+  await context.llmKeyInput.dispatch("input");
+  assert.equal(requests[2].signal.aborted, true);
+  assert.equal(context.refreshModelsBtn.disabled, false);
+  assert.equal(context.modelCatalogStatus.textContent, "");
+  requests[2].resolve(response({ ok: true, source: "dynamic", models: [{ id: "key-a-only" }] }));
+  await oldKeyRead;
+  assert.equal(rendered.length, 1);
+  assert.equal(context.cachedProviders.deepseek.models[0].id, "new");
+
+  const closingRead = context.refreshProviderModels();
+  context.providerSelect.value = "auto";
+  await context.refreshProviderModels();
+  assert.equal(requests[3].signal.aborted, true);
+  requests[3].resolve(response({ ok: true, models: [{ id: "obsolete" }] }));
+  await closingRead;
+  assert.equal(rendered.length, 1);
+}
+
+// Successful auto-detection opens the real provider's model picker, but a late
+// detection must preserve a newer provider/key/protocol draft for its next save.
+for (const changed of [null, "provider", "key", "format"]) {
+  const gate = deferred();
+  let refreshes = 0;
+  const fields = new Map([
+    "settings-custom-llm-section", "settings-model-row", "settings-official-custom-model-row",
+  ].map(id => [id, element()]));
+  fields.get("settings-model-row").style.display = "none";
+  const context = vm.createContext({
+    API: "", CUSTOM_MODEL_VALUE: "__custom_model__",
+    providerSelect: element("auto"), apiFormatSelect: element("responses"),
+    llmKeyInput: element("original-key"), modelSelect: element(), officialCustomModelInput: element(),
+    customReasoningSelect: null, thinkingToggle: null, thinkingHint: null,
+    cachedProviders: { deepseek: { defaultModel: "default-model", models: [] } },
+    cachedLlm: null, cachedMinimax: {}, llmFeedback: null,
+    document: { getElementById: id => fields.get(id) || null },
+    createSettingsAutosave: save => ({ save }), fetch: () => gate.promise,
+    refreshConfigSummary() {}, setLlmKeyVisible() {},
+    populateModelSelect(_models, current) { context.modelSelect.value = current; },
+    refreshProviderModels() { refreshes++; },
+  });
+  vm.runInContext(section("  function getProviderConfigForUI(", "  async function loadSettings("), context);
+  vm.runInContext(section("  const llmAutosave = ", "\n  bindDebouncedAutosave([\n    llmKeyInput,"), context);
+  const save = vm.runInContext("llmAutosave.save()", context);
+  if (changed === "provider") context.providerSelect.value = "custom";
+  if (changed === "key") context.llmKeyInput.value = "newer-key";
+  if (changed === "format") context.apiFormatSelect.value = "chat-completions";
+  gate.resolve(response({
+    ok: true, provider: "deepseek", model: "detected-model", apiFormat: "responses",
+    models: [{ id: "detected-model" }],
+  }));
+  await save;
+  assert.equal(context.cachedLlm.provider, "deepseek");
+  assert.equal(context.cachedProviders.deepseek.configured, true);
+  if (!changed) {
+    assert.equal(context.providerSelect.value, "deepseek");
+    assert.equal(context.modelSelect.value, "detected-model");
+    assert.equal(fields.get("settings-model-row").style.display, "");
+    assert.equal(refreshes, 1);
+  } else {
+    assert.equal(refreshes, 0);
+    assert.equal(context.providerSelect.value, changed === "provider" ? "custom" : "auto");
+    assert.equal(context.llmKeyInput.value, changed === "key" ? "newer-key" : "original-key");
+    assert.equal(context.apiFormatSelect.value, changed === "format" ? "chat-completions" : "responses");
+  }
 }
 
 // Changing provider saves the selected configuration without waiting for the
@@ -266,6 +371,7 @@ for (const saveSucceeded of [true, false]) {
   const overlay = { hidden: true };
   const context = vm.createContext({
     overlay, settingsOpenRequestId: 0, refreshAutosaveStatus() {},
+    modelCatalogRequestId: 0, modelCatalogController: null,
     flushPendingAutosaves: () => pending.promise,
     loadSettings() { loads += 1; }, loadVoiceSettings() { loads += 1; },
     updateSecretVisibility() {}, mapKeyInput: null, mapKeyToggle: null,
@@ -285,6 +391,7 @@ for (const saveSucceeded of [true, false]) {
   let loads = 0;
   const context = vm.createContext({
     overlay: { hidden: true }, settingsOpenRequestId: 0, refreshAutosaveStatus() {},
+    modelCatalogRequestId: 0, modelCatalogController: new AbortController(),
     flushPendingAutosaves: () => pending.promise,
     loadSettings() { loads += 1; }, loadVoiceSettings() { loads += 1; },
     updateSecretVisibility() {}, mapKeyInput: null, mapKeyToggle: null,
@@ -292,10 +399,82 @@ for (const saveSucceeded of [true, false]) {
   });
   vm.runInContext(section("  async function openSettings(", "  // 暴露给 chat.js"), context);
   const opening = context.openSettings();
+  const catalogController = context.modelCatalogController;
   context.closeSettings();
+  assert.equal(catalogController.signal.aborted, true);
+  assert.equal(context.modelCatalogRequestId, 1);
+  assert.equal(context.modelCatalogController, null);
   pending.resolve([true]);
   await opening;
   assert.equal(loads, 0, "closing cancels an opening that was waiting for saves");
+}
+
+// Exercise the actual app-to-settings dependency boundary without a global
+// applyHeartbeatConfig: both the caller and the settings parameter must wire it.
+{
+  const appSource = fs.readFileSync(new URL("./ui/brain-ui/app.js", import.meta.url), "utf8");
+  const applied = [];
+  let settingsOptions;
+  const wiring = vm.createContext({
+    initSettings(options) { settingsOptions = options; },
+    DEFAULT_AGENT_NAME: "test", agentName: "test", setAgentName() {},
+    isTTSStreamingEnabled() {}, setTTSStreamingEnabled() {},
+    activeTTSVoiceId: "test", openSettingsRef: null,
+    applyHeartbeatConfig(config) { applied.push(config); },
+  });
+  const callStart = appSource.indexOf("initSettings({");
+  vm.runInContext(appSource.slice(callStart, appSource.indexOf("\n});", callStart) + 4), wiring);
+
+  const heartbeatToggle = element();
+  const heartbeatInterval = element("20");
+  const feedback = [];
+  const requests = [];
+  let rejectSave = false;
+  const context = autosaveContext({
+    API: "", heartbeatToggle, heartbeatInterval, heartbeatFeedback: element(),
+    settingsOptions,
+    showFeedback(_element, message, error) { feedback.push({ message, error }); },
+    async fetch(url, options) {
+      requests.push({ url, options });
+      if (!options) return response({ ok: true, heartbeat: { enabled: false, defaultIntervalMinutes: 37 } });
+      if (rejectSave) return response({ ok: false, error: "write failed" });
+      return response({ ok: true, heartbeat: JSON.parse(options.body) });
+    },
+  });
+  const signature = section("export function initSettings(", "const themeSwitcher").replace("export ", "");
+  vm.runInContext(signature
+    + section("  function syncHeartbeatControls(", "  function applyVoiceConfigStatus(")
+    + section("  async function loadHeartbeatSettings(", "  const mapAutosave =")
+    + "return { loadHeartbeatSettings, heartbeatAutosave }; }\nglobalThis.heartbeatSettings = initSettings(settingsOptions);", context);
+  const { loadHeartbeatSettings, heartbeatAutosave } = context.heartbeatSettings;
+  await loadHeartbeatSettings();
+  assert.equal(heartbeatToggle.checked, false);
+  assert.equal(heartbeatInterval.value, "37");
+  assert.equal(applied.length, 1, "loading updates the heartbeat monitor");
+  assert.equal(feedback.some(item => item.error), false);
+
+  heartbeatToggle.checked = true;
+  heartbeatInterval.value = "45";
+  await heartbeatToggle.dispatch("change");
+  await heartbeatAutosave.flush();
+  assert.equal(context.autosaveErrors.size, 0, "successful server save must not be reported as failed");
+  assert.equal(applied.at(-1).defaultIntervalMinutes, 45);
+  assert.equal(applied.at(-1).enabled, true);
+
+  rejectSave = true;
+  assert.equal(await heartbeatAutosave.schedule({ immediate: true }), false);
+  assert.equal(context.autosaveErrors.size, 1);
+  assert.equal(applied.length, 2, "failed saves do not update the monitor");
+  rejectSave = false;
+  heartbeatToggle.checked = false;
+  assert.equal(await heartbeatAutosave.schedule({ immediate: true }), true);
+  assert.equal(context.autosaveErrors.size, 0, "retry clears the save error");
+  assert.equal(applied.at(-1).enabled, false);
+
+  const beforeInvalid = requests.length;
+  heartbeatInterval.value = "0";
+  assert.equal(await heartbeatAutosave.schedule({ immediate: true }), false);
+  assert.equal(requests.length, beforeInvalid, "invalid interval does not reach the server");
 }
 
 console.log("Settings autosave UI race, provider selection, and TTS preview tests passed");

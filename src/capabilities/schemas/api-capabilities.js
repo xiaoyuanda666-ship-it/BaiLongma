@@ -37,7 +37,7 @@ export const apiCapabilitySchemas = {
     type: 'function',
     function: {
       name: 'analyze_image',
-      description: 'Analyze, OCR, describe, or answer questions about an image using any configured vision API capability slot. Use when the user asks you to inspect a picture, screenshot, photo, chart, UI, document image, or any visual content. If the current user message contains a markdown image, the tool can infer it, but pass image_path or image_url explicitly when possible.',
+      description: 'Analyze, OCR, describe, or answer questions about an image. Reuses the current vision model and API key, or DeepSeek Flash with the existing DeepSeek key when the conversation uses Pro. A configured vision capability slot takes precedence. No separate key is required for the built-in model path. Use for pictures, screenshots, photos, charts, UI or document images. Pass image_path or image_url explicitly when possible; otherwise infer from the user message.',
       parameters: {
         type: 'object',
         properties: {

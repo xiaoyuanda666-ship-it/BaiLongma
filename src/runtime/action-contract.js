@@ -400,6 +400,17 @@ export function collectVerifiedWebResearchSources(evidenceList = []) {
   const sources = []
   const seen = new Set()
   for (const evidence of Array.isArray(evidenceList) ? evidenceList : []) {
+    if (evidence?.name === 'model_web_fetch') {
+      const page = safeJson(evidence.result)
+      const url = normalizedEvidenceUrl(page?.url)
+      if (page?.ok === true && page.verified === true && typeof page.content === 'string'
+          && page.content.trim() && url && !seen.has(url)) {
+        if (page.title && sources.some(source => titlesLikelyDuplicate(source.title, page.title))) continue
+        seen.add(url)
+        sources.push({ url, title: page.title || url, aliases: [url] })
+      }
+      continue
+    }
     if (!['browser_navigate', 'browser_click'].includes(evidence?.name)) continue
     const parsed = safeJson(evidence?.result)
     const url = resultUrl(parsed, evidence)
@@ -733,17 +744,16 @@ const CONTRACTS = [
   {
     id: 'web_research',
     label: '联网检索并核验原文来源',
-    tools: ['browser_navigate', 'browser_click'],
+    tools: ['model_web_search', 'model_web_fetch', 'browser_navigate', 'browser_click'],
     match: text => WEB_RESEARCH_REQUEST_RE.test(text),
     resolve: text => ({ minimumVerifiedSources: inferWebResearchSourceCount(text) }),
   },
   {
     id: 'web',
     label: '联网查询',
-    // Requiring navigation prevents a stale snapshot/current-tab inspection
-    // from being mistaken for a fresh web lookup. The normal router injects the
-    // rest of the safe Playwright group for snapshot/find/click follow-through.
-    tools: ['browser_navigate'],
+    // A fresh provider lookup or navigation is required; a stale browser
+    // snapshot alone is not evidence of a new search.
+    tools: ['model_web_search', 'model_web_fetch', 'browser_navigate'],
     match: text => WEB_FRESH_FACT_REQUEST_RE.test(text)
       || /(?:帮我|请|给我).{0,12}(?:上网|联网|搜索|查一下|查一查|检索|找一下|浏览).{0,40}|(?:搜索|查询|查找).{0,30}(?:网页|网站|新闻|资料|链接|网址)|\b(?:search|browse|look\s+up|fetch)\b/i.test(text),
   },

@@ -4,6 +4,7 @@ export const MODEL_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000
 export const MODEL_CATALOG_TIMEOUT_MS = 10 * 1000
 
 const catalogCache = new Map()
+const catalogRequests = new Map()
 
 export function buildModelCatalogURL(baseURL) {
   const value = String(baseURL || '').trim()
@@ -81,9 +82,16 @@ export function mergeModelCatalog(dynamicModels, fallbackModels = [], currentMod
   return models
 }
 
-function cacheKey(provider, baseURL, apiKey) {
-  const keyHash = crypto.createHash('sha256').update(String(apiKey || '')).digest('hex').slice(0, 16)
-  return `${provider}|${baseURL}|${keyHash}`
+function cacheKey(provider, location, apiKey, authType) {
+  const keyHash = crypto.createHash('sha256').update(String(apiKey || '')).digest('hex')
+  return JSON.stringify([provider, location, keyHash, authType])
+}
+
+function selectCatalogModels(models, modelFilter) {
+  // Cache the provider response, not a particular caller's filtered view.
+  const selected = typeof modelFilter === 'function' ? models.filter(modelFilter) : models
+  if (!selected.length) throw new Error('Provider returned an empty or unsupported model catalog')
+  return selected
 }
 
 function fallbackResult({ fallbackModels, currentModel, error }) {
@@ -140,11 +148,7 @@ export async function fetchModelCatalog({
       }
       const payload = await response.json()
       const normalizedModels = normalizeModelCatalog(payload)
-      const models = typeof modelFilter === 'function'
-        ? normalizedModels.filter(modelFilter)
-        : normalizedModels
-      if (!models.length) throw new Error('Provider returned an empty or unsupported model catalog')
-      return models
+      return selectCatalogModels(normalizedModels, modelFilter)
     } catch (err) {
       const reason = err?.name === 'AbortError'
         ? `timed out after ${timeoutMs}ms`
@@ -162,7 +166,7 @@ export async function resolveModelCatalog({
   baseURL,
   modelsURL,
   apiKey,
-  authType,
+  authType = 'bearer',
   modelFilter,
   fallbackModels = [],
   currentModel = '',
@@ -178,46 +182,55 @@ export async function resolveModelCatalog({
     : String(modelsURL || '').trim()
   const normalizedKey = String(apiKey || '').trim()
   const cacheLocation = Array.isArray(normalizedModelsURL)
-    ? normalizedModelsURL.join('|')
-    : normalizedModelsURL
-  const key = cacheKey(normalizedProvider, cacheLocation || normalizedBaseURL, normalizedKey)
+    ? (normalizedModelsURL.length ? normalizedModelsURL : normalizedBaseURL)
+    : (normalizedModelsURL || normalizedBaseURL)
+  const key = cacheKey(normalizedProvider, cacheLocation, normalizedKey, authType)
   const cached = catalogCache.get(key)
-  const currentTime = now()
-
-  if (!forceRefresh && cached && currentTime - cached.timestamp < cacheTtlMs) {
-    return {
-      models: mergeModelCatalog(cached.models, fallbackModels, currentModel),
-      source: 'cache',
-      fetchedAt: cached.fetchedAt,
-      warning: '',
-    }
-  }
+  const merge = models => mergeModelCatalog(selectCatalogModels(models, modelFilter), fallbackModels, currentModel)
 
   try {
-    const dynamicModels = await fetchModelCatalog({
-      baseURL: normalizedBaseURL,
-      modelsURL: normalizedModelsURL,
-      apiKey: normalizedKey,
-      authType,
-      modelFilter,
-      fetchImpl,
-    })
-    const fetchedAt = new Date(currentTime).toISOString()
-    catalogCache.set(key, { models: dynamicModels, fetchedAt, timestamp: currentTime })
+    if (!forceRefresh && cached && now() - cached.timestamp < cacheTtlMs) {
+      return { models: merge(cached.models), source: 'cache', fetchedAt: cached.fetchedAt, warning: '' }
+    }
+
+    // Refresh bypasses a completed cache entry, but joins an already running
+    // lookup for the same endpoint, credential and authentication scheme.
+    let request = catalogRequests.get(key)
+    if (!request) {
+      request = fetchModelCatalog({
+        baseURL: normalizedBaseURL,
+        modelsURL: normalizedModelsURL,
+        apiKey: normalizedKey,
+        authType,
+        fetchImpl,
+      }).then(models => {
+        const timestamp = now()
+        const entry = { models, fetchedAt: new Date(timestamp).toISOString(), timestamp }
+        // A cache clear during the request must not resurrect an old entry.
+        if (catalogRequests.get(key) === request) catalogCache.set(key, entry)
+        return entry
+      }).finally(() => {
+        if (catalogRequests.get(key) === request) catalogRequests.delete(key)
+      })
+      catalogRequests.set(key, request)
+    }
+    const entry = await request
     return {
-      models: mergeModelCatalog(dynamicModels, fallbackModels, currentModel),
+      models: merge(entry.models),
       source: 'dynamic',
-      fetchedAt,
+      fetchedAt: entry.fetchedAt,
       warning: '',
     }
   } catch (err) {
     if (cached) {
-      return {
-        models: mergeModelCatalog(cached.models, fallbackModels, currentModel),
-        source: 'stale-cache',
-        fetchedAt: cached.fetchedAt,
-        warning: err?.message || String(err),
-      }
+      try {
+        return {
+          models: merge(cached.models),
+          source: 'stale-cache',
+          fetchedAt: cached.fetchedAt,
+          warning: err?.message || String(err),
+        }
+      } catch {} // No models suitable for this caller: retain its bundled list.
     }
     return fallbackResult({ fallbackModels, currentModel, error: err })
   }
@@ -225,4 +238,5 @@ export async function resolveModelCatalog({
 
 export function clearModelCatalogCache() {
   catalogCache.clear()
+  catalogRequests.clear()
 }

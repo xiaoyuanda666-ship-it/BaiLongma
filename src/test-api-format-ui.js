@@ -177,10 +177,11 @@ const uiRequests = []
 const settingsUi = vm.createContext({
   document: { getElementById: id => settingElements.get(id) },
   cachedProviders: {
-    custom: { apiFormat: 'chat-completions', baseURL: 'http://localhost/v1', model: 'local-test', apiKey: 'custom-test-key' },
+    custom: { apiFormat: 'chat-completions', baseURL: 'http://localhost/v1', model: 'local-test', apiKey: 'custom-test-key', reasoningControl: 'effort' },
     openai: { apiFormat: 'responses', model: 'official-test', apiKey: 'official-test-key', models: [] },
   },
   cachedLlm: null, cachedMinimax: {}, providerSelect, apiFormatSelect, llmKeyInput,
+  customReasoningSelect: makeElement('effort'),
   thinkingToggle, thinkingHint, t: key => key,
   modelSelect: makeElement('official-test'), officialCustomModelInput: makeElement(), llmFeedback: {},
   CUSTOM_MODEL_VALUE: '__custom_model__', API: '',

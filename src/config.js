@@ -13,6 +13,7 @@ import {
 import { getLLMProtocol } from './llm-protocol.js'
 import { DEFAULT_LLM_API_FORMAT, normalizeLLMApiFormat } from './llm-api-format.js'
 import { resolveModelCatalog } from './model-catalog.js'
+import { withProbeTimeout } from './model-probe.js'
 
 export const DEEPSEEK_PROVIDER = 'deepseek'
 export const MINIMAX_PROVIDER = 'minimax'
@@ -90,6 +91,11 @@ const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
 })
 
 export const DEEPSEEK_MODELS = [
+  {
+    id: 'deepseek-flash',
+    label: 'deepseek-flash · 图片理解',
+    deprecated: false,
+  },
   {
     id: 'deepseek-v4-flash',
     label: 'deepseek-v4-flash',
@@ -531,14 +537,6 @@ function isProviderAuthError(err) {
   return status === 401 || /unauthoriz|invalid.*api.*key|authentication/i.test(message)
 }
 
-function withTimeout(promise, ms, label) {
-  let timer
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} timeout after ${ms}ms`)), ms)
-  })
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
-}
-
 function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT, reasoningControl = 'omit') {
   return getLLMProtocol(apiFormat).buildRequest({
     provider,
@@ -553,7 +551,7 @@ function buildPingParams(provider, model, apiFormat = DEFAULT_LLM_API_FORMAT, re
   })
 }
 
-async function probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat = DEFAULT_LLM_API_FORMAT) {
+async function probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat = DEFAULT_LLM_API_FORMAT, signal) {
   const format = normalizeLLMApiFormat(apiFormat)
   const pConfig = PROVIDER_CONFIG[provider]
   const models = getProviderModelFallbacks(provider, requestedModel)
@@ -561,44 +559,43 @@ async function probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat
     apiKey,
     baseURL: pConfig.baseURL,
     timeout: PROBE_TIMEOUT_MS,
+    maxRetries: 0,
   })
-  const errors = []
-  for (const model of models) {
-    try {
-      await withTimeout(
-        format === 'responses'
-          ? client.responses.create(buildPingParams(provider, model, format))
-          : client.chat.completions.create(buildPingParams(provider, model, format)),
-        PROBE_TIMEOUT_MS,
-        provider,
-      )
-      return { provider, model, pConfig, apiFormat: format }
-    } catch (err) {
-      if (isProviderAuthError(err)) throw err
-      errors.push(`${model}: ${getProviderErrorMessage(err)}`)
+  // All fallback models share one deadline; cancelled probes must not start
+  // another model or let SDK retries continue after a winner is selected.
+  return withProbeTimeout(async probeSignal => {
+    const errors = []
+    for (const model of models) {
+      probeSignal.throwIfAborted()
+      try {
+        const options = { signal: probeSignal }
+        await (format === 'responses'
+          ? client.responses.create(buildPingParams(provider, model, format), options)
+          : client.chat.completions.create(buildPingParams(provider, model, format), options))
+        return { provider, model, pConfig, apiFormat: format }
+      } catch (err) {
+        if (probeSignal.aborted || isProviderAuthError(err)) throw err
+        errors.push(`${model}: ${getProviderErrorMessage(err)}`)
+      }
     }
-  }
-  throw new Error(`${provider} validation failed for models ${models.join(', ')}: ${errors.join(' | ')}`)
+    throw new Error(`${provider} validation failed for models ${models.join(', ')}: ${errors.join(' | ')}`)
+  }, PROBE_TIMEOUT_MS, provider, signal)
 }
 
 async function detectProvider(OpenAI, apiKey, requestedModel, apiFormat = DEFAULT_LLM_API_FORMAT) {
   const providers = getProvidersForAutoDetect()
-  const errors = []
-
-  return await new Promise((resolve, reject) => {
-    let pending = providers.length
-    for (const [provider] of providers) {
-      probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat)
-        .then(resolve)
-        .catch((err) => {
-          errors.push(`${provider}: ${getProviderErrorMessage(err)}`)
-          pending -= 1
-          if (pending === 0) {
-            reject(new Error(`Could not identify the provider for this API key. Tried: ${providers.map(([name]) => name).join(', ')}. Last errors: ${errors.slice(-3).join(' | ')}`))
-          }
-        })
-    }
-  })
+  const controller = new AbortController()
+  try {
+    return await Promise.any(providers.map(([provider]) =>
+      probeProvider(OpenAI, provider, apiKey, requestedModel, apiFormat, controller.signal),
+    ))
+  } catch (err) {
+    const errors = (err.errors || [err]).map((error, index) =>
+      `${providers[index]?.[0] || 'unknown'}: ${getProviderErrorMessage(error)}`)
+    throw new Error(`Could not identify the provider for this API key. Tried: ${providers.map(([name]) => name).join(', ')}. Errors: ${errors.join(' | ')}`)
+  } finally {
+    controller.abort(new Error('Provider detection finished'))
+  }
 }
 
 // 旧版本用过、之后被改名/合并的 provider id → 现行 id。
@@ -1280,12 +1277,12 @@ export async function prepareActivation({ provider = AUTO_PROVIDER, apiKey, mode
     )
 
     const { default: OpenAI } = await import('openai')
-    const client = new OpenAI({ apiKey: normalizedKey, baseURL: normalizedBaseURL, timeout: PROBE_TIMEOUT_MS })
+    const client = new OpenAI({ apiKey: normalizedKey, baseURL: normalizedBaseURL, timeout: PROBE_TIMEOUT_MS, maxRetries: 0 })
     try {
-      await withTimeout(
-        format === 'responses'
-          ? client.responses.create(buildPingParams('custom', normalizedModel, format, control))
-          : client.chat.completions.create(buildPingParams('custom', normalizedModel, format)),
+      await withProbeTimeout(
+        signal => format === 'responses'
+          ? client.responses.create(buildPingParams('custom', normalizedModel, format, control), { signal })
+          : client.chat.completions.create(buildPingParams('custom', normalizedModel, format), { signal }),
         PROBE_TIMEOUT_MS,
         'custom',
       )
@@ -1460,6 +1457,17 @@ export function getProviderSummaries() {
     baseURL: custom?.baseURL || '',
   }
   return result
+}
+
+// Runtime-only accessor. Do not expose the returned credentials in tool results.
+export function getProviderConnection(provider = config.provider) {
+  if (provider === config.provider) {
+    const { apiKey, baseURL, model, apiFormat, reasoningControl } = config
+    return apiKey && baseURL ? { provider, apiKey, baseURL, model, apiFormat, reasoningControl } : null
+  }
+  const stored = resolveStoredLlmForProvider(provider)
+  if (!stored?.apiKey) return null
+  return { ...stored, provider, baseURL: stored.baseURL || PROVIDER_CONFIG[provider]?.baseURL }
 }
 
 export async function getProviderModels({ provider, apiKey, baseURL, forceRefresh = false } = {}) {

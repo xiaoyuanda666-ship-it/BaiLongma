@@ -20,6 +20,7 @@ import {
 import { streamWriteFileArgumentPreview } from './write-file-preview.js'
 import { formatBrowserDownloadContext } from './browser-download-context.js'
 import { getLLMProtocol } from './llm-protocol.js'
+import { prepareImageMessages } from './llm-images.js'
 import {
   actionContractCompletionIssue,
   actionContractToolCallIssue,
@@ -79,7 +80,7 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
   return getLLMProtocol(modelSettings.apiFormat).buildRequest({
     provider: modelSettings.provider,
     reasoningControl: modelSettings.reasoningControl,
-    messages,
+    messages: prepareImageMessages(messages, { ...modelSettings, model }),
     toolSchemas,
     temperature: providerTemperature,
     topP,
@@ -1376,7 +1377,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             messages.push({
               role: 'user',
               content: actionContract.id === 'web_research'
-                ? `The web research is not complete enough to answer yet: ${completionIssue} Continue with browser_navigate or browser_click and open the distinct original article/source pages. Search-result snippets do not count. After enough pages load, answer with only links that were actually verified in this turn and avoid duplicate underlying events.${INTERNAL_NUDGE_SUFFIX}`
+                ? `The web research is not complete enough to answer yet: ${completionIssue} Continue with model_web_fetch, browser_navigate or browser_click and read the distinct original article/source pages. Search-result snippets do not count. After enough pages load, answer with only links that were actually verified in this turn and avoid duplicate underlying events.${INTERNAL_NUDGE_SUFFIX}`
                 : actionContract.id === 'browser_screenshot'
                   ? `The screenshot capture is not delivered yet: ${completionIssue} Call send_message now with the exact screenshot.image_path returned by browser_take_screenshot. Do not substitute a text acknowledgement or the live browser card.${INTERNAL_NUDGE_SUFFIX}`
                 : `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,

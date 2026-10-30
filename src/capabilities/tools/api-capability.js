@@ -1,9 +1,13 @@
 import fs from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
-import { fileURLToPath } from 'url'
 import { paths } from '../../paths.js'
 import { stringifyJsonForTransport } from '../../runtime/json-unicode.js'
+import { getProviderConnection, shouldOmitSamplingForProviderModel } from '../../config.js'
+import { builtinVisionConnection } from '../../model-capabilities.js'
+import { resolveModelImage } from '../../llm-images.js'
+import { getLLMProtocol } from '../../llm-protocol.js'
+import { postModelJSON } from '../../providers/model-http.js'
 import {
   apiCapabilityNeedsCredential,
   buildApiSlotContext,
@@ -16,15 +20,6 @@ import {
   normalizeApiCapabilityKind,
   setApiCapabilitySlotEnabled,
 } from '../api-slots.js'
-
-const IMAGE_EXT_MIME = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.bmp': 'image/bmp',
-}
 
 const GENERIC_SECRET_RE = /\b(?:sk|ak|rk|pk|ark)-[A-Za-z0-9_\-.]{12,180}\b/g
 
@@ -73,48 +68,8 @@ function findImageReference(args = {}, context = {}) {
     )
 }
 
-function mimeFromPath(filePath = '') {
-  return IMAGE_EXT_MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream'
-}
-
-function resolveMediaChatPath(urlPath = '') {
-  const raw = String(urlPath || '').trim()
-  if (!raw.startsWith('/media/chat/')) return ''
-  const filename = path.basename(decodeURIComponent(raw.slice('/media/chat/'.length)))
-  return path.join(paths.mediaDir, filename)
-}
-
-function resolveLocalImagePath(ref = '') {
-  let raw = String(ref || '').trim()
-  if (!raw) return ''
-  if (/^file:\/\//i.test(raw)) {
-    try { raw = fileURLToPath(raw) } catch { return '' }
-  }
-  if (raw.startsWith('/media/chat/')) return resolveMediaChatPath(raw)
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return ''
-  return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(paths.sandboxDir, raw)
-}
-
-function localImageToDataUrl(filePath = '') {
-  const resolved = path.resolve(filePath)
-  const stat = fs.statSync(resolved)
-  if (!stat.isFile()) throw new Error(`image path is not a file: ${resolved}`)
-  if (stat.size > 20 * 1024 * 1024) throw new Error('image file is larger than 20MB')
-  const mime = mimeFromPath(resolved)
-  if (!mime.startsWith('image/')) throw new Error(`unsupported image extension: ${path.extname(resolved)}`)
-  const bytes = fs.readFileSync(resolved)
-  return `data:${mime};base64,${bytes.toString('base64')}`
-}
-
 function resolveImageUrl(ref = '') {
-  const raw = String(ref || '').trim()
-  if (!raw) throw new Error('image reference required')
-  if (/^data:image\//i.test(raw)) return raw
-  if (/^https?:\/\//i.test(raw)) return raw
-  const localPath = resolveLocalImagePath(raw)
-  if (!localPath) throw new Error('image must be an http(s), data:image, /media/chat, file://, or local file path')
-  if (!fs.existsSync(localPath)) throw new Error(`image file not found: ${localPath}`)
-  return localImageToDataUrl(localPath)
+  return resolveModelImage(ref, { allowLocalFiles: true }).url
 }
 
 function isPathInside(parentDir, candidatePath) {
@@ -322,38 +277,60 @@ async function callOpenAICompatibleVision(slot, { imageUrl, prompt, detail = 'au
 
 export async function execAnalyzeImage(args = {}, context = {}) {
   const slot = findConfiguredApiSlotByKind('vision', args.slot_id || args.slotId)
-  if (!slot) {
+  const connection = !slot && !(args.slot_id || args.slotId)
+    ? builtinVisionConnection(getProviderConnection() || {})
+    : null
+  if (!slot && !connection) {
     return toolJson({
       ok: false,
       tool: 'analyze_image',
       error: 'not_configured',
-      guide: '还没有可用的视觉识图能力槽。请根据用户意图收集 provider/kind、API 文档链接或正文，以及用户申请的 API key，然后调用 manage_api_capability(action="configure") 显式配置。',
+      guide: '请选择支持图片的对话模型，或在模型设置中使用 DeepSeek（识图会调用同账号的 deepseek-flash）。也可以用 manage_api_capability 配置独立视觉能力槽；显式指定的 slot_id 必须存在且启用。',
     })
   }
 
-  const slotApiKey = getApiCapabilityCredential(slot)
+  const slotApiKey = connection?.apiKey || getApiCapabilityCredential(slot)
   try {
     const imageRef = findImageReference(args, context)
     const imageUrl = resolveImageUrl(imageRef)
     const prompt = String(args.prompt || args.question || '').trim()
       || '请用中文准确描述这张图片；如果有文字，请做 OCR；如果用户问题指向具体细节，请优先回答问题。'
     const detail = ['low', 'high', 'auto'].includes(args.detail) ? args.detail : 'auto'
-    const result = await callOpenAICompatibleVision(slot, { imageUrl, prompt, detail }, context)
+    let result
+    if (connection) {
+      const protocol = getLLMProtocol(connection.apiFormat)
+      const body = protocol.buildRequest({ ...connection, stream: false, thinking: false,
+        omitSampling: shouldOmitSamplingForProviderModel(connection.provider, connection.model),
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: prompt }, { type: 'image_url', image_url: { url: imageUrl, detail } },
+        ] }],
+      })
+      const data = await postModelJSON(connection, protocol.id === 'responses' ? 'responses' : 'chat/completions', body, context)
+      if (protocol.id === 'responses' && data.status !== 'completed') throw new Error('图片分析未完成')
+      result = protocol.id === 'responses'
+        ? (data.output || []).filter(item => item.type === 'message')
+          .flatMap(item => item.content || []).filter(part => part.type === 'output_text').map(part => part.text).join('\n')
+        : data.choices?.[0]?.message?.content
+      if (!result) throw new Error('视觉模型没有返回图片分析结果')
+    } else {
+      result = await callOpenAICompatibleVision(slot, { imageUrl, prompt, detail }, context)
+    }
     return toolJson({
       ok: true,
       tool: 'analyze_image',
-      slot_id: slot.id,
-      provider: slot.provider,
-      model: slot.api.model,
+      slot_id: slot?.id || null,
+      provider: connection?.provider || slot.provider,
+      model: connection?.model || slot.api.model,
       result: redactSlotSecrets(result, slot, slotApiKey),
     })
   } catch (err) {
+    if (context.signal?.aborted) throw err
     return toolJson({
       ok: false,
       tool: 'analyze_image',
-      slot_id: slot.id,
+      slot_id: slot?.id || null,
       error: redactSlotSecrets(err.message, slot, slotApiKey),
-      docs_hint: buildApiSlotContext(slot).slice(0, 1200),
+      docs_hint: slot ? buildApiSlotContext(slot).slice(0, 1200) : '请检查图片格式、模型权限和 API 余额。',
     })
   }
 }

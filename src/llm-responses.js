@@ -71,8 +71,19 @@ export function toResponsesInput(items = []) {
     }
 
     if (!['system', 'developer', 'user', 'assistant'].includes(original.role)) continue
-    const content = asText(original.content)
-    if (content) {
+    const content = Array.isArray(original.content) && original.role === 'user'
+      ? original.content.map(part => {
+          if (typeof part === 'string') return { type: 'input_text', text: part }
+          if (part?.type === 'image_url') {
+            const image = part.image_url
+            return { type: 'input_image', image_url: typeof image === 'string' ? image : image.url,
+              ...(image?.detail ? { detail: image.detail } : {}) }
+          }
+          if (part?.type === 'text') return { type: 'input_text', text: part.text }
+          return cloneItem(part)
+        })
+      : asText(original.content)
+    if (content?.length) {
       const message = { type: 'message', role: original.role, content }
       // Assistant phases are transport state, not presentation-only metadata.
       // Preserve them when history is rebuilt manually so an intermediate

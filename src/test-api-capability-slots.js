@@ -375,7 +375,7 @@ Example key: sk-xxxxxxxxxxxxxxxxxxxxxxxx
       })
       const moonshotResult = parseJson(await execAnalyzeImage({
         slot_id: 'vision.moonshot',
-        image_url: 'data:image/png;base64,AA==',
+        image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC',
         prompt: 'describe',
       }))
       assert(moonshotResult?.ok === true, 'mocked Moonshot analyze_image succeeds', JSON.stringify(moonshotResult))
@@ -391,7 +391,7 @@ Example key: sk-xxxxxxxxxxxxxxxxxxxxxxxx
       })
       const acmeResult = parseJson(await execAnalyzeImage({
         slot_id: 'vision.acme',
-        image_url: 'data:image/png;base64,AA==',
+        image_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC',
         prompt: 'describe',
       }))
       assert(acmeResult?.ok === true, 'mocked generic analyze_image succeeds', JSON.stringify(acmeResult))
