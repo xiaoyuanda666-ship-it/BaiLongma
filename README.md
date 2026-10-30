@@ -31,7 +31,9 @@ Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答
 
 接口依据：[DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)、[DeepSeek Search / Fetch](https://api-docs.deepseek.com/zh-cn/guides/search/)、[OpenAI Web search](https://developers.openai.com/api/docs/guides/tools-web-search)。
 
-运行 `npm run test:model-vision-web` 可验证传图、协议转换、识图回退、搜索、来源核验、取消与错误处理；测试使用隔离目录和本地模拟 API，不调用真实付费接口。
+粘贴图片后可以直接问“这是什么”，无需特意写“识图”关键词；只发送图片也会加载识图工具。无法直接接收图片的对话模型会收到明确提示，要求先获取识图结果，避免仅根据图片链接猜测内容。
+
+运行 `npm run test:model-vision-web` 可验证传图、协议转换、无关键词附件触发、识图回退、搜索、来源核验、取消与错误处理；测试使用隔离目录和本地模拟 API，不调用真实付费接口。
 
 ## 项目结构
 

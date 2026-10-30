@@ -3,6 +3,7 @@ import { measurePerformance } from '../runtime/performance-trace.js'
 import { modelWebTools } from '../providers/model-web.js'
 import { getProviderConnection } from '../config.js'
 import { builtinVisionConnection } from '../model-capabilities.js'
+import { markdownImageReferences } from '../llm-images.js'
 // =============================================================================
 // capability-registry.js —— 能力机制（Capability Mechanism）唯一真相源
 //
@@ -411,7 +412,8 @@ export const CAPABILITIES = [
     triggers: ['识图', '图片', '截图', '图表', 'ocr', 'vision', 'image', 'analyze_image'],
     tools: ['analyze_image'],
     detect: ctx => !!builtinVisionConnection(getProviderConnection() || {})
-      && /识图|看图|读图|图片|这张图|这幅图|这张照片|照片里|截图|图表|ocr|vision|image|visual/i.test(ctx.rawText || ''),
+      && (markdownImageReferences(ctx.rawText || '').length > 0
+        || /识图|看图|读图|图片|这张图|这幅图|这张照片|照片里|截图|图表|ocr|vision|image|visual/i.test(ctx.rawText || '')),
     context: '## Image understanding\nImage blocks attached to the current model request are directly visible. When pixels are not attached, use analyze_image with the exact chat URL or sandbox path. The tool reuses the current model configuration (DeepSeek Pro uses Flash for vision); do not ask for a separate vision API key unless it actually reports not_configured. Never infer image contents from filenames or Markdown text alone.',
     prefeed: null,
   },

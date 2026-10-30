@@ -66,7 +66,7 @@ export function resolveModelImage(ref, { allowLocalFiles = false } = {}) {
 // Keep base64 out of stored history and traces; resolve only at the request
 // boundary. Prefer recent attachments when the request budget is exhausted.
 export function prepareImageMessages(messages = [], connection = {}) {
-  if (!supportsImageInput(connection)) return messages
+  const directVision = supportsImageInput(connection)
   let count = 0
   let total = 0
   const out = [...messages]
@@ -77,6 +77,12 @@ export function prepareImageMessages(messages = [], connection = {}) {
       ...markdownImageReferences(message.content), ...(message._image_refs || []),
     ])]
     if (!refs.length) continue
+    if (!directVision) {
+      // Text-only models must explicitly obtain visual evidence through the
+      // vision tool. A Markdown URL alone does not provide any image pixels.
+      out[i] = { ...message, content: `${message.content}\n\n[图片尚未传入当前对话模型。需要理解图片时，请调用 analyze_image，使用以下原始图片引用；获得实际识图结果后再回答，不能根据文件名或链接猜测内容。]\n${refs.join('\n')}` }
+      continue
+    }
     const parts = [{ type: 'text', text: message.content }]
     for (const ref of refs) {
       try {

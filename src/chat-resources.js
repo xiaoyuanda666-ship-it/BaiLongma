@@ -144,7 +144,7 @@ export function buildPendingResourceInjectorContext(rows = []) {
   const resources = flattenConversationResources(rows)
   if (resources.length === 0) return ''
   const visionHint = resources.some(resource => resource?.kind === 'image' || String(resource?.mime || '').startsWith('image/'))
-    ? 'This turn contains staged visual content. If the instruction requires seeing it, analyze image content using the exact sandbox_path.'
+    ? 'This turn contains staged visual content. Use image blocks attached to the model request directly. If pixels are not attached and the instruction requires seeing them, call analyze_image using the exact resource URL or sandbox_path before answering.'
     : ''
   return [
     '[resources awaiting this user instruction]',

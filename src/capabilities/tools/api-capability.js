@@ -5,7 +5,7 @@ import { paths } from '../../paths.js'
 import { stringifyJsonForTransport } from '../../runtime/json-unicode.js'
 import { getProviderConnection, shouldOmitSamplingForProviderModel } from '../../config.js'
 import { builtinVisionConnection } from '../../model-capabilities.js'
-import { resolveModelImage } from '../../llm-images.js'
+import { resolveModelImage, markdownImageReferences } from '../../llm-images.js'
 import { getLLMProtocol } from '../../llm-protocol.js'
 import { postModelJSON } from '../../providers/model-http.js'
 import {
@@ -51,8 +51,7 @@ function redactSlotSecrets(value, slot = {}, secretValue = '') {
 }
 
 function firstMarkdownImage(text = '') {
-  const match = String(text || '').match(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/)
-  return match?.[1] || ''
+  return markdownImageReferences(text)[0] || ''
 }
 
 function findImageReference(args = {}, context = {}) {

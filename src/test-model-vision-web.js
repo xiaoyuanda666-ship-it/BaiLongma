@@ -89,8 +89,27 @@ test('uploaded and staged images reach both wire protocols without modifying sto
   assert.equal(actualRequest.input[3].content[1].image_url, dataURL)
   const replay = { type: 'function_call_output', call_id: 'call-1', output: 'result' }
   assert.deepEqual(toResponsesInput([replay])[0], replay)
-  assert.equal(prepareImageMessages(messages, { ...deepseek, model: 'deepseek-v4-pro' }), messages)
+  const indirect = prepareImageMessages(messages, { ...deepseek, model: 'deepseek-v4-pro' })
+  assert.equal(typeof indirect[3].content, 'string')
+  assert.match(indirect[3].content, /analyze_image/)
+  assert.ok(indirect[1].content.includes(resource.url), 'staged resource URL is available to the vision tool')
+  assert.deepEqual(messages, before)
   assert.equal(supportsImageInput({ model: 'o3-mini' }), false)
+})
+
+test('image attachments load vision tools even without image keywords', async () => {
+  Object.assign(config, deepseek, { model: 'deepseek-v4-pro' })
+  const media = persistChatMediaBuffer(png, { ext: '.png' })
+  for (const rawText of [`![](${media.url})`, `这是什么？ ![附件](<${media.url}>)`]) {
+    assert.ok(capabilityToolsFor({ rawText, text: rawText, isTick: false }).includes('analyze_image'))
+  }
+  const result = JSON.parse(await execAnalyzeImage({ prompt: 'Describe this' }, {
+    currentUserMessage: `这是什么？ ![附件](<${media.url}>)`,
+  }))
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.model, 'deepseek-flash')
+  assert.equal(requests.at(-1).body.messages[0].content[1].image_url.url, dataURL)
+  assert.equal(config.model, 'deepseek-v4-pro')
 })
 
 test('image validation rejects arbitrary auto-read paths, traversal, invalid bytes and oversized files', () => {
