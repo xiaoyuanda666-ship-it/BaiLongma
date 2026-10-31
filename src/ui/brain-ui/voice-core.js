@@ -83,7 +83,6 @@ const STATE_CFG = {
 export const BARGEIN_THRESHOLD = 0.09; // 振幅阈值（高于环境噪声和 AEC 残留）
 
 const CLOUD_WS_URL = () => apiWebSocketUrl('/voice/cloud');
-const VOICE_PROVIDER_KEY = 'bailongma-voice-provider';
 const VOICE_MIC_DEVICE_KEY = 'bailongma-voice-mic-device-id';
 
 // 采集分块大小（样本数）：AudioWorklet 累积到该样本数再投递；ScriptProcessor 回退也用它。
@@ -723,9 +722,9 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
 
     ws.onopen = () => {
       if (cloudWs !== ws) return;
-      const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
+      // 服务商由后端读取已保存配置，避免窗口缓存覆盖语音设置。
       const lang = getLang?.()?.split('-')[0] || 'zh';
-      ws.send(JSON.stringify({ type: 'config', provider, lang }));
+      ws.send(JSON.stringify({ type: 'config', lang }));
       setStatus('listening');
       lastInboundTs = Date.now(); // 看门狗：（重）连后给一个新鲜起点，避免连上瞬间误判停滞
       // 补发重连死区里暂存的音频，避免断连期间说的话丢失
@@ -964,9 +963,8 @@ export function createVoiceCore({ canvas, transcript, getChatInput, getSendMessa
       cloudWs = bargeinWs;
       bargeinWs.onopen = () => {
         if (cloudWs !== bargeinWs) return;
-        const provider = localStorage.getItem(VOICE_PROVIDER_KEY) || 'aliyun';
         const lang = getLang?.()?.split('-')[0] || 'zh';
-        bargeinWs.send(JSON.stringify({ type: 'config', provider, lang }));
+        bargeinWs.send(JSON.stringify({ type: 'config', lang }));
         lastInboundTs = Date.now(); // 看门狗：打断重连后给新鲜起点
         // 先把预缓冲的历史音频一次性发出，补回打断前说的内容
         for (const chunk of bufferedChunks) {

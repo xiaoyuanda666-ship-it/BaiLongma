@@ -158,7 +158,7 @@ test('DeepSeek search/fetch use official routes and only fetched content satisfi
   assert.equal(result.ok, true)
   assert.equal(result.sources[0].url, 'https://example.com/article')
   assert.equal(requests.at(-1).url, '/v1/tools/search')
-  assert.deepEqual(requests.at(-1).body, { query: '最新资料', count: 3, need_content: false })
+  assert.deepEqual(requests.at(-1).body, { query: '最新资料', count: 3, need_content: true })
   await searchModelWeb({ ...deepseek, baseURL: `${baseURL}/v1` }, { query: 'empty' })
   assert.equal(requests.at(-1).url, '/v1/tools/search')
   assert.equal((await searchModelWeb(deepseek, { query: 'empty' })).results.length, 0)

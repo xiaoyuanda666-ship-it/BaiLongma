@@ -59,3 +59,7 @@ assert.equal(
 assert.equal(stream.flush(), '', 'stream has no trailing buffered text')
 
 console.log('test-reply-sanitizer passed')
+
+const sourceList = '已取得三个来源。\n来源：\n- [第一条](https://example.com/1)\n- [第二条](https://example.com/2)\n- [第三条](https://example.com/3)'
+assert.equal(sanitizeAssistantReplyForDelivery(sourceList), sourceList, 'all unpunctuated source lines survive delivery')
+assert.equal(sanitizeAssistantReplyForDelivery('标题\n正文没有句号\n下一行'), '标题\n正文没有句号\n下一行')

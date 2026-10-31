@@ -23,6 +23,7 @@ import { getLLMProtocol } from './llm-protocol.js'
 import { prepareImageMessages } from './llm-images.js'
 import {
   actionContractCompletionIssue,
+  completeWebResearchCitations,
   actionContractToolCallIssue,
   actionContractToolSucceeded,
   browserScreenshotDeliveryMatches,
@@ -772,6 +773,8 @@ function isHighRiskTool(name) {
 }
 
 const PARALLEL_SAFE_TOOLS = new Set([
+  'model_web_search',
+  'model_web_fetch',
   'read_file',
   'list_dir',
   'web_search',
@@ -1365,6 +1368,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           allContent = fixedReply
           break
         }
+        allContent = completeWebResearchCitations(actionContract, allContent, {
+          successfulToolEvidence: actionContractEvidenceList,
+        })
         const completionIssue = actionContractCompletionIssue(actionContract, allContent, {
           successfulToolNames: actionContractSuccessfulTools,
           successfulToolEvidence: actionContractEvidenceList,
@@ -1377,7 +1383,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             messages.push({
               role: 'user',
               content: actionContract.id === 'web_research'
-                ? `The web research is not complete enough to answer yet: ${completionIssue} Continue with model_web_fetch, browser_navigate or browser_click and read the distinct original article/source pages. Search-result snippets do not count. After enough pages load, answer with only links that were actually verified in this turn and avoid duplicate underlying events.${INTERNAL_NUDGE_SUFFIX}`
+                ? `The web research is not complete enough to answer yet: ${completionIssue} Use model_web_search with need_content=true, or read missing original pages with model_web_fetch/browser tools. Returned page_content or a provider-cited grounded_answer counts; snippets do not. Check publication dates for time-scoped requests. Give a useful news summary with citations; never replace the summary with a link list. Avoid duplicate events.${INTERNAL_NUDGE_SUFFIX}`
                 : actionContract.id === 'browser_screenshot'
                   ? `The screenshot capture is not delivered yet: ${completionIssue} Call send_message now with the exact screenshot.image_path returned by browser_take_screenshot. Do not substitute a text acknowledgement or the live browser card.${INTERNAL_NUDGE_SUFFIX}`
                 : `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,
@@ -1605,6 +1611,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           && actionContract
           && !actionContractSatisfied
           && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content, actionContract))
+        if (tc.name === 'send_message' && actionContractSatisfied) {
+          normalizedArgs.content = completeWebResearchCitations(actionContract, normalizedArgs.content, {
+            successfulToolEvidence: actionContractEvidenceList,
+          })
+        }
         const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
           ? actionContractCompletionIssue(actionContract, normalizedArgs.content, {
               successfulToolNames: actionContractSuccessfulTools,

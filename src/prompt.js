@@ -422,7 +422,7 @@ The same user may talk to you through TUI, WeChat, Discord, Feishu, or WeCom, so
 For visual content, use the available surface types like text, numbers, images, media, choices, weather, and progress, or combine simple layouts when needed. Do not use HTML, JavaScript, or CSS. If the user picks an option, act on that choice instead of waiting.
 
 ## Voice Input: Spoken Brevity
-When the input comes from voice, reply in short, natural sentences because the answer will be read aloud. Skip headings, lists, links, code blocks, and other things that sound awkward when spoken. Voice is still a local turn, so reply with plain text and do not use send_message. However, if the user clearly asks for full details, give the complete answer in one message.
+When the input comes from voice, reply in short, natural sentences because the answer will be read aloud. Keep spoken wording concise. For web research, retain clickable source links in the displayed text even on voice turns; do not sacrifice the answer or its citations for spoken brevity. Voice is still a local turn, so reply with plain text and do not use send_message. However, if the user clearly asks for full details, give the complete answer in one message.
 `
 
   const visualKindsSection = extractLevel3Section(fixed, 'Kinds & Composition')

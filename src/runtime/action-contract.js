@@ -400,6 +400,24 @@ export function collectVerifiedWebResearchSources(evidenceList = []) {
   const sources = []
   const seen = new Set()
   for (const evidence of Array.isArray(evidenceList) ? evidenceList : []) {
+    if (evidence?.name === 'model_web_search') {
+      const search = safeJson(evidence.result)
+      if (search?.ok !== true || !Array.isArray(search.results)) continue
+      for (const item of search.results) {
+        const hasBody = item.evidence_kind === 'page_content' && item.verified === true
+          && typeof item.content === 'string' && item.content.trim()
+        const hasCitedAnswer = item.evidence_kind === 'grounded_answer'
+          && typeof search.summary === 'string' && search.summary.trim()
+        // Unknown publication dates remain discovery leads for date-scoped tasks.
+        if ((!hasBody && !hasCitedAnswer) || item.date_status === 'unknown') continue
+        const url = normalizedEvidenceUrl(item.url)
+        if (!url || seen.has(url) || !likelyArticleUrl(url)) continue
+        if (item.title && sources.some(source => titlesLikelyDuplicate(source.title, item.title))) continue
+        seen.add(url)
+        sources.push({ url, title: item.title || url, aliases: [url], evidence_kind: item.evidence_kind })
+      }
+      continue
+    }
     if (evidence?.name === 'model_web_fetch') {
       const page = safeJson(evidence.result)
       const url = normalizedEvidenceUrl(page?.url)
@@ -445,16 +463,31 @@ function markdownLinkLabel(value = '') {
     .slice(0, 160)
 }
 
+// Missing citation formatting must not destroy an otherwise useful summary.
+export function completeWebResearchCitations(contract, text = '', options = {}) {
+  if (contract?.id !== 'web_research' || !String(text).trim()) return text
+  const sources = collectVerifiedWebResearchSources(options.successfulToolEvidence || [])
+  const required = Math.max(1, Number(contract.minimumVerifiedSources) || 3)
+  if (sources.length < required) return text
+  const linked = new Set(urlsInReply(text))
+  const verified = new Set(sources.flatMap(source => source.aliases || [source.url]))
+  if ([...linked].some(url => !verified.has(url))) return text
+  const missing = sources.filter(source => !linked.has(source.url))
+  return missing.length ? `${text.trim()}\n\n来源：\n${missing.map(source => `- [${markdownLinkLabel(source.title)}](${source.url})`).join('\n')}` : text
+}
+
 function webResearchCompletionIssue(contract, text = '', options = {}) {
   const required = Math.max(1, Number(contract?.minimumVerifiedSources) || 3)
   const sources = collectVerifiedWebResearchSources(options?.successfulToolEvidence || [])
   if (sources.length < required) {
-    return `Only ${sources.length} of ${required} requested article/source pages were actually opened and verified. A search-results page or snippet is discovery only. Continue opening distinct original source pages before answering.`
+    return `Only ${sources.length} of ${required} requested sources have usable evidence (actual page content or a provider-cited answer). A search-results page or snippet is discovery only; unknown dates need checking. Continue searching or reading original sources before answering.`
   }
   const verified = new Set(sources.flatMap(source => source.aliases || [source.url]))
-  const linkedVerified = urlsInReply(text).filter(url => verified.has(url))
+  const links = urlsInReply(text)
+  if (links.some(url => !verified.has(url))) return 'The reply contains unverified source links. Remove unsupported claims or obtain source evidence first.'
+  const linkedVerified = links.filter(url => verified.has(url))
   if (linkedVerified.length < required) {
-    return `The reply includes only ${linkedVerified.length} of ${required} links to pages that were actually opened and verified in this turn. Use the verified source URLs, not search-result or unvisited links.`
+    return `The reply includes only ${linkedVerified.length} of ${required} links backed by source evidence in this turn. Use the verified source URLs, not search-result or unvisited links.`
   }
   return ''
 }
@@ -1125,11 +1158,11 @@ export function verifiedActionContractReply(contract, evidence = {}, options = {
     const sources = collectVerifiedWebResearchSources(options?.successfulToolEvidence || [])
     const lines = sources.map(source => `- [${markdownLinkLabel(source.title)}](${source.url})`)
     const summary = sources.length < required
-      ? `这次联网检索只完成了 ${sources.length}/${required} 个原文来源的实际打开与核验，因此不会用搜索摘要或猜测补足。`
-      : `这次联网检索已实际打开并核验 ${sources.length} 个原文来源；为避免加入未访问或无法核验的内容，下面只保留这些来源。`
+      ? `这次只取得了 ${sources.length}/${required} 个可用来源，尚不足以完成新闻汇总。`
+      : `已取得 ${sources.length} 个来源，但新闻摘要未能完成；以下链接仅供查阅。`
     return [
       summary,
-      ...(lines.length ? ['已核验的来源：', ...lines] : []),
+      ...(lines.length ? ['来源：', ...lines] : []),
     ].join('\n')
   }
   if (contract?.id !== 'system_browser_open') return ''

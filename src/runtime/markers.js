@@ -164,7 +164,7 @@ export function dedupeAdjacentReplyText(text = '') {
   }
 
   const joined = dedupedLines.join('\n')
-  const units = joined.match(/[^。！？!?\n]+[。！？!?]+|\n+|[^。！？!?\n]+$/g)
+  const units = joined.match(/[^。！？!?\n]+[。！？!?]*|[。！？!?]+|\n+/g)
   if (!units) return joined
   const out = []
   let previousSentence = ''

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import vm from 'node:vm'
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-voice-provider-'))
 process.env.BAILONGMA_USER_DIR = tmp
@@ -68,7 +69,34 @@ try {
   assert.equal(volcRuntime.volcAsrResourceId, 'volc.seedasr.sauc.duration', 'Volcengine runtime config preserves the ASR 2.0 resource ID')
   assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf-8')).voice, undefined, 'Volcengine runtime config does not depend on the removed config.json voice block')
 
-  console.log('PASS voice provider aliases and legacy provider field')
+  // Exercise the real handshake callbacks with missing and stale window caches.
+  const apiSource = fs.readFileSync(new URL('./api.js', import.meta.url), 'utf-8')
+  const runtimeExpression = apiSource.match(/const rawCfg = (getVoiceRuntimeConfig\([^\n]+\))/)[1]
+  for (const file of ['./ui/brain-ui/voice-core.js', '../voice-core.js']) {
+    const source = fs.readFileSync(new URL(file, import.meta.url), 'utf-8')
+    for (const socketName of ['ws', 'bargeinWs']) {
+      const handler = source.split(`${socketName}.onopen = () => {`)[1].split(/\n\s*};/)[0]
+      for (const cachedProvider of [null, 'aliyun', 'tencent']) {
+        const messages = []
+        const socket = { send: value => messages.push(JSON.parse(value)) }
+        vm.runInNewContext(`(() => { ${handler}\n })()`, {
+          [socketName]: socket, cloudWs: socket,
+          VOICE_PROVIDER_KEY: 'bailongma-voice-provider',
+          localStorage: { getItem: () => cachedProvider },
+          getLang: () => 'zh-CN', setStatus() {},
+          reconnectBuffer: [], bufferedChunks: [], lastInboundTs: 0,
+        })
+        assert.equal(messages[0].lang, 'zh')
+        const runtime = vm.runInNewContext(runtimeExpression, {
+          msg: messages[0], getVoiceRuntimeConfig,
+        })
+        assert.equal(runtime.provider, 'volcengine', `${file}: ${socketName} ignores cache ${cachedProvider}`)
+        assert.equal(runtime.volcAsrApiKey, volcRuntime.volcAsrApiKey)
+      }
+    }
+  }
+
+  console.log('PASS voice provider aliases, persistence and voice orb routing')
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true })
 }
