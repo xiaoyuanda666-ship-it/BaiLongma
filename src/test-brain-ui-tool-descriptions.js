@@ -1,12 +1,34 @@
 import assert from 'node:assert/strict'
 import { ThoughtStream, friendlyToolIcon, friendlyToolName } from './ui/brain-ui/thought-stream.js'
 import { setLocale } from './ui/brain-ui/i18n/index.js'
-import { BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS } from './mcp/playwright-server.js'
+// Historical tool logs still need readable labels after tool removal.
+const LEGACY_BROWSER_TOOL_NAMES = [
+  'browser_close',
+  'browser_resize',
+  'browser_console_messages',
+  'browser_handle_dialog',
+  'browser_find',
+  'browser_fill_form',
+  'browser_press_key',
+  'browser_type',
+  'browser_navigate',
+  'browser_navigate_back',
+  'browser_navigate_forward',
+  'browser_reload',
+  'browser_take_screenshot',
+  'browser_snapshot',
+  'browser_click',
+  'browser_drag',
+  'browser_hover',
+  'browser_select_option',
+  'browser_tabs',
+  'browser_wait_for',
+]
 
 const storage = { getItem: () => null, setItem: () => {} }
 setLocale('zh-CN', { storage })
 
-for (const toolName of BUILTIN_PLAYWRIGHT_ALLOWED_TOOLS) {
+for (const toolName of LEGACY_BROWSER_TOOL_NAMES) {
   const label = friendlyToolName(toolName)
   assert.notEqual(label, toolName, `${toolName} must not be shown as its internal identifier`)
   assert.notEqual(label, '处理事务', `${toolName} needs a specific user-facing action`)

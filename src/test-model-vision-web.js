@@ -21,7 +21,7 @@ const { buildResponsesRequest, toResponsesInput } = await import('./llm-response
 const { buildChatCompletionsRequest } = await import('./llm-chat-completions.js')
 const { formatConversationMessage } = await import('./runtime/messages.js')
 const { execAnalyzeImage } = await import('./capabilities/tools/api-capability.js')
-const { execModelWeb, searchModelWeb, fetchModelWeb, modelWebTools } = await import('./providers/model-web.js')
+const { execModelWeb: execSearchService, searchModelWeb, modelWebTools } = await import('./providers/model-web.js')
 const { capabilityToolsFor, findCapabilitiesByQuery } = await import('./capabilities/capability-registry.js')
 const { classifyActionContract, actionContractToolSucceeded, collectVerifiedWebResearchSources } = await import('./runtime/action-contract.js')
 const { getToolSchemas } = await import('./capabilities/schemas.js')
@@ -59,6 +59,8 @@ const server = http.createServer(async (req, res) => {
 })
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
 const baseURL = `http://127.0.0.1:${server.address().port}`
+// Production discovery accepts official credentials only; redirect requests to our isolated mock server.
+const execModelWeb = (name, args, context = {}) => execSearchService(name, args, { ...context, fetchImpl: (url, options) => fetch(baseURL + new URL(url).pathname, options) })
 const deepseek = { provider: 'deepseek', model: 'deepseek-flash', apiKey: 'test-secret-key', baseURL, apiFormat: 'chat-completions' }
 after(async () => {
   await new Promise(resolve => server.close(resolve))
@@ -152,9 +154,9 @@ test('DeepSeek Pro analyzes an uploaded image with the same key and Flash in eit
   assert.equal(missingSlot.ok, false, 'explicit missing slot must not silently use another provider')
 })
 
-test('DeepSeek search/fetch use official routes and only fetched content satisfies source verification', async () => {
-  Object.assign(config, deepseek)
-  const result = JSON.parse(await execModelWeb('model_web_search', { query: '最新资料', count: 3 }))
+test('DeepSeek web_search uses native routes and rejects the retired fetch tool', async () => {
+  Object.assign(config, deepseek, { baseURL: 'https://api.deepseek.com' })
+  const result = JSON.parse(await execModelWeb('web_search', { query: '最新资料', count: 3 }))
   assert.equal(result.ok, true)
   assert.equal(result.sources[0].url, 'https://example.com/article')
   assert.equal(requests.at(-1).url, '/v1/tools/search')
@@ -162,26 +164,20 @@ test('DeepSeek search/fetch use official routes and only fetched content satisfi
   await searchModelWeb({ ...deepseek, baseURL: `${baseURL}/v1` }, { query: 'empty' })
   assert.equal(requests.at(-1).url, '/v1/tools/search')
   assert.equal((await searchModelWeb(deepseek, { query: 'empty' })).results.length, 0)
-  const page = await fetchModelWeb(deepseek, { url: result.sources[0].url }, {
-    hostnameResolver: async () => [{ address: '93.184.216.34' }],
-  })
-  const evidence = [{ name: 'model_web_search', result: JSON.stringify(result) }]
-  assert.deepEqual(collectVerifiedWebResearchSources(evidence), [])
-  evidence.push({ name: 'model_web_fetch', result: JSON.stringify({ ok: true, ...page }) })
-  assert.equal(collectVerifiedWebResearchSources(evidence)[0].url, page.url)
-  assert.equal(actionContractToolSucceeded(classifyActionContract('帮我联网搜索资料'), 'model_web_search', JSON.stringify(result)), true)
-  const failed = JSON.parse(await execModelWeb('model_web_search', { query: 'error' }))
+  const evidence = [{ name: 'web_search', result: JSON.stringify(result) }]
+  assert.deepEqual(collectVerifiedWebResearchSources(evidence), [], 'snippets are not page evidence')
+  assert.equal(JSON.parse(await execModelWeb('model_web_fetch', { url: result.sources[0].url })).error, 'unknown_tool')
+  assert.equal(actionContractToolSucceeded(classifyActionContract('帮我联网搜索资料'), 'web_search', JSON.stringify(result)), true)
+  const failed = JSON.parse(await execModelWeb('web_search', { query: 'error' }))
   assert.equal(failed.ok, false)
   assert.match(failed.error, /401/)
   assert.equal(JSON.stringify(failed).includes(config.apiKey), false)
   await assert.rejects(() => searchModelWeb(deepseek, { query: 'x'.repeat(129) }), /128/)
-  await assert.rejects(() => fetchModelWeb(deepseek, { url: 'http://127.0.0.1/private' }), /Private/)
-  await assert.rejects(() => fetchModelWeb(deepseek, { url: 'https://user:password@example.com' }), /credentials/)
 })
 
 test('OpenAI search requires a completed search call and retains citation URLs', async () => {
-  Object.assign(config, deepseek, { provider: 'openai', model: 'gpt-5.5', baseURL: `${baseURL}/v1` })
-  const result = JSON.parse(await execModelWeb('model_web_search', { query: 'current research' }))
+  Object.assign(config, deepseek, { provider: 'openai', model: 'gpt-5.5', baseURL: 'https://api.openai.com/v1' })
+  const result = JSON.parse(await execModelWeb('web_search', { query: 'current research' }))
   assert.equal(result.ok, true, JSON.stringify(result))
   assert.deepEqual(result.sources, [{ url: 'https://example.com/article', title: 'Original article' }])
   assert.equal(requests.at(-1).body.tool_choice, 'required')
@@ -192,61 +188,51 @@ test('OpenAI search requires a completed search call and retains citation URLs',
   }), /未完成实际联网搜索/)
 })
 
-test('agent research loop searches, fetches and delivers a verified source without browser navigation', async () => {
+test('agent uses only web_search to retrieve content and deliver cited research', async () => {
   Object.assign(config, deepseek, { model: 'deepseek-v4-pro', apiFormat: 'responses' })
   const executions = []
   let rounds = 0
   const result = await callLLM({
-    systemPrompt: 'Search and verify one original source, then answer with a link.',
-    message: '帮我联网搜索资料，并核验一个来源。',
-    tools: ['model_web_search', 'model_web_fetch'], mustReply: true, localReply: true,
+    systemPrompt: 'Search and cite.', message: '帮我联网搜索资料',
+    tools: ['web_search'], mustReply: true, localReply: true,
     toolContext: { currentTargetId: 'ID:test', actionContract: {
-      id: 'web_research', label: '联网检索并核验原文来源', minimumVerifiedSources: 1,
-      requiredTools: ['model_web_search', 'model_web_fetch', 'browser_navigate'],
+      id: 'web_research', label: '联网查询', minimumVerifiedSources: 1, requiredTools: ['web_search'],
     } },
-    _streamOnceForTest: async ({ messages, toolSchemas }) => {
-      rounds++
-      assert.ok(toolSchemas.some(schema => schema.function.name === 'model_web_search'))
-      if (rounds === 3) {
-        assert.ok(messages.some(item => item.type === 'function_call_output' && item.output.includes('Verified original')))
-        return { content: '已核验：[Original article](https://example.com/article)', toolCalls: [], aborted: false }
-      }
-      assert.ok(rounds < 3, 'native evidence must not cause an extra browser-required round')
-      const name = rounds === 1 ? 'model_web_search' : 'model_web_fetch'
-      const args = rounds === 1 ? { query: 'research' } : { url: 'https://example.com/article' }
-      const id = `call_${rounds}`
-      return { content: '', aborted: false, toolCalls: [{ id, name, arguments: JSON.stringify(args) }],
-        outputItems: [{ type: 'function_call', call_id: id, id: `fc_${rounds}`, name, arguments: JSON.stringify(args) }] }
+    _streamOnceForTest: async ({ toolSchemas }) => {
+      assert.ok(toolSchemas.some(schema => schema.function.name === 'web_search'))
+      if (++rounds === 1) return { content: '', aborted: false, toolCalls: [{ id: 's1', name: 'web_search', arguments: '{"query":"research"}' }] }
+      assert.equal(rounds, 2)
+      return { content: '已核验：[Original article](https://example.com/articles/original)', toolCalls: [], aborted: false }
     },
-    _executeToolForTest: async (name, args, context) => {
+    _executeToolForTest: async name => {
       executions.push(name)
       if (name === 'send_message') return JSON.stringify({ ok: true, delivered: true })
-      return execModelWeb(name, args, { ...context, hostnameResolver: async () => [{ address: '93.184.216.34' }] })
+      return JSON.stringify({ ok: true, results: [{ url: 'https://example.com/articles/original', title: 'Original article',
+        content: 'Verified original', verified: true, evidence_kind: 'page_content', date_status: 'unfiltered' }] })
     },
   })
   assert.equal(result.delivered, true)
-  assert.equal(rounds, 3)
-  assert.deepEqual(executions, ['model_web_search', 'model_web_fetch', 'send_message'])
+  assert.deepEqual(executions, ['send_message', 'web_search', 'send_message'])
 })
 
 test('native tools are discoverable, gated by configuration, cancellable and respect blocked tools', async () => {
-  Object.assign(config, deepseek)
+  Object.assign(config, deepseek, { baseURL: 'https://api.deepseek.com' })
   const ctx = { text: '搜索最新资料', rawText: '搜索最新资料', isTick: false }
   const tools = capabilityToolsFor(ctx)
-  assert.ok(tools.includes('model_web_search'))
-  assert.ok(tools.includes('model_web_fetch'))
-  assert.equal(getToolSchemas(modelWebTools()).length, 2)
-  assert.ok(findCapabilitiesByQuery('model_web_search').some(item => item.tools.includes('model_web_search')))
-  config.security.blockedTools = ['model_web_search']
-  assert.equal(evaluateToolPolicy('model_web_search', {}).allowed, false)
+  assert.ok(tools.includes('web_search'))
+  assert.ok(!tools.includes('model_web_fetch'))
+  assert.equal(getToolSchemas(modelWebTools()).length, 1)
+  assert.ok(findCapabilitiesByQuery('web_search').some(item => item.tools.includes('web_search')))
+  config.security.blockedTools = ['web_search']
+  assert.equal(evaluateToolPolicy('web_search', {}).allowed, false)
   config.security.blockedTools = []
   const controller = new AbortController()
   controller.abort()
   const count = requests.length
-  await assert.rejects(() => execModelWeb('model_web_search', { query: 'test' }, { signal: controller.signal }), { name: 'AbortError' })
+  await assert.rejects(() => execModelWeb('web_search', { query: 'test' }, { signal: controller.signal }), { name: 'AbortError' })
   assert.equal(requests.length, count)
   Object.assign(config, { provider: 'custom', apiKey: null, baseURL: null })
   assert.deepEqual(modelWebTools(), [])
-  assert.equal(JSON.parse(await execModelWeb('model_web_search', { query: 'test' })).error, 'not_configured')
-  assert.ok(capabilityToolsFor(ctx).includes('browser_navigate'))
+  assert.equal(JSON.parse(await execModelWeb('web_search', { query: 'test' })).error, 'not_configured')
+  assert.ok(capabilityToolsFor(ctx).includes('run_command'))
 })

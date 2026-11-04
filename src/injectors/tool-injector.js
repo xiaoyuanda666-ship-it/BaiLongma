@@ -11,10 +11,6 @@ import { selectTools } from '../memory/tool-router.js'
 import { formatToolPromptHintsForSchemas } from '../memory/active-policies.js'
 import { getToolSchemas } from '../capabilities/schemas.js'
 import { filterStrictEvaluationTools } from '../runtime/strict-evaluation.js'
-import {
-  filterSendMessageForLocalReply,
-  turnNeedsExternalSendMessage,
-} from '../runtime/local-reply-tools.js'
 
 const API_KEY_RE = /\b(?:sk|ak|rk|pk|ark)-[A-Za-z0-9_\-.]{12,180}\b/i
 const API_DOCS_RE = /https?:\/\/|api|docs?|platform|capability|endpoint|base[-_\s]?url|model|auth|\u6587\u6863|\u63a5\u53e3|\u914d\u7f6e|\u80fd\u529b/i
@@ -119,21 +115,14 @@ export function finalizeToolInjection({
   actionContract = null,
   activePolicies = [],
 } = {}) {
-  let turnTools = Array.isArray(initialTools) ? initialTools.filter(Boolean) : []
+  let turnTools = Array.isArray(initialTools) ? initialTools.filter(name => name && name !== 'speak' && name !== 'express') : []
   if (silentSignal) {
     turnTools = []
   } else if (!turnTools.includes('send_message')) {
     turnTools = ['send_message', ...turnTools]
   }
   turnTools = filterStrictEvaluationTools(turnTools, strictEvaluation)
-  turnTools = filterSendMessageForLocalReply(turnTools, { localReply, silentSignal, input })
-
-  if (voiceTurn && !silentSignal && !turnNeedsExternalSendMessage(input)) {
-    turnTools = turnTools.filter(name => name !== 'send_message')
-  }
-  if (localReply && turnTools.includes('capability_demo')) {
-    turnTools = turnTools.filter(name => name !== 'send_message')
-  }
+  // Expression stays available on local and voice turns too.
 
   const requiredTools = actionContract?.requiredTools || []
   for (const name of requiredTools) {

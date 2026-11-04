@@ -1,3 +1,5 @@
+import { getSearchSettings } from '../search/connections.js'
+import { isRetiredWebTool } from './web-access.js'
 import { getInstalledToolSchema } from './marketplace/index.js'
 import { getMcpToolSchema } from '../mcp/client-manager.js'
 import { TOOL_SCHEMAS } from './builtin-tools.js'
@@ -9,7 +11,14 @@ export { TOOL_SCHEMAS } from './builtin-tools.js'
 // connected and supplied a schema.  Returning a name that has no schema makes
 // the model believe it can act while the provider never receives that tool.
 export function getToolSchema(name) {
-  if (typeof name !== 'string' || !name) return null
+  if (name === 'speak') return null // Legacy executor only; expression uses send_message.
+  if (typeof name !== 'string' || !name || isRetiredWebTool(name)) return null
+  if (name === 'web_search') {
+    const schema = TOOL_SCHEMAS[name]
+    const settings = getSearchSettings()
+    const connections = settings.connections.filter(item => item.enabled).map(({ id, adapter, configured }) => ({ id, adapter, configured }))
+    return { ...schema, function: { ...schema.function, description: `${schema.function.description} Available connections: ${JSON.stringify(connections)}. Default: ${settings.defaultProvider}.` } }
+  }
   return TOOL_SCHEMAS[name] ?? getInstalledToolSchema(name) ?? getMcpToolSchema(name) ?? null
 }
 

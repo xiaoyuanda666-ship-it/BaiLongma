@@ -27,12 +27,13 @@ for (const messageBody of intents) {
 }
 
 const web = selectTools({ messageBody: '搜索今天的新闻并打开网页', isTick: false, senderId: 'ID:000001' })
-for (const tool of ['browser_set_display_mode', 'browser_navigate', 'browser_snapshot']) {
+for (const tool of ['read_file', 'run_command']) {
   assert.ok(web.includes(tool), `explicit web intent injects ${tool} in the first round`)
 }
 
 const systemBrowser = selectTools({ messageBody: '用我电脑上的浏览器打开 https://example.com', isTick: false })
-assert.ok(systemBrowser.includes('system_browser_open'), 'explicit system-browser request injects its only valid tool')
+assert.ok(systemBrowser.includes('run_command') && systemBrowser.includes('read_file'), 'browser requests expose the bsk skill and CLI')
+assert.ok(!systemBrowser.includes('system_browser_open'), 'retired browser tools stay hidden')
 assert.ok(!systemBrowser.includes('browser_navigate'), 'system-browser request does not expose the managed-browser substitute')
 
 const install = selectTools({ messageBody: '帮我安装一个软件', isTick: false, senderId: 'ID:000001' })

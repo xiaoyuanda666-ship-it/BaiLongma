@@ -122,7 +122,8 @@ export function buildResponsesRequest({
   temperature,
   topP,
   maxTokens,
-  thinking = true,
+  thinking = 'medium',
+  jsonOutput = false,
   reasoningControl = 'omit',
   omitSampling = false,
   stream = true,
@@ -151,7 +152,7 @@ export function buildResponsesRequest({
     || (normalizedProvider === 'openai' && (normalizedModel.startsWith('gpt-5') || /^o\d/.test(normalizedModel)))
   if (supportsReasoningControl) {
     request.reasoning = {
-      effort: thinking ? 'high' : (normalizedProvider === 'deepseek' ? 'low' : 'none'),
+      effort: thinking === false ? 'none' : thinking === 'medium' ? 'medium' : 'high',
     }
     // OpenAI only returns a public reasoning summary when it is explicitly
     // requested. Keep this provider-gated because Responses-compatible
@@ -159,6 +160,10 @@ export function buildResponsesRequest({
     if (normalizedProvider === 'openai' && thinking) {
       request.reasoning.summary = 'auto'
     }
+  }
+
+  if (jsonOutput && ['deepseek', 'openai'].includes(normalizedProvider)) {
+    request.text = { format: { type: 'json_object' } }
   }
 
   const tools = toResponsesTools(toolSchemas)

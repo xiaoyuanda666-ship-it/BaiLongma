@@ -1,3 +1,4 @@
+import { isVoiceChannel } from './runtime/channel.js'
 import { getDB, closeDBForTest } from './db/connection.js'
 import { CANONICAL_USER_ID, normalizeConversationPartyId } from './db/utils.js'
 
@@ -839,7 +840,7 @@ export function getCurrentThreadId() { return currentThreadId }
 // focus_topic / open_question 优先取调用方显式传入；未传时 focus_topic 读 currentFocusTopic。
 export function insertConversation({
   role, from_id, to_id = null, content, timestamp,
-  channel = '', external_party_id = '',
+  channel = '', external_party_id = '', message_format = '',
   focus_topic = null, open_question = 0, thread_id = null,
   delivery_status = '',
   resource_state = '', resource_metadata = '',
@@ -847,18 +848,21 @@ export function insertConversation({
   const db = getDB()
   const fromId = normalizeConversationPartyId(from_id)
   const toId = normalizeConversationPartyId(to_id)
+  const messageFormat = ['text', 'voice', 'social'].includes(message_format) ? message_format
+    : isVoiceChannel(channel) ? 'voice'
+    : /^(WECHAT(_CLAWBOT|_OFFICIAL)?|WECOM|DISCORD|FEISHU)$/i.test(channel) ? 'social' : 'text'
   const topic = focus_topic == null ? currentFocusTopic : String(focus_topic || '')
   const threadId = thread_id == null ? currentThreadId : String(thread_id || '')
   const info = db.prepare(`
     INSERT INTO conversations (
       role, from_id, to_id, content, timestamp, channel, external_party_id,
-      focus_topic, open_question, thread_id, delivery_status, resource_state, resource_metadata
+      focus_topic, open_question, thread_id, delivery_status, resource_state, resource_metadata, message_format
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     role, fromId, toId, content, timestamp, channel || '', external_party_id || '',
     topic, open_question ? 1 : 0, threadId, delivery_status || '',
-    resource_state || '', typeof resource_metadata === 'string' ? resource_metadata : JSON.stringify(resource_metadata || ''),
+    resource_state || '', typeof resource_metadata === 'string' ? resource_metadata : JSON.stringify(resource_metadata || ''), messageFormat,
   )
   return Number(info.lastInsertRowid) || 0
 }
@@ -904,7 +908,7 @@ export function updateConversationDeliveryStatus(id, status) {
 // has not spoken since it was sent. This is the durable heartbeat idempotency
 // boundary: process restarts and long tick intervals must not turn silence into
 // a reason to send the same message again.
-export function findUnansweredDeliveredOutbound({ toId, content, channel = '', externalPartyId = '' } = {}) {
+export function findUnansweredDeliveredOutbound({ toId, content, channel = '', externalPartyId = '', messageFormat = '' } = {}) {
   const normalizedId = normalizeConversationPartyId(toId)
   if (!normalizedId || !String(content || '').trim()) return null
   return getDB().prepare(`
@@ -916,6 +920,7 @@ export function findUnansweredDeliveredOutbound({ toId, content, channel = '', e
       AND channel = ?
       AND external_party_id = ?
       AND delivery_status = 'delivered'
+      AND (? = '' OR message_format = ?)
       AND id > COALESCE((
         SELECT MAX(id)
         FROM conversations
@@ -923,7 +928,7 @@ export function findUnansweredDeliveredOutbound({ toId, content, channel = '', e
       ), 0)
     ORDER BY id DESC
     LIMIT 1
-  `).get(normalizedId, String(content), String(channel || ''), String(externalPartyId || ''), normalizedId) || null
+  `).get(normalizedId, String(content), String(channel || ''), String(externalPartyId || ''), messageFormat, messageFormat, normalizedId) || null
 }
 
 // P0-1：给本轮触发判定的 user 消息回填 focus_topic
@@ -1248,7 +1253,7 @@ const RECENT_RAW_CONTEXT_FLOOR = 60
 const CONVERSATION_COLUMNS = `
   id, role, from_id, to_id, content, channel, timestamp, created_at,
   external_party_id, focus_absorbed, focus_topic, open_question, thread_id, delivery_status,
-  resource_state, resource_metadata
+  resource_state, resource_metadata, message_format
 `
 
 function normalizeConversationLimit(limit, fallback = 20) {

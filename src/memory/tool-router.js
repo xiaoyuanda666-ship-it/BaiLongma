@@ -1,3 +1,4 @@
+import { isRetiredWebTool } from '../capabilities/web-access.js'
 // 按需注入工具选择器（动态上下文记忆池第 4 步）。
 //
 // 工具选择有两层：能力注册表中已经声明为当前意图可直接执行的能力，以及明确的
@@ -59,7 +60,7 @@ const TICKER_TOOLS      = ['set_tick_interval']
 // schemas available in its first turn so the fixed validation cannot be skipped
 // or abandoned while waiting for on-demand discovery.
 const STARTUP_SELF_CHECK_TOOLS = [
-  'speak',
+  'send_message',
   'complete_startup_self_check',
   ...FILESYSTEM_TOOLS,
   'browser_navigate',
@@ -83,7 +84,7 @@ const ADMIN_TOOLS       = [
 
 // 多模态生成（按 mmCaps gate；关键词命中后才注入对应工具）
 const MM_GEN_TOOLS = {
-  tts:    'speak',
+  tts:    'send_message',
   lyrics: 'generate_lyrics',
   music:  'generate_music',
   image:  'generate_image',
@@ -300,7 +301,8 @@ export function selectTools(ctx = {}) {
   // 最后一道 delete 兜底,确保不被任何路径加回来。用于跨 turn 抑制 set_tick_interval 等，以及挡住已移除的旧工具名。
   const suppressed = new Set([
     'generate_video',
-    'web_search',
+    'model_web_search',
+    'model_web_fetch',
     'web_read',
     'fetch_url',
     'browser_read',
@@ -389,5 +391,5 @@ export function selectTools(ctx = {}) {
   // 防御未来扩展时(新分组、新 fallback、新 marketplace 路径)破坏抑制语义。
   for (const name of suppressed) out.delete(name)
 
-  return [...out]
+  return [...out].filter(name => !isRetiredWebTool(name))
 }

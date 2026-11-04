@@ -32,7 +32,7 @@ export const commsSchemas = {
     function: {
       name: 'send_message',
       description: [
-        'Send a message to an individual by ID. All outbound communication must use this tool; do not output reply content directly.',
+        'Unified expression tool: choose when to communicate and choose format=text (local chat), voice (computer speakers via TTS), or social (WeChat/Discord/Feishu/WeCom). Expression is an execution action. All assistant prose remains private; only an explicit tool call communicates. Use separate calls if both speech and a detailed text answer are useful. In a local voice conversation prefer format=voice for ordinary short replies; honor explicit text/quiet requests and use text for visual details.',
         '',
         'Guidance (no longer enforced by the runtime — your responsibility to follow):',
         '',
@@ -51,7 +51,7 @@ export const commsSchemas = {
         '• When a single user turn deserves a reply, send exactly one send_message in that turn. Multiple sends in one turn are only acceptable when the contents are genuinely different (e.g. a status update during a long task that takes many seconds).',
         '• For document or knowledge-base lookup questions, retrieve silently and send exactly one final answer. Never send “let me search”, retries, tool names, query syntax, ranking details, or other implementation mechanics to the user.',
         '• A successful send_message result proves only that the message was delivered. It does not prove that work mentioned or promised in the message was completed, and it is not a terminal tool-loop signal. If the message says you will inspect, search, create, execute, or modify something next, continue with the relevant tool or find_tool.',
-        '• NEVER split a closing pleasantry into a second send_message. If you already sent the main reply and feel tempted to follow up with "有需要随时叫我", "希望对你有帮助", "还有什么需要吗", "为您效劳", "祝你..." — STOP. Those lines add zero information; merge them into nothing, not into a second call. The runtime will suppress such follow-up sends as filler.',
+        '• NEVER split a closing pleasantry into a second send_message. If you already sent the main reply and feel tempted to follow up with "有需要随时叫我", "希望对你有帮助", "还有什么需要吗", "为您效劳", "祝你..." — STOP. Those lines add zero information; merge them into nothing, not into a second call. The runtime may remind you once that this appears redundant. Read the prior delivery evidence; if you still judge the action necessary, request it again after receiving that reminder.',
         '',
         '## A message is written TO the user, never a note to yourself',
         '• send_message content is delivered verbatim to the user. It must be addressed TO them, in second person — not internal monologue ABOUT them or ABOUT what you are doing.',
@@ -74,6 +74,11 @@ export const commsSchemas = {
           content: {
             type: 'string',
             description: 'Message text. Delivered verbatim. Required unless image_path or media_path is provided. When sending media, this becomes the optional caption.'
+          },
+          format: {
+            type: 'string',
+            enum: ['text', 'voice', 'social'],
+            description: 'Choose explicitly: text writes local chat, voice synthesizes audio on computer speakers with synchronized text in chat history, social sends through the specified social channel. Omitted format preserves legacy channel routing, without automatic speech.'
           },
           image_path: {
             type: 'string',

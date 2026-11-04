@@ -4,7 +4,7 @@
 // Run: node src/test-capability-registry.js
 
 import {
-  BROWSER_TOOLS,
+  BROWSER_TOOLS as LEGACY_BROWSER_TOOLS,
   CAPABILITIES,
   capabilityToolsFor,
   capabilityContextBlocks,
@@ -20,30 +20,9 @@ function assert(cond, label) {
 }
 const has = (arr, x) => arr.includes(x)
 const none = (arr, xs) => xs.every(x => !arr.includes(x))
-const EXPECTED_BROWSER_TOOLS = [
-  'browser_navigate',
-  'browser_navigate_back',
-  'browser_navigate_forward',
-  'browser_reload',
-  'browser_snapshot',
-  'browser_find',
-  'browser_click',
-  'browser_type',
-  'browser_fill_form',
-  'browser_select_option',
-  'browser_press_key',
-  'browser_hover',
-  'browser_drag',
-  'browser_wait_for',
-  'browser_handle_dialog',
-  'browser_tabs',
-  'browser_take_screenshot',
-  'browser_console_messages',
-  'browser_resize',
-  'browser_close',
-]
+const BROWSER_TOOLS = ['read_file', 'run_command']
 const FORBIDDEN_BROWSER_TOOLS = [
-  'web_search',
+  ...LEGACY_BROWSER_TOOLS,
   'web_read',
   'fetch_url',
   'browser_read',
@@ -66,39 +45,37 @@ function ctx(rawText, isTick = false) {
 {
   const caps = listCapabilities()
   const ids = caps.map(c => c.id)
-  assert(['system-browser', 'interactive-browser', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install', 'device-information-subscription'].every(id => ids.includes(id))
+  assert(['bsk', 'model-web', 'weather', 'hotspot', 'worldcup', 'typhoon', 'software-install', 'device-information-subscription'].every(id => ids.includes(id))
     && !ids.includes('web'),
     `1) listCapabilities 含台风在内的 v1 能力 (got: ${ids.join(',')})`)
   assert(caps.every(c => c.label && c.summary), '1) 每个能力都有 label + summary（自感知用）')
-  assert(BROWSER_TOOLS.join(',') === EXPECTED_BROWSER_TOOLS.join(','),
-    `1b) 浏览器能力只暴露官方 MCP 安全白名单 (got: ${BROWSER_TOOLS.join(',')})`)
-  assert(none(BROWSER_TOOLS, FORBIDDEN_BROWSER_TOOLS),
-    '1c) 自研会话工具、任意 JS 与文件入口不在浏览器白名单')
+  assert(caps.every(c => none(c.tools || [], FORBIDDEN_BROWSER_TOOLS)),
+    '公开能力不暴露已移除的浏览器工具')
 }
 {
   const systemBrowser = capabilityToolsFor(ctx('用我电脑上的浏览器打开 https://example.com'))
-  assert(has(systemBrowser, 'system_browser_open') && none(systemBrowser, BROWSER_TOOLS),
-    `1d) 电脑浏览器与白龙马 Playwright 工具严格分离 (got: ${systemBrowser.join(',')})`)
+  assert(BROWSER_TOOLS.every(name => has(systemBrowser, name)) && none(systemBrowser, FORBIDDEN_BROWSER_TOOLS),
+    `1d) 电脑浏览器请求路由到 bsk (got: ${systemBrowser.join(',')})`)
 }
 
 // ===== 2) tool 注入门解耦 =====
 {
-  // 搜索、读取、交互统一只暴露官方 Playwright MCP 白名单。
+  // 搜索、读取、交互统一只暴露官方 bsk CLI 白名单。
   const t = capabilityToolsFor(ctx('搜一下 vLLM'))
   assert(BROWSER_TOOLS.every(name => has(t, name)) && none(t, FORBIDDEN_BROWSER_TOOLS),
-    `2a) 搜索 → 仅 Playwright MCP (got: ${t.join(',')})`)
+    `2a) 搜索 → 仅 bsk CLI (got: ${t.join(',')})`)
 }
 {
   const staticRead = capabilityToolsFor(ctx('总结这篇文章正文 https://example.com/a'))
   assert(BROWSER_TOOLS.every(name => has(staticRead, name)) && none(staticRead, FORBIDDEN_BROWSER_TOOLS),
-    `2a2) 静态正文 → 仅 Playwright MCP (got: ${staticRead.join(',')})`)
+    `2a2) 静态正文 → 仅 bsk CLI (got: ${staticRead.join(',')})`)
   const dynamicRead = capabilityToolsFor(ctx('用无头浏览器读取这个 JS 动态网页正文'))
   assert(BROWSER_TOOLS.every(name => has(dynamicRead, name)) && none(dynamicRead, FORBIDDEN_BROWSER_TOOLS),
-    `2a3) 动态正文 → 仅 Playwright MCP (got: ${dynamicRead.join(',')})`)
+    `2a3) 动态正文 → 仅 bsk CLI (got: ${dynamicRead.join(',')})`)
   const stateful = capabilityToolsFor(ctx('打开 https://example.com 并点击登录'))
   assert(BROWSER_TOOLS.every(name => has(stateful, name))
     && none(stateful, FORBIDDEN_BROWSER_TOOLS),
-  `2a4) 状态化网页 → 仅 Playwright 组 (got: ${stateful.join(',')})`)
+  `2a4) 状态化网页 → 仅 bsk 组 (got: ${stateful.join(',')})`)
   for (const phrase of [
     '访问 https://example.com', 'visit example.com',
     'go to https://example.com', '查看网站 https://example.com',
@@ -106,10 +83,10 @@ function ctx(rawText, isTick = false) {
     const routed = capabilityToolsFor(ctx(phrase))
     assert(BROWSER_TOOLS.every(name => has(routed, name))
       && none(routed, FORBIDDEN_BROWSER_TOOLS),
-    `2a5) 明确导航同义词 → 仅 Playwright: ${phrase} (got: ${routed.join(',')})`)
+    `2a5) 明确导航同义词 → 仅 bsk: ${phrase} (got: ${routed.join(',')})`)
   }
   assert(none(capabilityToolsFor(ctx('go to definition in the editor')), BROWSER_TOOLS),
-    '2a6) 无 URL 的普通技术表达不误触发 Playwright')
+    '2a6) 无 URL 的普通技术表达不误触发 bsk')
 }
 {
   // Tick 不因心跳身份自动预装业务能力；需要时由 find_tool 发现。
@@ -138,10 +115,10 @@ function ctx(rawText, isTick = false) {
   assert(has(t, 'install_software'), `2e) 安装意图 → install_software (got: ${t.join(',')})`)
 }
 {
-  // 天气也必须走唯一的官方 Playwright MCP 网页通道。
+  // 天气也必须走唯一的官方 bsk CLI 网页通道。
   const t = capabilityToolsFor(ctx('深圳天气怎么样'))
   assert(BROWSER_TOOLS.every(name => has(t, name)) && none(t, FORBIDDEN_BROWSER_TOOLS),
-    `2f) 天气 → 仅 Playwright MCP (got: ${t.join(',')})`)
+    `2f) 天气 → 仅 bsk CLI (got: ${t.join(',')})`)
 }
 {
   const phrase = '我希望你关注我的鼠标键盘的电量信息，电量比较低的时候你提醒我充电'
@@ -166,12 +143,9 @@ function ctx(rawText, isTick = false) {
     '3c2) 台风 → Typhoon Monitoring Panel 块')
   assert(capabilityContextBlocks(ctx('安装微信')).some(b => b.includes('Software Install Workflow')),
     '3d) 安装 → Software Install Workflow 块')
-  const browserContext = capabilityContextBlocks(ctx('打开网页并点击登录')).find(b => b.includes('BaiLongma Built-in Chromium')) || ''
-  assert(browserContext.includes('browser_navigate') && browserContext.includes('browser_snapshot')
-    && browserContext.includes('actions return a fresh accessibility snapshot')
-    && browserContext.includes('instead of routinely calling browser_snapshot')
-    && browserContext.includes('Chrome DevTools uid values') && browserContext.includes('browser_run_code_unsafe'),
-  '3e) 浏览器工作流说明专用 Chrome 自动 snapshot、显式兜底、安全截图和禁用工具')
+  const browserContext = capabilityContextBlocks(ctx('打开网页并点击登录')).find(b => b.includes('bsk browser skill')) || ''
+  assert(browserContext.includes('SKILL.md') && browserContext.includes('run_command')
+    && browserContext.includes('user takeover'), '3e) 浏览器通过 bsk skill 和 CLI 操作并尊重用户接管')
   assert(['browser_sessions', 'session_id', 'page_id', 'ref epoch'].every(term => !browserContext.includes(term))
     && !/(^|[^A-Za-z0-9_])browser_open([^A-Za-z0-9_]|$)/.test(browserContext),
     '3f) 浏览器工作流不再提示自研会话/profile/epoch 模型')
@@ -198,14 +172,14 @@ function ctx(rawText, isTick = false) {
   assert(findCapabilitiesByQuery('天气').some(c => c.id === 'weather'), '4c) "天气" → 发现 weather')
   assert(findCapabilitiesByQuery('台风路径').some(c => c.id === 'typhoon'), '4c2) "台风路径" → 发现 typhoon')
   assert(findCapabilitiesByQuery('用我电脑上的浏览器').some(c => (
-    c.id === 'system-browser' && c.tools.includes('system_browser_open')
-  )), '4c3) “电脑浏览器” → 发现独立系统浏览器能力')
-  assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'interactive-browser'),
-    '4d) "上网搜索" → 发现统一 Playwright 网页能力')
+    c.id === 'bsk' && c.tools.includes('run_command')
+  )), '4c3) “电脑浏览器” → 发现bsk 浏览器能力')
+  assert(findCapabilitiesByQuery('上网搜索').some(c => c.id === 'bsk'),
+    '4d) "上网搜索" → 发现统一 bsk 网页能力')
   for (const query of ['上网搜索', '读取网页正文', '读取 JS 动态网页正文']) {
-    const tools = findCapabilitiesByQuery(query).find(c => c.id === 'interactive-browser')?.tools || []
+    const tools = findCapabilitiesByQuery(query).find(c => c.id === 'bsk')?.tools || []
     assert(BROWSER_TOOLS.every(name => tools.includes(name)) && none(tools, FORBIDDEN_BROWSER_TOOLS),
-      `4d) ${query} → 仅发现 Playwright MCP 白名单`)
+      `4d) ${query} → 仅发现 bsk CLI 白名单`)
   }
   assert(findCapabilitiesByQuery('').length === 0, '4e) 空 query → 无发现')
   const device = findCapabilitiesByQuery('关注鼠标键盘电量').find(c => c.id === 'device-information-subscription')

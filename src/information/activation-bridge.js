@@ -273,6 +273,21 @@ function activatePersistedEvent({
   let entry = null
   try {
     entry = createActivationEntry({ event, lease, candidates: leasedCandidates, queueMetadata, db })
+    if (entry.informationActivationDomain === 'user') {
+      // Expired leases can return long after a newer user turn was processed.
+      // Match the durable conversation scope, not the ephemeral UI client ID.
+      const newer = db.prepare(`
+        SELECT id FROM conversations
+        WHERE role = 'user' AND from_id = ? AND COALESCE(channel, '') = ?
+          AND COALESCE(external_party_id, '') = ? AND id > ?
+          AND COALESCE(resource_state, '') = '' AND TRIM(content) <> ''
+        ORDER BY id DESC LIMIT 1
+      `).get(entry.fromId, entry.channel, entry.externalPartyId, entry.conversationId)
+      if (newer) {
+        supersedeInformationActivation(entry, { db, retryAt: now })
+        return { handled: true, activated: false, reason: 'superseded', event, entry: null }
+      }
+    }
     enqueue(entry, entry.queueName, {
       onSuperseded: superseded => {
         supersedeInformationActivation(superseded, { db, retryAt: now })

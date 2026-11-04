@@ -6227,3 +6227,16 @@ body.typhoon-mode .console > #voice-panel .voice-transcript { flex: 1; max-width
 
 .dp-paragraph { margin-bottom: 22px; }
 .dp-paragraph:last-child { margin-bottom: 0; }
+
+/* Independent search settings use full-width controls inside connection cards. */
+#search-settings-root { font-size: 12px; line-height: 1.55; color: var(--ink2); }
+#search-settings-root p { margin: 0 0 12px; font-size: 11px; color: var(--dim); }
+#search-settings-root fieldset { min-width: 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel-raised); }
+#search-settings-root legend { padding: 0 6px; font-size: 10px; color: var(--dim); }
+#search-settings-root label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+#search-settings-root .settings-input, #search-settings-root .settings-select { width: 100%; flex: 1 1 160px; }
+#search-settings-root .settings-btn { display: inline-flex; width: auto; height: auto; min-height: 30px; margin: 4px 6px 4px 0; padding: 5px 10px; font-size: 11px; }
+#search-settings-root [data-rule] { padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+#search-settings-root [data-save] { margin: 12px 18px; color: var(--cool); }
+#search-settings-root [data-feedback] { display: block; margin: 0 18px 16px; overflow-wrap: anywhere; }
+.settings-modal:has(.settings-tab[data-tab="search"].active) .settings-autosave-status { visibility: hidden; }

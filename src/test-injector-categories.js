@@ -42,8 +42,8 @@ const localTools = finalizeToolInjection({
   localReply: true,
   input: '读取文件',
 })
-assert.deepEqual(localTools.turnTools, ['read_file'])
-assert.deepEqual(localTools.modelToolNames, ['read_file'])
+assert.deepEqual(localTools.turnTools, ['send_message', 'read_file'])
+assert.deepEqual(localTools.modelToolNames, ['send_message', 'read_file'])
 
 const contractedTools = finalizeToolInjection({
   initialTools: ['read_file'],

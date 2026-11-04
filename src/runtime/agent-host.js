@@ -748,7 +748,7 @@ export async function createAgentRuntime({
         ...performanceEventIds,
         sessionRef,
         label,
-        content: isScheduledTask ? '' : content,
+        content: '', // Completion is status only; expression travels through tool events.
         runtimeLane,
         target_client_id: msg?.clientId || '',
       })
@@ -1012,11 +1012,11 @@ export async function createAgentRuntime({
       //   （见 capabilities/capability-registry.js）。此处不再以 direction 重复注入同一份文本。
       if (isUserTurn && isVoiceChannel(msg?.channel)) {
         directions.push('Voice mode: answer with judgment and meaning first. Do not read out an inventory. If details are merely evidence, compress them into the situation they prove.')
-        directions.push('Voice mode style: speak like a person in the room. Default to one or two short sentences. No Markdown, no bullets, no headings, no process acknowledgement, no repeated summary. Say the situation, then stop.')
+        directions.push('Voice mode expression: prefer send_message with format="voice" for an ordinary reply, unless the user requests text/quiet or the content needs a visual format. Speech is an explicit tool action. Speak like a person in the room. Default to one or two short sentences. No Markdown, no bullets, no headings, no process acknowledgement, no repeated summary. Say the situation, then stop.')
         directions.push('The current user message came from voice input. Speak naturally and concisely — like talking to a person, not writing an article. Get to the point, avoid filler phrases, and do not use Markdown formatting (no bullet points, asterisks, or headers). Say what needs to be said and stop.')
         directions.push('For voice input, do not send process acknowledgements like "I will look" or "let me check" before the answer. Send one compact answer unless you truly need a slow tool and have no result yet.')
-        directions.push('If the user asks you to read, repeat, or output exact text for recording, reply with the exact text as normal chat text. Do not call the speak tool; this voice channel already turns assistant text into audio automatically. Do not paraphrase, summarize, shorten, or add commentary.')
-        directions.push('If the voice input is clearly a speech recognition error (meaningless noise, garbled syllables, random characters) OR appears to be ambient speech not directed at you — such as someone nearby talking to another person, background conversation, or utterances with no plausible intent to address an AI assistant — treat it as noise and stay genuinely silent. Do NOT call send_message or any other tool. Critically, do NOT write any spoken sentence about it either: on a voice/local turn your plain text reply is read aloud by TTS, so explaining "this looks like recognition noise, so I will stay silent" is self-defeating — that explanation itself becomes spoken sound, which is the opposite of silence. Instead reply with a SINGLE emoji and nothing else — prefer 👂 — with no words, punctuation, or reasoning before or after it. A lone emoji gives TTS nothing meaningful to speak, so it stays effectively silent while still showing on screen that you registered the input and deliberately chose not to act on it. Only answer normally when the input is reasonably addressed to you.')
+        directions.push('If the user asks you to read, repeat, or output exact text for recording, call send_message with format="voice" and the exact text. Assistant prose is private and is never automatically spoken. Do not paraphrase, summarize, shorten, or add commentary.')
+        directions.push('If voice input is recognition noise or ambient speech not directed at you, do not call the expression tool. End silently; private assistant text is never spoken.')
       }
 
       if (keyConfigFailDir) directions.unshift(keyConfigFailDir)
@@ -1598,7 +1598,7 @@ export async function createAgentRuntime({
       // A user-authored turn has a reply body by definition. A heartbeat does not:
       // its plain text is private working output, and only an explicit send_message
       // tool call represents the model's decision to communicate externally.
-      toolContext.outputContract = (isTick || isScheduledTask || isInformationTurn) ? 'explicit_send_only' : 'user_reply'
+      toolContext.outputContract = 'explicit_send_only'
       toolContext.allowHighRiskAutonomy = false
       toolContext.strictEvaluation = strictEvaluation
       // 审视分身取证：把本轮正在累积的工具日志数组引用挂进 toolContext。execReviewWork 在循环中途
@@ -1606,10 +1606,8 @@ export async function createAgentRuntime({
       // 这是审视独立性的承重墙——主 Agent 无法在 review_work 参数里粉饰或省略它做过的事。
       toolContext.turnToolLog = toolCallLog
       voiceTurn = isUserTurn && isVoiceChannel(msg?.channel)
-      // localReply：本地渠道（语音 / TUI，非社交）下纯文本即回复，模型无需调 send_message——
-      // runtime 协议兜底会替它真正投递（含语音 TTS）。社交渠道（微信/Discord/飞书/企微）才必须
-      // send_message 才能送达外部平台。省掉 send_message 那一整轮额外 LLM 调用是语音提速的关键。
-      localReply = isUserTurn && !!msg?.fromId && !silentSignal && !isExternalChannel(msg?.channel)
+      // Every channel uses an explicit expression action; model prose stays private.
+      localReply = false
       const finalizedToolInjection = finalizeToolInjection({
         initialTools: injection.tools,
         silentSignal,
@@ -1658,8 +1656,8 @@ export async function createAgentRuntime({
           : null,
       })
       // thinking 不用"消息是否 trivial"的正则判定来开关 reasoning：浅层模式不该替模型决定"这题用不用想"
-      // ——复合意图下会把需要 reasoning 的部分误判。是否思考由「用户在设置里的显式选择」(config.thinking) 决定，
-      // 默认关闭、用户主动开启才思考；这是用户的选择，不是 runtime 按难度替它判定。
+      // ——复合意图下会把需要 reasoning 的部分误判。默认中等强度，
+      // 用户开启 config.thinking 后使用高强度；摘要等内部请求单独关闭思考。
       //
       // 流式回复：onStream 把 text/think/commentary 三种模式的 token 逐块吐出。curStreamMode 跟踪当前模式
       // 让 stream_chunk 也带上 mode（前端据此区分"思考摘要/过程说明"与"最终正文"）。sawTextStream 标记本轮
@@ -1679,12 +1677,13 @@ export async function createAgentRuntime({
         messages: llmMessages,
         tools: turnTools,
         temperature: voiceTurn ? Math.min(config.temperature, 0.35) : config.temperature,
-        thinking: config.thinking === true,
+        thinking: config.thinking === true ? true : 'medium',
         signal: controller.signal,
         toolContext,
         mustReply: !silentSignal && (isUserTurn || (isScheduledTask && msg?.deliveryPolicy === 'notify')),
         silentSignal,
         localReply,
+        onCognition: data => emitEvent('cognition', { ...data, turn_id: sessionRef }),
         onToolCall: (name, args, result) => {
           const resultText = String(result)
           let ok = true
@@ -1787,9 +1786,7 @@ export async function createAgentRuntime({
           if (event === 'start') {
             curStreamMode = mode
             if (capabilityDemoTurn && mode === 'text') return
-            // plainReply：本地渠道（语音 / TUI，非社交）下正文流即用户可见回复——前端据此把正文实时
-            //   打进聊天气泡（社交渠道回复在 send_message 工具参数里，正文流非回复，不实时显示）。
-            // speak：语音轮才自动播报——前端据此对正文流逐句流式合成。
+            // Streams are diagnostic output only; expression requires a tool.
             emitEvent('stream_start', {
               ...performanceEventIds,
               mode,
@@ -1797,15 +1794,15 @@ export async function createAgentRuntime({
               // A completion-looking draft is not user-visible evidence.  Keep
               // it private until the action contract has a successful tool
               // result; callLLM will then deliver the verified final reply.
-              plainReply: mode === 'text' && localReply && !toolContext.actionContract,
-              speak: mode === 'text' && voiceTurn && !silentSignal && !toolContext.actionContract,
+              plainReply: false,
+              speak: false,
               turn_id: sessionRef,
               target_client_id: msg?.clientId || '',
             })
             if (mode === 'text' && voiceTurn) {
               console.log(
                 `[voice-route] stream_start turn=${sessionRef}`
-                + ` target=${msg?.clientId || 'missing'} speak=${!silentSignal && !toolContext.actionContract}`,
+                + ` target=${msg?.clientId || 'missing'} speak=false`,
               )
             }
           } else if (event === 'chunk') {
@@ -1966,45 +1963,8 @@ export async function createAgentRuntime({
     }
     finishTurn(response)
 
-    // User messages must not fail silently: if the model generated a response but forgot to call send_message,
-    // the runtime delivers it as a fallback. **单一权威**：投递这件事现在完全由 callLLM 负责——
-    //   callLLM 在 mustReply && !delivered && 有可投递文本时，直接走真正的 send_message 执行器
-    //   （executeTool）代为投递，从而复用 executor 的去重 / open_question / social 派发，并把
-    //   action_log 标成 source:'fallback'（不变量 #8）。投递成功后 llmResult.delivered=true。
-    // 因此 index.js 不再从 toolCallLog 末项二次推导"是否已回复"，也不再手工 emit+dispatch+insert，
-    //   这里只剩遥测：根据 callLLM 返回的权威 delivered 信号区分"兜底投出了"与"完全无可投递文本"。
-    //   silentSignal 轮 callLLM 内部已守卫绝不投递（不变量 #1），这里也用同一守卫跳过遥测噪声。
-    if (isUserTurn && msg?.fromId && !silentSignal) {
-      const lastToolCall = toolCallLog[toolCallLog.length - 1]
-      // "模型自己发的最终回复" = 末项是 send_message 且不是 runtime 兜底打的标记。
-      //   兜底投递虽然也会在 toolCallLog 留下一条 send_message（带 fallback:true），但那不算模型遵守协议。
-      const modelSentExplicitly = lastToolCall?.name === 'send_message' && !lastToolCall?.fallback
-      if (!modelSentExplicitly) {
-        if (llmResult.delivered && localReply) {
-          // 本地渠道（语音 / TUI）：纯文本直投是设计内的快路径，不是协议违规——不发 violation 遥测。
-          //   callLLM 兜底已真正投递（含语音 TTS / 去重 / source:'fallback' 落库）。
-          console.log(`[local reply] Plain-text reply delivered to ${msg.fromId} without send_message (fast path)`)
-        } else if (llmResult.delivered) {
-          // 社交渠道：模型违反了"回复=调 send_message"协议但被 runtime 兜底救回——记一条遥测便于观测违规率。
-          console.warn(`[protocol fallback] Model did not call send_message — callLLM delivered the response body to ${msg.fromId}`)
-          emitEvent('protocol_violation', {
-            label,
-            reason: 'missing_send_message_fallback_delivered',
-            fromId: msg.fromId,
-            content: response.slice(0, 500),
-          })
-        } else {
-          // 既没显式 send_message，callLLM 也没能兜底投递（无可投递正文 / 被中止 等）→ 纯遥测。
-          console.warn(`[protocol violation] Model did not call send_message and runtime had nothing deliverable to fall back on. from=${msg.fromId}`)
-          emitEvent('protocol_violation', {
-            label,
-            reason: 'missing_send_message',
-            fromId: msg.fromId,
-            content: response.slice(0, 500),
-          })
-        }
-      }
-    }
+    // No expression is also a valid outcome. Never turn private model prose
+    // into a fallback message or report intentional silence as a violation.
 
     // 协议标记解析：单一真相源 src/runtime/markers.js（只解析，副作用留在下方原地）。
     const markers = parseMarkers(response)

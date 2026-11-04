@@ -1,3 +1,4 @@
+import { initSearchSettings } from './search-settings.js';
 import { API } from "./api-client.js";
 import {
   attachJarvisFx,
@@ -29,6 +30,7 @@ export function initSettings({
   applyHeartbeatConfig,
 } = {}) {
 const themeSwitcher = document.getElementById("theme-switcher");
+const searchSettings = initSearchSettings();
 const uiLanguageSelect = document.getElementById("settings-ui-language");
 const MEMORY_GRAPH_STORAGE_KEY = "bailongma-memory-graph-enabled";
 const VOICE_SPACE_PTT_KEY = "bailongma-voice-space-ptt-enabled";
@@ -186,6 +188,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   syncFxToggle();
 
   const credSections = {
+    xiaomi: document.getElementById("tts-creds-xiaomi"),
     doubao:     document.getElementById("tts-creds-doubao"),
     minimax:    document.getElementById("tts-creds-minimax"),
     openai:     document.getElementById("tts-creds-openai"),
@@ -249,6 +252,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     const voiceId = voiceSel?.value?.trim();
     if (voiceId) body.ttsVoiceId = voiceId;
     const fields = [
+      ["tts-xiaomi-key", "xiaomiKey"],
       ["tts-minimax-key", "minimaxKey"],
       ["tts-doubao-key", "doubaoKey"],
       ["tts-doubao-resource", "doubaoResourceId"],
@@ -277,10 +281,11 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || "语音合成配置保存失败");
     setTtsVoiceId(body.ttsVoiceId || getTtsVoiceId());
-    const secretFields = ["tts-minimax-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"];
+    const secretFields = ["tts-xiaomi-key", "tts-minimax-key", "tts-openai-key", "tts-elevenlabs-key", "tts-volcano-token"];
     for (const id of secretFields) {
       const el = document.getElementById(id);
       const bodyKey = {
+        "tts-xiaomi-key": "xiaomiKey",
         "tts-minimax-key": "minimaxKey",
         "tts-openai-key": "openaiTtsKey",
         "tts-elevenlabs-key": "elevenLabsKey",
@@ -295,6 +300,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
     ttsAutosave = createAutosave(saveTTSSettings, { feedback });
 
     const ttsTextInputs = [
+      "tts-xiaomi-key",
       "tts-minimax-key",
       "tts-doubao-key",
       "tts-doubao-resource",
@@ -461,6 +467,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       if (tab === "social") loadSocialSettings();
       if (tab === "security") loadSecuritySettings();
       if (tab === "mcp") loadMcpSettings();
+      if (tab === "search") searchSettings.load();
       if (tab === "advanced") {
         loadHeartbeatSettings();
         loadMapSettings();
@@ -789,7 +796,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
   }
 
   function syncThinkingApiFormatUI() {
-    const usesServerDefaults = cachedLlm?.apiFormat === "chat-completions";
+    const usesServerDefaults = cachedLlm?.apiFormat === "chat-completions" && cachedLlm?.provider !== "deepseek";
     const customDefaults = cachedLlm?.provider === "custom" && cachedLlm?.reasoningControl !== "effort";
     if (thinkingToggle) thinkingToggle.disabled = usesServerDefaults || customDefaults;
     if (thinkingHint) thinkingHint.textContent = t(usesServerDefaults
@@ -1184,7 +1191,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "推理强度保存失败");
         if (cachedLlm) cachedLlm.thinking = data.thinking;
-        return { message: data.thinking ? "已切换为高推理强度 · 下一轮生效" : "已切换为默认推理强度 · 下一轮生效" };
+        return { message: data.thinking ? "已切换为高推理强度 · 下一轮生效" : "已切换为中等推理强度 · 下一轮生效" };
       } catch (error) {
         thinkingToggle.checked = !thinking;
         throw error;
@@ -1824,6 +1831,7 @@ function initTTSSettings({ createAutosave, feedback } = {}) {
       });
       if (tab === "social") loadSocialSettings();
       if (tab === "mcp") loadMcpSettings();
+      if (tab === "search") searchSettings.load();
       if (tab === "advanced") {
         loadHeartbeatSettings();
         loadMapSettings();

@@ -1,3 +1,4 @@
+import { messageModalityLabel } from "./message-format.js";
 import { createMarkdownBody } from "./markdown.js";
 import { getUiClientId } from "./api-client.js";
 import { formatDateTime, t } from "./i18n/index.js";
@@ -415,13 +416,13 @@ export function initChat({
           }
           const isExternal =
             r.role === "user"
-            && ((channel && channel !== "TUI" && channel !== "API" && channel !== "SYSTEM" && channel !== "REMINDER" && channel !== "APP_SIGNAL" && channel !== "VOICE" && channel !== "语音识别")
+            && ((channel && channel !== "TUI" && channel !== "API" && channel !== "SYSTEM" && channel !== "REMINDER" && channel !== "APP_SIGNAL" && channel !== "VOICE" && channel !== "语音识别" && channel !== "语音对话" && channel !== "FOCUSBANNER")
                 || /^(wechat|discord|feishu|wecom):/i.test(r.from_id || ""));
           if (isExternal) {
             const label = friendlyChannelLabel(r.channel) || r.from_id;
             return { role: "external", text: r.content, label, messageId: r.id, timestamp: r.timestamp };
           }
-          return { role: r.role, text: r.content, messageId: r.id, timestamp: r.timestamp, channel };
+          return { role: r.role, text: r.content, messageId: r.id, timestamp: r.timestamp, channel, messageFormat: r.message_format };
         });
       return { messages, rowCount: rows.length };
     } catch { return null; }
@@ -457,6 +458,7 @@ export function initChat({
       prepend = false,
       timestamp = null,
       channel = "",
+      messageFormat = "",
       resources = [],
       resourceState = "",
       resourceDetail = "",
@@ -465,7 +467,9 @@ export function initChat({
     const defaultLabel = isResourceMessage
       ? t("shell.resourceLabel")
       : (role === "user" ? "You" : role === "jarvis" ? getAgentName() : "Peer");
-    const labelText = label || defaultLabel;
+    const modality = isResourceMessage || role === "external" ? ""
+      : messageModalityLabel({ role, channel, messageFormat, source });
+    const labelText = label || (modality ? `${defaultLabel} · ${modality}` : defaultLabel);
     if (!claimRenderedMessage({ messageId, role, text, label: labelText, source, dedupe })) return false;
     const shouldScrollToBottom = !prepend && (forceScroll || isNearChatBottom());
     const div = document.createElement("div");
@@ -603,6 +607,7 @@ export function initChat({
         source: "history",
         timestamp: i.timestamp,
         channel: i.channel,
+        messageFormat: i.messageFormat,
         resources: i.resources || [],
         resourceState: i.resourceState || "",
       }));
@@ -650,6 +655,7 @@ export function initChat({
           prepend: true,
           timestamp: item.timestamp,
           channel: item.channel,
+          messageFormat: item.messageFormat,
           resources: item.resources || [],
           resourceState: item.resourceState || "",
         });
@@ -884,6 +890,7 @@ export function initChat({
       resources: previews,
       resourceState: "uploading",
       clientMessageId,
+      channel,
       dedupe: false,
       forceScroll: true,
     });
@@ -987,6 +994,7 @@ export function initChat({
     addMsg("user", prepared.displayContent || content, {
       label: label || undefined,
       clientMessageId,
+      channel,
       dedupe: false,
       forceScroll: true,
     });
@@ -1316,7 +1324,9 @@ export function initChat({
     if (!liveEl) return false;
     const shouldScrollToBottom = isNearChatBottom();
     if (typeof text === "string") {
-      const labelText = getAgentName();
+      const modality = messageModalityLabel({ role: "jarvis", ...options });
+      const labelText = `${getAgentName()}${modality ? ` · ${modality}` : ""}`;
+      liveEl.querySelector(".msg-label").textContent = labelText;
       if (!claimRenderedMessage({ messageId: options.messageId, role: "jarvis", text, label: labelText, source: options.source || "event" })) {
         liveEl.remove();
         liveEl = null;
@@ -1336,6 +1346,14 @@ export function initChat({
     return true;
   }
 
+  function updateMessageElement(element, text) {
+    if (!element?.isConnected) return;
+    const shouldScroll = isNearChatBottom();
+    element.querySelector('.msg-body')?.remove();
+    element.appendChild(createMarkdownBody(text));
+    scrollChatToBottomIfFollowing(shouldScroll);
+  }
+
   function hasLiveJarvisMsg() { return !!liveEl; }
 
   function updateLastJarvisMsg(newText) {
@@ -1352,6 +1370,7 @@ export function initChat({
 
   return {
     addMsg,
+    updateMessageElement,
     deleteLastUserMsg,
     updateLastJarvisMsg,
     beginLiveJarvisMsg,

@@ -1,3 +1,5 @@
+> 历史记录：文中 Playwright MCP 实现和对应采集、打包脚本已移除；当前网页入口见 [browserskill-backend.md](browserskill-backend.md)。
+
 # Safari 人工访问与白龙马 Electron/Playwright 网络请求对比审计
 
 审计日期：2026-07-26

@@ -1,3 +1,4 @@
+import { isRetiredWebTool } from '../capabilities/web-access.js'
 import { browserBackend } from './browser-backend.js'
 import { browserSkillDescriptor, executeBrowserSkillTool } from './browserskill-tools.js'
 import { shutdownBrowserSkill } from './browserskill-client.js'
@@ -310,7 +311,7 @@ export function listMcpTools() {
       if (fallback) catalog.set(name, fallback)
     }
   }
-  return [...catalog.values()].map(tool => ({
+  return [...catalog.values()].filter(tool => !isRetiredWebTool(tool.alias)).map(tool => ({
     name: tool.alias,
     description: tool.description,
     source: 'mcp',
@@ -333,17 +334,20 @@ export function searchMcpTools(query = '') {
 }
 
 export function isMcpTool(name) {
+  if (isRetiredWebTool(name)) return false
   const normalized = String(name || '')
   return toolsByAlias.has(normalized) || Boolean(trustedBuiltInChromeTool(normalized))
 }
 
 export function getMcpToolMetadata(name) {
+  if (isRetiredWebTool(name)) return null
   const normalized = String(name || '')
   const tool = toolsByAlias.get(normalized) || trustedBuiltInChromeTool(normalized)
   return tool ? { ...tool, annotations: { ...tool.annotations }, inputSchema: structuredClone(tool.inputSchema) } : null
 }
 
 export function getMcpToolSchema(name) {
+  if (isRetiredWebTool(name)) return null
   const normalized = String(name || '')
   const tool = toolsByAlias.get(normalized) || trustedBuiltInChromeTool(normalized)
   if (!tool) return null
@@ -530,6 +534,7 @@ export async function executeBuiltInChromeTool(remoteName, args = {}, context = 
 }
 
 export async function executeMcpTool(name, args = {}, context = {}) {
+  if (isRetiredWebTool(name)) return JSON.stringify({ ok: false, error: 'Retired browser wrapper: use the bsk CLI skill.' })
   const normalizedName = String(name || '')
   if (getBuiltInBrowserToolDescriptor(normalizedName)) return executeBuiltInChromeTool(normalizedName, args, context)
   const tool = toolsByAlias.get(normalizedName)

@@ -34,7 +34,7 @@ function clampTtl(n) {
 }
 
 // L2 调节节奏。返回 { ok, seconds, ttl, clampedFrom, noop? } 供工具回包
-export function setCustomInterval({ seconds, ttl, reason = '' }) {
+export function setCustomInterval({ seconds, ttl, reason = '' }, { renew = false } = {}) {
   const s = clampSeconds(seconds)
   if (s === null) return { ok: false, error: 'seconds 必须是数字' }
   const t = clampTtl(ttl)
@@ -47,7 +47,7 @@ export function setCustomInterval({ seconds, ttl, reason = '' }) {
   //   （"节奏已设为 120s，持续 30 轮"），每次都重置 ttl 让节奏永远不衰减，
   //   同时浪费一轮 LLM。判定：当前已经是相同 intervalMs 且仍在生效（ttl > 0）→ noop。
   //   ttl 不重置——让自然衰减带模型回到"无定制"状态，避免它自己反复延长。
-  if (state.intervalMs === s * 1000 && state.ttl > 0) {
+  if (!renew && state.intervalMs === s * 1000 && state.ttl > 0) {
     console.log(`[Ticker] 节奏已是 ${s}s（剩 ${state.ttl} 轮），重复调用判为 noop`)
     return {
       ok: true,

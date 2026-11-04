@@ -64,11 +64,11 @@ const toolResults = thirdRoundMessages
   .filter(message => message.type === 'function_call_output')
   .map(message => String(message.output))
 assert(toolResults.some(result => result.includes('"message_sent":true')), 'the next model step sees the production-shaped structured delivery result')
-assert(toolResults.some(result => result.includes('outbound_reconsideration_required')), 'the deferred second send is visible as a fresh-decision requirement')
-assert(toolResults.some(result => result.includes('same_tick_no_new_evidence')), 'a later tool-loop round cannot impersonate a new heartbeat without new evidence')
-assert(thirdRoundMessages.some(message => String(message.content || '').includes('Communication reality check:')), 'the next model step receives a salient delivered-message fact')
-assert(thirdRoundMessages.some(message => String(message.content || '').includes('received and shown to the user')), 'a successful send is explicitly treated as visible to the user')
-assert(thirdRoundMessages.some(message => String(message.content || '').includes('do not reinterpret silence as a missed or failed delivery')), 'user silence cannot be reinterpreted as delivery failure')
+assert(toolResults.some(result => result.includes('behavior_reminder')), 'the deferred second send is visible as a fresh-decision requirement')
+assert(toolResults.some(result => result.includes('no new tool evidence')), 'a later tool-loop round cannot impersonate a new heartbeat without new evidence')
+assert(toolResults.some(result => result.includes('delivered_messages') && result.includes('First observation.')), 'the reminder contains the delivered-message fact')
+assert(toolResults.some(result => result.includes('"delivered":true')), 'the prior successful send remains visible')
+assert(toolResults.some(result => result.includes('not an execution failure')), 'a reminder cannot be reinterpreted as delivery failure')
 
 const evidenceExecuted = []
 let evidenceRounds = 0
@@ -315,7 +315,7 @@ await callLLM({
     return { content: '', reasoningContent: '', aborted: false, toolCalls: [] }
   },
 })
-assert.deepEqual(mediaMessages, ['🎵'], 'media completion still uses the single emoji closer')
+assert.deepEqual(mediaMessages, [], 'media completion gets a reminder without silently rewriting the requested content')
 
 const heartbeatMessages = buildLLMMessages({
   systemPrompt: 'heartbeat test',

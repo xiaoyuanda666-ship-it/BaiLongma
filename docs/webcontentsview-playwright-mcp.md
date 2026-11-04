@@ -1,3 +1,5 @@
+> 历史记录：文中 Playwright MCP 实现和对应采集、打包脚本已移除；当前网页入口见 [browserskill-backend.md](browserskill-backend.md)。
+
 # WebContentsView + Playwright MCP integration
 
 Validated on Electron 33.4.11 (Chromium 130, CDP 1.3) with

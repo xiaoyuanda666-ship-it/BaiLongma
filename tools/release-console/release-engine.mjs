@@ -174,7 +174,7 @@ export async function getSystemStatus({ root, version }) {
     if (!result.ok && /^HTTP 404$/i.test(result.error || '')) return [arch, 'absent']
     return [arch, 'unavailable']
   }))
-  return { git, version, probes: [ssh, health], remoteVersions, remoteVersionStates, remoteProbes: remote }
+  return { git, version, distribution: { backend: 'cdn', origin: RELEASE_CONSTANTS.downloadOrigin }, probes: [ssh, health], remoteVersions, remoteVersionStates, remoteProbes: remote }
 }
 
 async function runCheck(command, args, options = {}) {
@@ -350,12 +350,13 @@ export async function createMacReleasePlan({ root, productName, version, archs, 
     version,
     archs,
     localFiles: scan.records.map(record => record.filePath),
-    checks: ['artifact completeness and version', 'CPU architecture', 'codesign and Developer Team', 'Hardened Runtime and entitlements', 'Apple notarization ticket', 'stapler validation', 'Gatekeeper assessment', 'SHA-512 and blockmap validation', 'remote version monotonicity'],
+    checks: ['artifact completeness and version', 'CPU architecture', 'codesign and Developer Team', 'Hardened Runtime and entitlements', 'Apple notarization ticket', 'stapler validation', 'Gatekeeper assessment', 'SHA-512 and blockmap validation', 'remote version monotonicity', 'OSS/CDN full GET, SHA-512 and Range before publishing manifests'],
     serverDirectories: archs.map(arch => `${RELEASE_CONSTANTS.serverRoot}/stable/mac/${arch}`),
     downloadUrls: [...immutable.map(item => item.object), ...manifests.map(item => item.object)].map(object => `${RELEASE_CONSTANTS.origin}/${object}`),
+    cdnUrls: immutable.map(item => `${RELEASE_CONSTANTS.downloadOrigin}/${item.object}`),
     immutable,
     manifests,
-    metadataSwitch: 'After every immutable file for every selected architecture is uploaded and verified, publish all latest-mac.yml manifests.',
+    metadataSwitch: '所有架构的文件上传后，先通过 download.bailongma.top 完整下载并校验 SHA-512、大小和 Range；全部通过后才切换 latest-mac.yml。',
     totalUploadBytes: scan.totalBytes + Buffer.byteLength(manifests.map(item => item.content).join('')),
     stagingPercentage,
   }

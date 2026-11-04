@@ -59,3 +59,11 @@ export function normalizeSandboxPath(filePath) {
     .replace(/^sandbox[\\/]/i, '')
     .replace(/^\.[\\/]/, '')
 }
+
+// Bundled instructions are public application resources, not user file access.
+export function isBundledSkillPath(filePath) {
+  if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) return false
+  try {
+    return isPathInside(resolvePathThroughExistingPrefix(paths.bundledSkillsDir), resolvePathThroughExistingPrefix(filePath))
+  } catch { return false }
+}

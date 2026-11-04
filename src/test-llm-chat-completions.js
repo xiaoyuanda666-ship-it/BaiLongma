@@ -217,3 +217,12 @@ assert.equal(responses.createAccumulator().result().status, 'pending')
 assert.ok(responses.streamError(responses.createAccumulator().result()))
 
 console.log('PASS Chat Completions requests, interleaved tools, native replay, reasoning, usage, and terminal states')
+
+const medium = chat.buildRequest({ provider: 'deepseek', model: 'deepseek-flash' })
+assert.deepEqual(medium.thinking, { type: 'enabled' })
+assert.equal(medium.reasoning_effort, 'medium')
+assert.equal(chat.buildRequest({ provider: 'deepseek', thinking: true }).reasoning_effort, 'high')
+const noThinking = chat.buildRequest({ provider: 'deepseek', thinking: false })
+assert.deepEqual(noThinking.thinking, { type: 'disabled' })
+assert.equal(noThinking.reasoning_effort, undefined)
+console.log('PASS DeepSeek default medium and internal non-thinking Chat requests')

@@ -130,13 +130,13 @@ SQLite 埋点覆盖 prepare/get/all/run/iterate；初始化 schema、exec/pragma
 
 首正文 DOM 和帧机会均为 **10/10 小于 2 秒**，页面/SSE 错误均为 0；每次实际输入仍为 16,709–19,049 tokens，`reasoningTokens=0`。首次前端准备约 30 ms，后续约 0.2–1 ms。正文进入 DOM 在客户端接收后 0–0.7 ms，应用转发/渲染未显示额外秒级等待。12 次被拦截的网络均来自脱离前台 trace 的后台分类；前台未阻断网络。证据文件 `optimized-final-browser.json`，保留全部失败/缺失指标，未筛选慢样本。
 
-复现最终浏览器路径（需要已有 Playwright Chromium）：
+上述浏览器测量是历史结果；Playwright 依赖和浏览器测量脚本已移除。当前可运行 HTTP/SSE 路径诊断（不测量浏览器 DOM 或绘制）：
 
 ```sh
 ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/probe-request-performance.mjs \
   --source-dir "$HOME/Library/Application Support/Bailongma" \
-  --output /tmp/request-performance-browser.json \
-  --live-model --browser --varied --no-control --warm-embedding --runs 10
+  --output /tmp/request-performance-http.json \
+  --live-model --http --varied --no-control --warm-embedding --runs 10
 ```
 
 自定义网关能力在“设置 → 模型”选择 `reasoning.effort`，且关闭“思考”；只有验证支持的网关才启用。更换 URL 或模型时默认重置为不发送，连接验证失败不覆盖原配置。当前用户的 `llm/custom.json` 已通过该保存流程启用，原文件保存在同目录 `custom.before-latency-20261021.json.bak`（权限 0600），密钥与端点未写入报告。该字段由本次源码读取；旧安装包不会自动获得实现。

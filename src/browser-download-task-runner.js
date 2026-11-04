@@ -251,7 +251,7 @@ export class BrowserDownloadTaskRunner {
         ],
         tools: [...BROWSER_DOWNLOAD_TASK_TOOLS],
         temperature: Math.min(Number(config.temperature) || 0.3, 0.3),
-        thinking: config.thinking === true,
+        thinking: config.thinking === true ? true : 'medium',
         signal: controller.signal,
         toolContext,
         mustReply: false,

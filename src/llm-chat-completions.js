@@ -42,10 +42,16 @@ export function toChatCompletionsMessages(messages = []) {
 
 export function buildChatCompletionsRequest({
   provider = '', model, messages = [], toolSchemas = [], temperature, topP,
-  maxTokens, omitSampling = false, stream = true,
+  maxTokens, thinking = 'medium', jsonOutput = false, omitSampling = false, stream = true,
 } = {}) {
   const request = { model, messages: toChatCompletionsMessages(messages), stream }
+  const isDeepSeek = String(provider || '').toLowerCase() === 'deepseek'
+  if (isDeepSeek) {
+    request.thinking = { type: thinking === false ? 'disabled' : 'enabled' }
+    if (thinking !== false) request.reasoning_effort = thinking === 'medium' ? 'medium' : 'high'
+  }
   const isOpenAI = String(provider || '').toLowerCase() === 'openai'
+  if (jsonOutput && (isOpenAI || isDeepSeek)) request.response_format = { type: 'json_object' }
   if (!omitSampling && typeof temperature === 'number') request.temperature = temperature
   if (!omitSampling && typeof topP === 'number' && topP > 0) request.top_p = topP
   if (Number.isFinite(maxTokens) && maxTokens > 0) {

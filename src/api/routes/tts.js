@@ -27,6 +27,7 @@ export async function handleTTSRoutes(req, res, url) {
         provider: creds.provider,
         voiceId: body.voiceId || creds.voiceId || undefined,
         keys: {
+          xiaomiKey: creds.xiaomiKey,
           doubaoKey: creds.doubaoKey,
           doubaoAppId: creds.doubaoAppId,
           doubaoAccessKey: creds.doubaoAccessKey,

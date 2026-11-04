@@ -65,7 +65,7 @@ const openAIRequest = buildResponsesRequest({
   messages: [{ role: 'user', content: 'Think' }],
 })
 assert.deepEqual(openAIRequest.include, ['reasoning.encrypted_content'])
-assert.deepEqual(openAIRequest.reasoning, { effort: 'high', summary: 'auto' })
+assert.deepEqual(openAIRequest.reasoning, { effort: 'medium', summary: 'auto' })
 
 const openAIWithoutThinking = buildResponsesRequest({
   provider: 'openai',
@@ -90,7 +90,7 @@ assert.equal(buildResponsesRequest({
 }).reasoning, undefined)
 assert.deepEqual(buildResponsesRequest({
   provider: 'deepseek', model: 'deepseek-v4-pro', thinking: false, reasoningControl: 'omit',
-}).reasoning, { effort: 'low' })
+}).reasoning, { effort: 'none' })
 
 assert.deepEqual(toResponsesInput([
   { role: 'assistant', phase: 'commentary', content: 'I will inspect it.' },
@@ -376,3 +376,12 @@ try {
 }
 
 console.log('PASS Responses API request, typed stream, tool Items, usage, and terminal states')
+
+for (const provider of ['deepseek', 'openai', 'custom']) {
+  const args = { provider, model: provider === 'openai' ? 'gpt-5' : 'deepseek-flash', reasoningControl: 'effort' }
+  assert.equal(buildResponsesRequest(args).reasoning.effort, 'medium')
+  assert.equal(buildResponsesRequest({ ...args, thinking: 'medium' }).reasoning.effort, 'medium')
+  assert.equal(buildResponsesRequest({ ...args, thinking: true }).reasoning.effort, 'high')
+  assert.equal(buildResponsesRequest({ ...args, thinking: false }).reasoning.effort, 'none')
+}
+console.log('PASS default medium, explicit high, and internal non-thinking Responses requests')

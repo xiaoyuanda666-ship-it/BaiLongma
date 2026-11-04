@@ -159,6 +159,37 @@ try {
   assert.equal(recovered[0].timestamp, second.timestamp)
   assert.equal(ackInformationLease(recovered[0], { db }), 2)
 
+  // An old leased input can expire after a newer turn has already completed.
+  // Recovery must not re-run it or interrupt a newer queued turn.
+  for (const newerCompleted of [false, true]) {
+    const old = pushMessage('ID:replay', '暂停，暂停', '语音识别', { clientId: 'old-window' })
+    assert.equal(popMessage(), old)
+    const newer = pushMessage('ID:replay', '根据最新上下文回答', '语音识别', { clientId: 'new-window' })
+    if (newerCompleted) {
+      assert.equal(popMessage(), newer)
+      ackInformationLease(newer, { db })
+    }
+    nackInformationLease(old, 'expired restart lease', { db, retryAt: new Date(0), maxAttempts: 100 })
+    const recovery = resumePendingInformationActivations({ db })
+    assert.ok(recovery.some(result => result.reason === 'superseded'))
+    assert.equal(popMessage(), newerCompleted ? null : newer)
+    assert.equal(popMessage(), null)
+    assert.ok(listInformationDeliveries({ deliveryIds: old.informationDeliveryIds }, { db }).every(d => d.state === 'acked'))
+    ackInformationLease(newer, { db })
+    assert.equal(db.prepare('SELECT content FROM conversations WHERE id = ?').get(old.conversationId).content, '暂停，暂停')
+  }
+  // A message from another user cannot supersede this user's recovery.
+  const isolated = pushMessage('ID:isolated', 'still pending', 'TUI')
+  assert.equal(popMessage(), isolated)
+  const other = pushMessage('ID:other', 'newer but unrelated', 'TUI')
+  assert.equal(popMessage(), other)
+  ackInformationLease(other, { db })
+  nackInformationLease(isolated, 'restart', { db, retryAt: new Date(0), maxAttempts: 100 })
+  resumePendingInformationActivations({ db })
+  const isolatedRecovery = popMessage()
+  assert.equal(isolatedRecovery.conversationId, isolated.conversationId)
+  ackInformationLease(isolatedRecovery, { db })
+
   const staged = persistInboundMessage('ID:000001', '[resource only]', 'RESOURCE', {
     resourceState: 'pending',
   })

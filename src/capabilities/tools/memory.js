@@ -1,3 +1,4 @@
+import { behaviorReminder } from '../../runtime/behavior-reminders.js'
 import {
   searchMemories,
   searchMemoriesByKeywords,
@@ -87,13 +88,12 @@ export async function execUpsertMemory(args = {}, context = {}) {
       if (perception.mirror?.exact || (perception.mirror?.score ?? 0) >= 0.6) reasonParts.push('对方在复述你的话')
       if (perception.style?.hit) reasonParts.push('对方使用 agent 内独白语气')
       if ((perception.loop ?? 0) >= 2) reasonParts.push(`对话已陷入 ${perception.loop} 轮逐字回环`)
-      return JSON.stringify({
-        ok: false,
-        blocked: true,
-        reason: `本轮处于自我边界异常状态（${reasonParts.join('；')}）。fact 类记忆代表"用户的稳定偏好"，而当前 user 消息很可能来自模仿/复述，不应被当作偏好写入长期记忆。`,
-        blocked_mem_ids: blocked.map(m => m.mem_id).filter(Boolean),
-        hint: '若你确实想保留这次现象本身，请改用 type=knowledge（关于这次交互的观察）而不是 type=fact。',
+      const reminder = behaviorReminder(context, {
+        tool: 'upsert_memory', args,
+        reason: `当前输入可能是模仿或复述（${reasonParts.join('；')}），不一定代表用户的稳定偏好。请核对证据；可以改存本次交互观察，或在收到提醒后坚持写入。`,
+        evidence: { perception, affected_mem_ids: blocked.map(m => m.mem_id).filter(Boolean) },
       })
+      if (reminder) return reminder
     }
   }
 

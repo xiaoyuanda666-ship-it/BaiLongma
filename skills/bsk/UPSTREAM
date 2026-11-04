@@ -1,0 +1,4 @@
+https://github.com/Tencent/BrowserSkill
+Commit: 1b395fd07a047e378840285c25c4a24716aee19f
+Source: crates/bsk-cli/skill/
+SKILL.md adapted for Bailongma tool and skill discovery.

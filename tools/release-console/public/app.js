@@ -33,6 +33,7 @@ function requestFromForm(dryRun) {
 
 function renderSystem(system) {
   const cards = []
+  if(system.distribution) cards.push({label:'安装包分发',value:'OSS + CDN',ok:true,detail:system.distribution.origin})
   for (const probe of system.probes || []) cards.push({label:probe.name,value:probe.ok?'可用':'异常',ok:probe.ok,detail:probe.ok?`${probe.detail} · ${probe.latencyMs} ms`:probe.error})
   cards.push({label:'Git 分支',value:system.git.branch,ok:true,detail:system.git.commit.slice(0,12)})
   cards.push({label:'Git 工作区',value:system.git.dirty?`Dirty · ${system.git.changedFiles} 项`:'Clean',ok:!system.git.dirty,detail:system.git.dirty?'发布记录会保留 dirty 状态':'无未提交修改'})
@@ -84,6 +85,7 @@ function renderPlan(plan) {
   <div class="plan-group"><h3>检查</h3><ul>${plan.checks.map(item=>`<li>${esc(item)}</li>`).join('')}</ul></div>
   <div class="plan-group"><h3>官网服务器目录</h3><ul>${plan.serverDirectories.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
   <div class="plan-group"><h3>官网下载地址 · 不可变文件 ${plan.immutable.length} 个</h3><ul>${plan.downloadUrls.map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul></div>
+  <div class="plan-group"><h3>CDN 预热与校验 · 切换清单前完成</h3><ul>${(plan.cdnUrls||[]).map(item=>`<li><code>${esc(item)}</code></li>`).join('')}</ul><p>每个文件完整下载并校验 SHA-512、大小与 Range；失败保留旧清单。</p></div>
   <div class="plan-group"><h3>latest-mac.yml · 灰度 ${plan.stagingPercentage}%</h3>${plan.manifests.map(item=>`<strong>${esc(item.arch)}</strong><pre>${esc(item.content)}</pre>`).join('')}</div>
   <div class="plan-group"><h3>正式切换点</h3><p>${esc(plan.metadataSwitch)}</p></div>`
   updateActions()
@@ -103,7 +105,7 @@ function renderState(task) {
   $('#progressStats').textContent=`${bytes(uploaded)} / ${bytes(total)} · ${bytes(progress.speed||0)}/s · ETA ${progress.etaSeconds==null?'—':`${progress.etaSeconds}s`}`
   const services=app.task?.services||{website:'pending',validation:'pending'}
   $('#serviceStatuses').innerHTML=`<span>官网服务器: ${esc(services.website)}</span><span>验证: ${esc(services.validation)}</span>`
-  if (app.task?.preflight) renderPreflight(app.task.preflight)
+  if (app.task?.preflight && app.task.request.version === app.bootstrap?.version) renderPreflight(app.task.preflight)
   if (app.task?.logs) { app.logs=app.task.logs; renderLogs() }
   updateActions()
 }
@@ -123,12 +125,31 @@ function updateActions() {
   $('#cancelButton').disabled=!running||!app.task?.cancellable
 }
 
+function syncVersion(version) {
+  const changed = app.bootstrap.version !== version
+  app.bootstrap.version = version
+  $('#versionBadge').textContent = `v${version}`
+  $('#versionInput').value = version
+  if (changed) {
+    app.plan = null
+    renderPreflight(null)
+    $('#planSize').textContent = '需更新'
+    $('#planView').textContent = '版本已更新，请重新生成发布计划'
+    $('#confirmCheckbox').checked = false
+    $('#confirmVersion').value = ''
+    updateActions()
+  }
+  return changed
+}
+
 async function refresh() {
   $('#refreshButton').disabled=true
   try {
     const result=await api('/api/refresh',{method:'POST',body:{}}); app.snapshot=result
+    const versionChanged=syncVersion(result.system.version)
     renderSystem(result.system); renderArtifacts(result.artifacts); renderHistory(result.histories); if(result.preflight)renderPreflight(result.preflight); if(result.activeTask)renderState(result.activeTask)
     $('#refreshedAt').textContent=`刷新于 ${date(result.refreshedAt)}`
+    if(versionChanged) await makePlan()
   } catch(error){toast(error.message)} finally{$('#refreshButton').disabled=false}
 }
 
@@ -162,6 +183,7 @@ async function init() {
     app.bootstrap=await api('/api/bootstrap'); app.token=app.bootstrap.token
     $('#versionBadge').textContent=`v${app.bootstrap.version}`; $('#versionBadge').className='badge active'; $('#versionInput').value=app.bootstrap.version
     const result=await api('/api/status'); app.snapshot=result
+    syncVersion(result.system.version)
     renderSystem(result.system); renderArtifacts(result.artifacts); renderHistory(result.histories); if(result.preflight)renderPreflight(result.preflight); renderState(result.activeTask)
     $('#refreshedAt').textContent=`刷新于 ${date(result.refreshedAt)}`; connectEvents(); makePlan()
   } catch(error){toast(error.message); $('#connectionBadge').className='badge bad'; $('#connectionBadge').textContent='▲ 启动失败'}

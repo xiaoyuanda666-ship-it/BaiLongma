@@ -3,9 +3,11 @@
 // 统一返回 Node.js Readable stream，供 api.js pipe 到 HTTP 响应
 import '../network-proxy.js'
 import { Readable, Transform } from 'stream'
+import { StringDecoder } from 'node:string_decoder'
 import { DEFAULT_DOUBAO_SPEECH_RATE, DEFAULT_DOUBAO_VOICE_ID } from './tts-defaults.js'
 
 export const TTS_PROVIDERS = [
+  { id: 'xiaomi', label: '小米 MiMo', streaming: false },
   { id: 'doubao',      label: '豆包（方舟）',   streaming: true  },
   { id: 'minimax',     label: 'MiniMax',       streaming: false },
   { id: 'openai',      label: 'OpenAI TTS',   streaming: true  },
@@ -14,6 +16,7 @@ export const TTS_PROVIDERS = [
 ]
 
 export const TTS_VOICES = {
+  xiaomi: [{ id: 'mimo_default', label: 'MiMo 默认' }, { id: '冰糖', label: '冰糖（女声）' }, { id: '苏打', label: '苏打（男声）' }],
   doubao: [
     { id: 'zh_male_m191_uranus_bigtts',              label: '云舟 2.0（男声，通用）' },
     { id: 'zh_female_xiaohe_uranus_bigtts',          label: '小何 2.0（女声，通用）' },
@@ -72,6 +75,7 @@ export const TTS_PROVIDER_REQUIREMENTS = {
     groups: [{ keys: ['doubaoKey'], label: 'API Key' }],
     guide: '请在「语音设置 → 语音合成」里选择豆包，并填入控制台的语音合成 API Key。',
   },
+  xiaomi: { label: '小米 MiMo', groups: [{ keys: ['xiaomiKey'], label: 'API Key' }], guide: '请在语音设置填写小米 MiMo API Key。' },
   minimax: {
     label: 'MiniMax',
     groups: [{ keys: ['minimaxKey'], label: 'API Key' }],
@@ -158,15 +162,17 @@ function decodeDoubaoLine(transform, rawLine, context = {}) {
     const message = annotateDoubaoError(statusCode, data.message || data.status_text, context)
     throw new Error(`豆包 TTS 流错误 (${statusCode}): ${message}`)
   }
+  context.onMetadata?.(data)
   if (data.data) transform.push(Buffer.from(data.data, 'base64'))
 }
 
 function decodeDoubaoStream(webStream, context = {}) {
   let pending = ''
+  const decoder = new StringDecoder('utf8')
   const nodeStream = webStreamToNode(webStream)
   const transform = new Transform({
     transform(chunk, _encoding, callback) {
-      pending += chunk.toString('utf-8')
+      pending += decoder.write(chunk)
       const lines = pending.split(/\r?\n/)
       pending = lines.pop() || ''
       try {
@@ -178,6 +184,7 @@ function decodeDoubaoStream(webStream, context = {}) {
     },
     flush(callback) {
       try {
+        pending += decoder.end()
         if (pending.trim()) decodeDoubaoLine(this, pending, context)
         callback()
       } catch (err) {
@@ -197,6 +204,7 @@ async function streamDoubao({
   apiKey,
   resourceId,
   speechRate = DEFAULT_DOUBAO_SPEECH_RATE,
+  onMetadata, signal,
 }) {
   if (!apiKey) throw new Error('豆包 TTS: 缺少 API Key，请在设置中填写豆包语音凭证')
   const speaker = voiceId || DEFAULT_DOUBAO_VOICE_ID
@@ -210,7 +218,7 @@ async function streamDoubao({
   const reqParams = {
     text,
     speaker,
-    audio_params: { format: 'mp3', sample_rate: 24000 },
+    audio_params: { format: 'mp3', sample_rate: 24000, ...(onMetadata ? (resolvedResourceId.includes('2.0') ? { enable_subtitle: true } : { enable_timestamp: true }) : {}) },
   }
   // 语速：speech_rate 范围 -50~100（0=正常，100=2倍速，-50=0.5倍速，正数更快）
   const rate = Number(speechRate)
@@ -218,6 +226,7 @@ async function streamDoubao({
     reqParams.audio_params.speech_rate = Math.max(-50, Math.min(100, Math.round(rate)))
   }
   const resp = await fetch('https://openspeech.bytedance.com/api/v3/tts/unidirectional', {
+    signal,
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -231,7 +240,7 @@ async function streamDoubao({
   }
   const contentType = resp.headers.get('content-type') || ''
   if (contentType.includes('audio/')) return webStreamToNode(resp.body)
-  return decodeDoubaoStream(resp.body, { speaker, resourceId: resolvedResourceId })
+  return decodeDoubaoStream(resp.body, { speaker, resourceId: resolvedResourceId, onMetadata })
 }
 
 // ── MiniMax TTS ────────────────────────────────────────────────────────────
@@ -357,9 +366,11 @@ async function streamVolcano({ text, voiceId = 'BV001_streaming', appId, token }
 }
 
 // ── 通用入口 ────────────────────────────────────────────────────────────────
-export async function streamTTS({ text, provider, voiceId, keys = {} }) {
+export async function streamTTS({ text, provider, voiceId, keys = {}, onMetadata, signal }) {
   if (!text?.trim()) throw new Error('TTS: 文本为空')
   switch (provider) {
+    case 'xiaomi':
+      return streamXiaomi({ text, voiceId, apiKey: keys.xiaomiKey, signal })
     case 'doubao':
       return streamDoubao({
         text,
@@ -367,6 +378,7 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
         apiKey: keys.doubaoKey,
         resourceId: keys.doubaoResourceId,
         speechRate: keys.doubaoSpeechRate,
+        onMetadata, signal,
       })
     case 'minimax':
       return streamMiniMax({ text, voiceId, apiKey: keys.minimaxKey })
@@ -379,4 +391,19 @@ export async function streamTTS({ text, provider, voiceId, keys = {} }) {
     default:
       throw new Error(`未知 TTS 服务商: ${provider}，请在设置中选择一个 TTS 服务商`)
   }
+}
+
+// Xiaomi uses chat messages + base64 audio, unlike Doubao's NDJSON chunks.
+export async function streamXiaomi({ text, voiceId = 'mimo_default', apiKey, signal }) {
+  if (!apiKey) throw new Error('小米 MiMo TTS: 缺少 API Key')
+  const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json', 'api-key': apiKey },
+    body: JSON.stringify({ model: 'mimo-v2.5-tts', messages: [{ role: 'assistant', content: text }], audio: { format: 'mp3', voice: voiceId }, stream: false }),
+  })
+  if (!response.ok) throw new Error(`小米 MiMo TTS 请求失败 (${response.status})`)
+  const payload = await response.json()
+  const encoded = payload.choices?.[0]?.message?.audio?.data
+  if (typeof encoded !== 'string' || !encoded) throw new Error('小米 MiMo TTS 未返回音频')
+  return Readable.from([Buffer.from(encoded, 'base64')])
 }

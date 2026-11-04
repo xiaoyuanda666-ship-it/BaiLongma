@@ -33,7 +33,10 @@ import { japlosJob, startJaplosJob } from './japlos-console.mjs'
 
 const consoleDir = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(consoleDir, '..', '..')
-const pkg = JSON.parse(await fsp.readFile(path.join(root, 'package.json'), 'utf8'))
+// Read on each operation so a running console sees newly built versions.
+function readPackage() {
+  return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+}
 const staticDir = path.join(consoleDir, 'public')
 const secrets = createSessionSecrets()
 const operator = sanitizeOperator(os.userInfo().username)
@@ -181,7 +184,7 @@ class TaskManager {
         if (buffered.trim()) parseLines('\n')
         code === 0 ? resolve() : reject(new Error(`Release worker exited with ${code}`))
       })
-      child.stdin.end(JSON.stringify({ action, root, pkg, request: task.request }))
+      child.stdin.end(JSON.stringify({ action, root, pkg: task.pkg, request: task.request }))
     })
   }
 
@@ -234,10 +237,12 @@ class TaskManager {
     if (this.active && !['SUCCEEDED', 'FAILED', 'CANCELLED', 'UNCERTAIN'].includes(this.active.machine.state)) {
       throw new Error('Another release task is already running')
     }
+    const pkg = readPackage()
     const request = validateReleaseRequest(rawRequest, pkg.version)
     const id = `${Date.now()}-${cryptoRandomId()}`
     const task = {
       id,
+      pkg,
       request,
       machine: new ReleaseStateMachine(),
       logs: [],
@@ -258,6 +263,7 @@ class TaskManager {
   }
 
   async run(task, remoteVersions, remoteVersionStates) {
+    const pkg = task.pkg // Keep an in-flight release pinned to its original version.
     try {
       this.transition(task, 'VALIDATING', task.request.mode === 'build' ? 'Building and validating artifacts' : 'Validating existing artifacts')
       task.git = await readGitState(root)
@@ -322,6 +328,8 @@ let lastPreflight = null
 async function refreshSnapshot() {
   if (!statusPromise) {
     statusPromise = (async () => {
+      const pkg = readPackage()
+      if (cachedStatus?.system.version !== pkg.version) lastPreflight = null
       const [system, artifacts, histories] = await Promise.all([
         getSystemStatus({ root, version: pkg.version }),
         scanMacArtifacts({ root, productName: pkg.productName || 'Bailongma', version: pkg.version }),
@@ -361,11 +369,12 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, expectedOrigin(port))
     if (req.method === 'GET' && serveStatic(req, res, url.pathname)) return
     if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
+      const pkg = readPackage()
       return json(res, 200, { token: secrets.token, operator, version: pkg.version, productName: pkg.productName || 'Bailongma', channels: [{ id: 'stable', enabled: true }, { id: 'beta', enabled: false }, { id: 'internal', enabled: false }], stagingPercentages: [5, 10, 25, 50, 100] })
     }
     if (req.method === 'GET' && url.pathname === '/api/japlos-v2') return json(res, 200, { job: japlosJob() })
     if (req.method === 'GET' && url.pathname === '/api/status') {
-      const snapshot = cachedStatus || await refreshSnapshot()
+      const snapshot = cachedStatus?.system.version === readPackage().version ? cachedStatus : await refreshSnapshot()
       return json(res, 200, { ...snapshot, preflight: lastPreflight, activeTask: tasks.publicTask() })
     }
     if (req.method === 'GET' && url.pathname === '/api/events') {
@@ -384,12 +393,14 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/plan') {
       const body = await readJson(req)
+      const pkg = readPackage()
       const request = validateReleaseRequest({ ...body, dryRun: true }, pkg.version)
       const plan = await createMacReleasePlan({ root, productName: pkg.productName || 'Bailongma', ...request })
       return json(res, 200, { plan })
     }
     if (req.method === 'POST' && url.pathname === '/api/preflight') {
       const body = await readJson(req)
+      const pkg = readPackage()
       const request = validateReleaseRequest({ ...body, dryRun: true }, pkg.version)
       lastPreflight = await runMacPreflight({
         root,

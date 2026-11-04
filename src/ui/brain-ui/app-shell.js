@@ -152,24 +152,6 @@ const createSecondaryPanel = () => `
       </div>
     </section>
 
-    <section class="l2-module action-log-module" aria-labelledby="action-log-title">
-      <div class="action-log-surface" id="action-log-surface">
-        <div class="l2-module-head compact">
-          <div>
-            <div class="l2-module-kicker">ACTION LOG</div>
-            <h2 class="l2-module-title" id="action-log-title">行动日志</h2>
-          </div>
-        </div>
-        <div class="action-log-feed" id="action-log-feed" tabindex="0" aria-label="行动日志">
-          <div class="command-runs" id="command-runs" aria-live="polite" aria-label="实时命令状态" hidden></div>
-          <div class="action-log" id="action-log" aria-live="polite">
-            <div class="action-log-empty" id="action-log-empty">Agent 最近执行的文件、命令和工具动作会显示在这里</div>
-          </div>
-        </div>
-      </div>
-
-    </section>
-
     <section class="l2-module cognition-module" aria-labelledby="cognition-title">
       <div class="cognition-surface" id="cognition-surface">
         <div class="l2-module-head compact cognition-head">
@@ -184,7 +166,7 @@ const createSecondaryPanel = () => `
         </div>
         <div class="stream cognition-stream" tabindex="0" aria-label="思考与工具记录">
           <div class="stream-inner" id="si-l2">
-            <div class="cognition-empty" id="cognition-empty">心跳触发后，这里会实时显示思考与工具调用</div>
+            <div class="cognition-empty" id="cognition-empty">任务开始后，这里会显示计划摘要、工具执行与结果检查</div>
           </div>
         </div>
       </div>
@@ -267,6 +249,7 @@ const createSettingsModal = () => `
         <button class="settings-nav-item" data-tab="media" type="button">媒体能力</button>
         <button class="settings-nav-item" data-tab="social" type="button">社交媒体</button>
         <button class="settings-nav-item" data-tab="voice" type="button">语音对话</button>
+        <button class="settings-nav-item" data-tab="search" type="button">搜索服务</button>
         <button class="settings-nav-item" data-tab="mcp" type="button">MCP 工具</button>
         <button class="settings-nav-item" data-tab="security" type="button">安全沙箱</button>
         <button class="settings-nav-item" data-tab="advanced" type="button">高级功能</button>
@@ -315,6 +298,7 @@ const createSettingsModal = () => `
         </div>
 
         <!-- ── LLM 模型 tab ── -->
+        <div class="settings-tab" data-tab="search"><div id="search-settings-root"></div></div>
         <div class="settings-tab" data-tab="llm">
           <div class="settings-section">
             <div class="settings-section-label">当前状态</div>
@@ -604,6 +588,7 @@ const createSettingsModal = () => `
             <div class="settings-row">
               <label class="settings-label" for="tts-provider-select">服务商</label>
               <select class="settings-select" id="tts-provider-select">
+                <option value="xiaomi">小米 MiMo</option>
                 <option value="doubao">豆包（方舟，流式，中文最自然）</option>
                 <option value="openai">OpenAI TTS（流式，$0.015/千字）</option>
                 <option value="elevenlabs">ElevenLabs（流式，高质量）</option>
@@ -673,6 +658,7 @@ const createSettingsModal = () => `
               <p class="settings-hint">在<a href="https://console.volcengine.com/speech/new/" target="_blank" style="color:var(--cool)">豆包语音合成控制台</a>获取 API Key。2.0 音色使用 seed-tts-2.0；1.0/moon/BV 音色使用 seed-tts-1.0 或控制台对应资源。</p>
             </div>
 
+            <div id="tts-creds-xiaomi" style="display:none"><label class="settings-label" for="tts-xiaomi-key">小米 MiMo API Key</label><input class="settings-input" type="password" id="tts-xiaomi-key" placeholder="留空则不修改"></div>
             <div id="tts-creds-minimax" style="display:none;">
               <div class="settings-row">
                 <label class="settings-label" for="tts-minimax-key">MiniMax API Key</label>

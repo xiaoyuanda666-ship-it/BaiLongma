@@ -31,6 +31,8 @@ try {
   assert.equal(detectBrowserChallenge('browser_navigate', captchaResult)?.reason, 'challenge_url')
   assert.equal(isBrowserAccessBlockedAfterChallenge('browser_navigate'), true)
   assert.equal(isBrowserAccessBlockedAfterChallenge('browser_click'), true)
+  assert.equal(isBrowserAccessBlockedAfterChallenge('web_search'), true)
+  assert.equal(isBrowserAccessBlockedAfterChallenge('model_web_fetch'), true)
   assert.equal(isBrowserAccessBlockedAfterChallenge('browser_type'), true)
   assert.equal(isBrowserAccessBlockedAfterChallenge('system_browser_open'), true)
   assert.equal(isBrowserAccessBlockedAfterChallenge('browser_set_display_mode'), false)
@@ -54,7 +56,7 @@ try {
   const result = await callLLM({
     systemPrompt: 'Use the browser, but stop and report if a CAPTCHA is shown.',
     message: 'Open Baidu. If a CAPTCHA appears, stop and leave the page open.',
-    tools: ['browser_navigate', 'browser_click', 'browser_type', 'browser_set_display_mode'],
+    tools: ['browser_navigate', 'browser_click', 'browser_type', 'browser_set_display_mode', 'web_search', 'model_web_fetch'],
     mustReply: false,
     _streamOnceForTest: async () => {
       round += 1
@@ -83,6 +85,10 @@ try {
             id: 'try_click',
             name: 'browser_click',
             arguments: JSON.stringify({ element: 'Continue', target: 'e99' }),
+          }, {
+            id: 'api_search', name: 'web_search', arguments: JSON.stringify({ query: 'OpenAI' }),
+          }, {
+            id: 'api_fetch', name: 'model_web_fetch', arguments: JSON.stringify({ url: 'https://example.com/article' }),
           }],
         }
       }
@@ -107,6 +113,8 @@ try {
   assert.equal(observedTools[0]?.result?.browser_challenge?.detected, true)
   assert.equal(observedTools[1]?.result?.skipped, 'browser_challenge_stop')
   assert.equal(observedTools[2]?.result?.skipped, 'browser_challenge_stop')
+  assert.equal(observedTools[3]?.result?.skipped, 'browser_challenge_stop')
+  assert.equal(observedTools[4]?.result?.skipped, 'browser_challenge_stop')
   assert.match(result.content, /browser automation stopped/i)
 
   console.log('PASS browser challenge guard stops navigation, clicking, and provider fallback for the current turn')

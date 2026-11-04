@@ -205,6 +205,7 @@ function scoreSkill(skill, message) {
   const haystack = skillMatchText(skill).toLowerCase()
   const lowered = input.toLowerCase()
   let score = 0
+  if (skill.id === 'bsk' && /浏览器|网页|网站|页面|登录|填表|截图|bsk|browser|https?:\/\//i.test(input)) score += 8
 
   for (const phrase of [skill.name, ...(skill.aliases || []), ...(skill.triggers || [])]) {
     const p = String(phrase || '').trim().toLowerCase()

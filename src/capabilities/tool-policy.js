@@ -1,3 +1,5 @@
+import { isBundledSkillPath } from './sandbox.js'
+import { isRetiredWebTool } from './web-access.js'
 import { config } from '../config.js'
 import { getMcpToolMetadata, isMcpTool } from '../mcp/client-manager.js'
 import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-intent.js'
@@ -5,6 +7,7 @@ import { isSystemBrowserRequest } from '../mcp/browser-display.js'
 import { isBrowserDownloadTaskIntent } from './capability-registry.js'
 import {
   explicitlyKeepsBrowserOpen,
+  explicitlyForbidsLocalFileTools,
   isLocalFileToolCallBlocked,
 } from '../runtime/browser-intent-guards.js'
 
@@ -57,7 +60,6 @@ const TOOL_RISK = {
   download_file: 'high',
   kill_process: 'high',
   web_search: 'high',
-  model_web_search: 'high',
   model_web_fetch: 'high',
   web_read: 'high',
   fetch_url: 'high',
@@ -175,7 +177,7 @@ const AUTONOMOUS_USER_AUTH_REQUIRED = new Set([
   'run_capability',
   'run_api_capability',
   'analyze_image',
-  'model_web_search',
+  'web_search',
   'model_web_fetch',
   'system_browser_open',
   'system_music',
@@ -208,6 +210,7 @@ export function isDangerousShellCommand(command) {
 
 export function evaluateToolPolicy(name, args = {}, context = {}) {
   const risk = classifyTool(name)
+  if (isRetiredWebTool(name)) return { allowed: false, risk, reason: '此上网工具已移除：公开搜索使用 web_search，网页操作使用 bsk 技能和 run_command。' }
   const currentUserMessage = context.currentUserMessage || ''
   const blockedTools = config.security?.blockedTools || []
   const canonicalName = ['fetch_url', 'browser_read'].includes(name)
@@ -243,7 +246,9 @@ export function evaluateToolPolicy(name, args = {}, context = {}) {
       reason: 'the current user explicitly asked to keep the browser/page open or explicitly rejected closing it',
     }
   }
-  if (isLocalFileToolCallBlocked(name, args, currentUserMessage)) {
+  const readingBundledSkill = name === 'read_file' && isBundledSkillPath(args.path || args.filename || args.file_path)
+    && !explicitlyForbidsLocalFileTools(currentUserMessage)
+  if (!readingBundledSkill && isLocalFileToolCallBlocked(name, args, currentUserMessage)) {
     return {
       allowed: false,
       risk,

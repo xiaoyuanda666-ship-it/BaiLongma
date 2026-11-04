@@ -1,9 +1,0 @@
-{
-  "browser": {
-    "launchOptions": {
-      "args": [
-        "--restore-last-session"
-      ]
-    }
-  }
-}

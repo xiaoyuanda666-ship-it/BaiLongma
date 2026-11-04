@@ -71,6 +71,7 @@ export function createFilesystemPort({ assertAccess } = {}) {
     readUtf8Strict,
     atomicWriteUtf8,
     readFileSync: (filePath, encoding) => fs.readFileSync(checked(filePath), encoding),
+    writeFileSync: (filePath, data, options) => fs.writeFileSync(checked(filePath), data, options),
     existsSync: (filePath) => fs.existsSync(checked(filePath)),
     statSync: (filePath) => fs.statSync(checked(filePath)),
     readdirSync: (filePath, options) => fs.readdirSync(checked(filePath), options),

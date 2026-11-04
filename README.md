@@ -27,16 +27,15 @@ Bailongma 是一个持续运行的桌面 AI Agent 项目。它不是一次问答
 
 图片通过 Chat Completions 的 `image_url` 或 Responses 的 `input_image` 传输。DeepSeek Flash、GPT 视觉模型、Qwen VL 等已识别的视觉模型直接接收图片；DeepSeek Pro 的 `analyze_image` 使用同账号 `deepseek-flash`，不切换当前对话模型。已配置的独立视觉能力槽优先用于 `analyze_image`；未识别的自定义模型可配置独立视觉能力槽。支持 PNG、JPEG、GIF、WebP，单图最大 20MB；直接传图每次最多 8 张、合计 28MB，超出或读取失败会明确告知模型，仍可分批调用识图工具。
 
-`model_web_search` 是统一的 API 搜索入口，复用模型设置中已保存的 Key，不改变当前聊天模型。默认优先使用 DeepSeek；也可显式指定 `provider: "deepseek"` 或 `"openai"`，指定的服务商不可用时不会静默切换。`model_web_fetch` 使用支持正文抓取的服务商（目前为 DeepSeek）。没有适用配置时沿用 BrowserSkill；登录、点击、填写和动态网页仍走浏览器。原生接口按服务商规则计费，仍遵守工具禁用及自主任务权限。
+`web_search` 是统一搜索入口，搜索配置独立于聊天模型。打开“设置 → 搜索服务”，可添加多个 DeepSeek、腾讯元宝或 OpenAI 搜索连接，切换默认服务，按语言、主题或目标域名设置有序偏好，并配置故障备用。
 
-- DeepSeek：独立 Search / Fetch API；搜索默认 `need_content: true`，返回正文时不必再次抓取。支持 1–50 条结果、原始问题、日期及域名条件，并保留发布日期、站点、权威度与排序分数。
-- OpenAI：Responses `web_search`；检查实际搜索是否完成，保留正文回答和引用来源。它不提供逐页正文，日期约束通过提示词传递，不能当作已经独立验证的发布日期。
-- 两家统一返回 `results`、`sources`、`summary`、`capabilities`、`filters`、`warnings`。`evidence_kind` 区分正文 `page_content`、带引用的回答 `grounded_answer` 和仅供发现线索的 `search_snippet`；读取正文不等于事实已经独立核实。
-- `date_from` / `date_to` 为包含边界的 `YYYY-MM-DD`，`timezone` 默认系统时区；查询词包含“今天 / 今日 / today”且未给定日期时自动解析当天。DeepSeek 将日期转为搜索操作符，再按结果日期过滤；未知日期会标记，不能冒充当天新闻。`domains` 支持最多 10 个域名。
+官方 DeepSeek / OpenAI 模型凭证会自动成为可复用的搜索连接，无须重复填写 Key。禁用后不会自动恢复。第三方模型代理凭证不会自动用于官方搜索。专用搜索 Key 使用现有加密密钥库保存。
 
-例如：`model_web_search({ query: "AI 新闻", date_from: "2026-10-31", date_to: "2026-10-31", timezone: "Asia/Shanghai", count: 8 })`。正文缺失时再调用 `model_web_fetch({ url })`。API 搜索及抓取可并行执行；引用缺失会补齐已取得的来源，不会仅因链接数量不足丢弃摘要。
+例如：`web_search({ query: "AI 新闻", topic: "news", date_from: "2026-11-01", date_to: "2026-11-02", timezone: "Asia/Shanghai", count: 8 })`。`provider: "auto"` 遵循保存的偏好；显式指定连接 ID 后不会自动换服务。`need_content` 表示尽可能返回正文，`require_content: true` 则要求实际取得正文。
 
-新服务商在 `src/providers/web-adapters/` 增加显式协议适配器，并更新 `supportsModelWebSearch` 能力判定、配置读取和工具 schema。不能因某接口兼容 Chat Completions，就假定它兼容搜索接口。运行 `npm run test:model-web` 验证协议、日期、证据与投递链路（使用隔离配置及模拟服务，不消耗线上 API）。
+结果区分网页正文 `page_content`、带引用回答 `grounded_answer` 和搜索摘要 `search_snippet`。`content_retrieved` 只表示取得正文，不表示事实经过核验。元宝的动态摘要不会被标记为正文。未知发布日期保持未知，不冒充指定日期的新闻。
+
+新增服务在 `src/search/adapters/` 实现并注册独立协议。聊天接口兼容不代表搜索接口兼容。配置、接口、扩展方式和测试见 [搜索服务说明](docs/search-services.md)。
 
 接口依据：[DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)、[DeepSeek Search / Fetch](https://api-docs.deepseek.com/zh-cn/guides/search/)、[OpenAI Web search](https://developers.openai.com/api/docs/guides/tools-web-search)。
 

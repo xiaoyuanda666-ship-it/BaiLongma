@@ -1,3 +1,4 @@
+import { behaviorReminder } from '../runtime/behavior-reminders.js'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -49,6 +50,8 @@ import { isExplicitAgentBrowserDataDeletionRequest } from '../mcp/browser-data-i
 import { runWorkReview } from '../review/reviewer.js'
 import { CAPABILITY_DEMO_INTRO, runCapabilityDemo } from '../capability-demo.js'
 import { deliverMessage } from '../runtime/delivery.js'
+import { executeExpression } from '../runtime/expression.js'
+import { prepareSpeechExpression } from '../composition/speech-services.js'
 import {
   executeMcpTool,
   getMcpToolSchema,
@@ -298,7 +301,7 @@ async function executeToolUnchecked(name, args, context = {}) {
       case 'generate_image':
         return await execGenerateImage(args)
       case 'set_tick_interval':
-        return execSetTickInterval(args)
+        return execSetTickInterval(args, context)
       case 'media_mode':
         return execMediaMode(args)
       case 'hotspot_mode':
@@ -390,8 +393,7 @@ async function executeToolUnchecked(name, args, context = {}) {
         return await execRunApiCapability(args, context)
       case 'analyze_image':
         return await execAnalyzeImage(args, context)
-      case 'model_web_search':
-      case 'model_web_fetch':
+      case 'web_search':
         return await execModelWeb(name, args, context)
       case 'manage_api_capability':
         return execManageApiCapability(args)
@@ -469,20 +471,12 @@ async function execListProcessesWithSoftwareJobs(args = {}) {
 }
 
 // express: expression entrypoint; route to the requested output format.
-async function execExpress({ target_id, content, channel = 'AUTO', format = 'text' }, context = {}) {
-  if (!content?.trim()) return '错误：未提供表达内容'
-  if (format === 'voice') {
-    // 语音表达：先发文字消息再生成语音
-    const sendResult = await execSendMessage({ target_id, content, channel }, context)
-    if (!commandResultLooksSuccessful(sendResult)) return sendResult
-    return await execSpeak({ text: content }, context)
-  }
-  // 默认：文字表达
-  return await execSendMessage({ target_id, content, channel }, context)
+async function execExpress(args, context = {}) {
+  return execSendMessage(args, context)
 }
 
 async function execSendMessage(args, context = {}) {
-  return await deliverMessage(args, context)
+  return executeExpression(args, context, { deliver: deliverMessage, speak: prepareSpeechExpression })
 }
 
 function toolJson(payload) {
@@ -502,7 +496,7 @@ function execUninstallTool(args) {
 
 function execListTools() {
   const builtins = Object.entries(TOOL_SCHEMAS)
-    .filter(([name]) => name !== 'express')
+    .filter(([name]) => name !== 'express' && name !== 'speak')
     .map(([name, s]) => ({ name, description: s.function.description, source: 'builtin' }))
   const installed = listInstalledTools()
   const mcp = listMcpTools()
@@ -539,7 +533,7 @@ function execFindTool({ query } = {}, context = {}) {
   // ② 英文字面：query 任一词出现在工具名或描述里
   const catalog = [
     ...Object.entries(TOOL_SCHEMAS)
-      .filter(([name]) => name !== 'express')
+      .filter(([name]) => name !== 'express' && name !== 'speak')
       .map(([name, s]) => ({ name, description: s.function?.description || '' })),
     ...listInstalledTools().map(t => ({ name: t.name, description: t.description || '' })),
     ...listMcpTools().map(t => ({
@@ -561,7 +555,7 @@ function execFindTool({ query } = {}, context = {}) {
     id: cap.id,
     label: cap.label,
     summary: cap.summary,
-    workflow: cap.context ? String(cap.context).replace(/\s+/g, ' ').trim().slice(0, 280) : '',
+    workflow: cap.context ? String(cap.context).replace(/\s+/g, ' ').trim().slice(0, cap.id === 'bsk' ? 2400 : 280) : '',
   }))
 
   // 不把已是 CORE 的工具当"新发现"返回（模型本来就有），减少噪声。
@@ -663,22 +657,16 @@ function execManagePrefetchTask({ action, source, label, url, ttl_minutes, tags 
 }
 
 // set_tick_interval：L2 调节自身思维节奏
-function execSetTickInterval({ seconds, ttl, reason }) {
-  const res = setTickerInterval({ seconds, ttl, reason })
+function execSetTickInterval({ seconds, ttl, reason }, context = {}) {
+  let res = setTickerInterval({ seconds, ttl, reason })
   if (!res.ok) return `错误：${res.error}`
-  // noop 路径：返回 JSON 让 isToolFailure 识别为软失败,触发 maxSameFailures 熔断。
-  // 旧的纯文本返回 isToolFailure 检测不到失败,模型在同 callLLM 内可以无限重调浪费 round。
-  // ok:false 让前端也明确显示"无效调用",别再误导用户以为节奏变了。
   if (res.noop) {
-    return JSON.stringify({
-      ok: false,
-      tool: 'set_tick_interval',
-      noop: true,
-      seconds: res.seconds,
-      ttl: res.ttl,
-      error: `tick interval already ${res.seconds}s with ${res.ttl} rounds left; call rejected as no-op`,
-      reason: 'Calling set_tick_interval with the current value is a no-op and wastes a round. Only call when you actually need to change the pace.',
+    const reminder = behaviorReminder(context, { tool: 'set_tick_interval', args: { seconds, ttl, reason },
+      reason: 'This interval is already active. Renewing it resets the remaining lifetime; no repeat is needed unless that is intended.',
+      evidence: { current: res, requested: { seconds, ttl, reason } },
     })
+    if (reminder) return reminder
+    res = setTickerInterval({ seconds, ttl, reason }, { renew: true })
   }
   const parts = [`节奏已设为 ${res.seconds}s，持续 ${res.ttl} 轮`]
   if (res.clampedFrom?.seconds !== undefined) parts.push(`（seconds ${res.clampedFrom.seconds} 越界，已 clamp 到 ${res.seconds}）`)

@@ -2,6 +2,7 @@
 export const UPDATE_SERVER = Object.freeze({
   sshHost: process.env.BAILONGMA_UPDATE_SSH_HOST || 'bailongma-server',
   origin: 'https://bailongma.top/updates',
+  downloadOrigin: 'https://download.bailongma.top',
   serverRoot: '/srv/bailongma-updates',
   updaterHeader: 'BailongmaUpdater/2',
   channel: 'stable',

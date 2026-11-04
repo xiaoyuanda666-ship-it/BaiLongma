@@ -360,6 +360,7 @@ inventory="$stage/$inventory_name"
 test -s "$inventory"
 command -v flock >/dev/null
 command -v sha512sum >/dev/null
+command -v python3 >/dev/null
 
 exec 9>/run/lock/bailongma-update-publish.lock
 flock -x 9
@@ -412,7 +413,10 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   [ "$kind" = artifact ] || continue
   origin_dir="/srv/bailongma-updates/stable/$platform/$arch"
   origin_file="$origin_dir/$remote_name"
-  test ! -e "$origin_file" || { echo "origin artifact already exists: $platform/$arch/$remote_name" >&2; exit 3; }
+  if [ -e "$origin_file" ]; then
+    test "$(sha512sum "$origin_file" | awk '{print $1}')" = "$expected_hash" || { echo "immutable artifact conflict: $platform/$arch/$remote_name" >&2; exit 3; }
+    test "$(wc -c < "$origin_file" | tr -d ' ')" = "$expected_size"
+  fi
 done < "$inventory"
 
 while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected_size content_type; do
@@ -420,6 +424,7 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   file="$stage/$stage_name"
   origin_dir="/srv/bailongma-updates/stable/$platform/$arch"
   install -d -m 755 "$origin_dir"
+  [ ! -e "$origin_dir/$remote_name" ] || continue
   temp_origin="$origin_dir/.$remote_name.release-$$"
   install -m 644 "$file" "$temp_origin"
   mv "$temp_origin" "$origin_dir/$remote_name"
@@ -431,6 +436,44 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   test "$(sha512sum "/srv/bailongma-updates/stable/$platform/$arch/$remote_name" | awk '{print $1}')" = "$expected_hash"
 done < "$inventory"
 
+# Hold the publication lock until every CDN object is verified, before exposing feeds.
+python3 - "$inventory" "$platform" <<'CDN_VERIFY'
+import csv, hashlib, sys, urllib.request
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+opener = urllib.request.build_opener(NoRedirect)
+with open(sys.argv[1]) as inventory:
+    for arch, kind, staged, name, checksum, size, content_type in csv.reader(inventory, delimiter='\t'):
+        if kind != 'artifact':
+            continue
+        url = '__CDN_ORIGIN__/stable/' + sys.argv[2] + '/' + arch + '/' + name
+        print('[publish:cdn] Full GET and SHA-512: ' + url, flush=True)
+        digest, received, prefix = hashlib.sha512(), 0, b''
+        request = urllib.request.Request(url, headers={'Accept-Encoding': 'identity'})
+        with opener.open(request, timeout=120) as response:
+            if response.status != 200:
+                raise RuntimeError('CDN full download did not return 200: ' + name)
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                if not prefix:
+                    prefix = chunk[:1024]
+                received += len(chunk)
+                digest.update(chunk)
+        if received != int(size) or digest.hexdigest() != checksum:
+            raise RuntimeError('CDN size/SHA-512 mismatch: ' + name)
+        end = min(1023, int(size) - 1)
+        request = urllib.request.Request(url, headers={'Range': 'bytes=0-' + str(end), 'Accept-Encoding': 'identity'})
+        with opener.open(request, timeout=120) as response:
+            if response.status != 206 or response.headers.get('Content-Range') != f'bytes 0-{end}/{size}':
+                raise RuntimeError('CDN Range verification failed: ' + name)
+            if response.read(end + 2) != prefix:
+                raise RuntimeError('CDN Range bytes mismatch: ' + name)
+print('[publish:cdn] All objects verified; switching update manifests', flush=True)
+CDN_VERIFY
+
 while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected_size content_type; do
   [ "$kind" = manifest ] || continue
   file="$stage/$stage_name"
@@ -439,7 +482,7 @@ while IFS="$tab" read -r arch kind stage_name remote_name expected_hash expected
   install -m 644 "$file" "$temp_origin"
   mv "$temp_origin" "$origin_dir/$remote_name"
 done < "$inventory"
-`
+`.replaceAll('__CDN_ORIGIN__', UPDATE_SERVER.downloadOrigin)
 }
 
 function publishRemote(root, host, remoteDir, config, version, productName, inventoryName, archs) {
@@ -451,8 +494,11 @@ function publishRemote(root, host, remoteDir, config, version, productName, inve
   ], { input: websitePublishScript(), cwd: root })
 }
 
-async function requestFollowingRedirects(url, { headers = {}, expectedFinalStatus, body = 'text' }) {
-  let current = new URL(url)
+export async function requestFollowingRedirects(url, { headers = {}, expectedFinalStatus, body = 'text' }) {
+  const original = new URL(url)
+  let current = original
+  const cdnPath = original.pathname.replace(/^\/updates\//, '/')
+  const artifact = /^\/updates\/stable\/(mac|win)\/(arm64|x64)\/[A-Za-z0-9_-]+-\d+\.\d+\.\d+[A-Za-z0-9_.-]*\.(dmg|exe|zip|blockmap)$/.test(original.pathname)
   for (let redirect = 0; redirect <= 5; redirect += 1) {
     const requestHeaders = { ...headers }
     if (current.origin !== new URL(UPDATE_ORIGIN).origin) delete requestHeaders['X-Bailongma-Updater']
@@ -465,8 +511,11 @@ async function requestFollowingRedirects(url, { headers = {}, expectedFinalStatu
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get('location')
       if (!location) throw new Error('Update gateway returned a redirect without Location')
+      await response.body?.cancel()
       current = new URL(location, current)
-      if (current.origin !== new URL(UPDATE_ORIGIN).origin || !current.pathname.startsWith('/updates/')) {
+      const sameWebsite = current.origin === new URL(UPDATE_ORIGIN).origin && current.pathname === original.pathname
+      const trustedCdn = artifact && current.origin === UPDATE_SERVER.downloadOrigin && current.pathname === cdnPath
+      if ((!sameWebsite && !trustedCdn) || current.username || current.password || current.search || current.hash) {
         throw new Error(`Update gateway redirected to unexpected host: ${current.hostname}`)
       }
       continue

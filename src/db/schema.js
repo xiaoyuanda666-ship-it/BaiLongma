@@ -1,3 +1,5 @@
+import { migrateMessageFormats } from './message-formats.js'
+
 export function initializeSchema(db) {
   // A full external-content FTS rebuild is linear in all chunks.  Record
   // whether this virtual table existed before the schema migration so massive
@@ -91,6 +93,12 @@ export function initializeSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_conv_timestamp ON conversations(timestamp);
     CREATE INDEX IF NOT EXISTS idx_conv_from_id   ON conversations(from_id);
+
+    CREATE TABLE IF NOT EXISTS search_service_secrets (
+      ref TEXT PRIMARY KEY,
+      record_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `)
   try { db.exec(`ALTER TABLE conversations ADD COLUMN channel TEXT DEFAULT ''`) } catch {}
   try { db.exec(`ALTER TABLE conversations ADD COLUMN external_party_id TEXT DEFAULT ''`) } catch {}
@@ -818,6 +826,8 @@ export function initializeSchema(db) {
   if (knowledgeFtsNeedsRebuild) {
     db.exec(`INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts) VALUES('rebuild')`)
   }
+
+  migrateMessageFormats(db)
 
   // 重建 FTS 索引（覆盖已有数据，确保历史记忆也被索引）
   db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`)

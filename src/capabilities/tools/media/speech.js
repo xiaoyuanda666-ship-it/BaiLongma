@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { throwIfAborted } from '../../abort-utils.js'
 import fs from 'fs'
 import path from 'path'
 import { nowTimestamp } from '../../../time.js'
@@ -87,6 +89,7 @@ function normalizeTTSError(err, provider) {
 }
 
 export async function execSpeak(args, context = {}) {
+  throwIfAborted(context.signal)
   const rawText = args.text || args.content || args.words || args.speech
   const { filename } = args
   console.log(`[speak] args:`, JSON.stringify(args))
@@ -116,8 +119,9 @@ export async function execSpeak(args, context = {}) {
     return normalizeTTSError(err, creds.provider)
   }
 
+  throwIfAborted(context.signal)
   const ts = nowTimestamp().replace(/[:.+]/g, '-').slice(0, 19)
-  const fname = filename ? filename.replace(/[^a-zA-Z0-9_一-龥-]/g, '') + '.mp3' : `speech_${ts}.mp3`
+  const fname = filename ? filename.replace(/[^a-zA-Z0-9_一-龥-]/g, '') + '.mp3' : `speech_${ts}_${randomUUID()}.mp3`
   const resolved = path.resolve(SANDBOX_ROOT, 'audio', fname)
   fs.mkdirSync(path.dirname(resolved), { recursive: true })
   fs.writeFileSync(resolved, buffer)

@@ -1,3 +1,4 @@
+import { behaviorReminder } from './behavior-reminders.js'
 import fs from 'fs'
 import path from 'path'
 import { nowTimestamp } from '../time.js'
@@ -10,7 +11,7 @@ import {
 } from '../db.js'
 import { emitEvent } from './events.js'
 import { dispatchSocialMessage } from '../social/dispatch.js'
-import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel, isVoiceChannel } from '../identity.js'
+import { lookupReplyTarget, normalizeChannel, suggestProactiveChannel } from '../identity.js'
 import { sanitizeAssistantReplyForDelivery } from './markers.js'
 import { persistChatMediaPath } from '../chat-media.js'
 
@@ -35,8 +36,8 @@ const recentOutboundClaims = new Map()
 const recentOutboundFailures = new Map()
 
 function pruneOutboundClaims(now = Date.now()) {
-  for (const [key, claimedAt] of recentOutboundClaims) {
-    if (!Number.isFinite(claimedAt) || now - claimedAt > OUTBOUND_MESSAGE_IDEMPOTENCY_MS) {
+  for (const [key, claim] of recentOutboundClaims) {
+    if (claim.status !== 'pending' && now - claim.at > OUTBOUND_MESSAGE_IDEMPOTENCY_MS) {
       recentOutboundClaims.delete(key)
     }
   }
@@ -76,19 +77,8 @@ export function recordOutboundFailure({ toId, channel, externalTargetId, content
   return failure
 }
 
-function claimOutbound({ toId, channel, externalTargetId, content, turnId = '' }) {
-  const now = Date.now()
-  pruneOutboundClaims(now)
-  // This lock prevents two delivery paths inside one turn (explicit send and
-  // runtime fallback) from racing. Identical answers to two distinct user
-  // turns are legitimate and must not suppress one another.
-  const key = JSON.stringify([
-    createOutboundAttemptKey({ toId, channel, externalTargetId, content }),
-    String(turnId || ''),
-  ])
-  if (recentOutboundClaims.has(key)) return false
-  recentOutboundClaims.set(key, now)
-  return true
+function outboundClaimKey({ toId, channel, externalTargetId, content, turnId = '', format = '' }) {
+  return JSON.stringify([createOutboundAttemptKey({ toId, channel, externalTargetId, content }), String(turnId), format])
 }
 
 function makeDeliveryFailure({
@@ -307,7 +297,7 @@ function resolveDeliveryTarget(resolvedId, channelPref, context = {}) {
 }
 
 // send_message：投递到指定渠道（本地 SSE 或外部平台），并写入 conversations 表
-export async function deliverMessage({ target_id, content = '', channel = 'AUTO', image_path, media_path }, context = {}) {
+export async function deliverMessage({ target_id, content = '', channel = 'AUTO', image_path, media_path, format }, context = {}) {
   if (!target_id) return makeDeliveryFailure({ error: 'missing_target_id', reason: 'No target_id was provided.' })
 
   const resolvedId = normalizeConversationPartyId(target_id)
@@ -330,14 +320,6 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
   const delivery = resolveDeliveryTarget(resolvedId, channel, context)
   const requestedChannel = String(channel || 'AUTO').toUpperCase()
   if (delivery.error) {
-    const previousFailure = getRecentOutboundFailure({ toId: resolvedId, channel: requestedChannel, externalTargetId: '', content: outboundContent })
-    if (previousFailure) {
-      return makeDeliveryFailure({
-        targetId: resolvedId, channel: requestedChannel, skipped: 'repeated_failed_outbound', error: 'previous_delivery_failure',
-        reason: `The identical message was already blocked by a delivery failure: ${previousFailure.reason}. Diagnose or repair routing before retrying.`,
-        retryAfterMs: previousFailure.retryAfterMs,
-      })
-    }
     recordOutboundFailure({ toId: resolvedId, channel: requestedChannel, externalTargetId: '', content: outboundContent, reason: delivery.error })
     return makeDeliveryFailure({ targetId: resolvedId, channel: requestedChannel, error: 'delivery_route_unavailable', reason: delivery.error })
   }
@@ -356,173 +338,183 @@ export async function deliverMessage({ target_id, content = '', channel = 'AUTO'
     externalTargetId: delivery.externalTargetId || '',
     content: outboundContent,
   })
+  const args = { target_id: resolvedId, content, channel, image_path, media_path, format }
+  const warn = (reason, evidence) => behaviorReminder(context, { tool: 'send_message', args, reason, evidence })
   if (previousFailure) {
-    return makeDeliveryFailure({
-      targetId: resolvedId, channel: channelLabel, skipped: 'repeated_failed_outbound', error: 'previous_delivery_failure',
-      reason: `The identical message previously failed to reach this recipient: ${previousFailure.reason}. It was not sent again; inspect or repair the channel before retrying.`,
-      retryAfterMs: previousFailure.retryAfterMs,
-    })
+    const reminder = warn('The identical message previously failed. Inspect the recorded failure before retrying.', previousFailure)
+    if (reminder) return reminder
   }
   if (context.autonomous === true) {
     const alreadyDelivered = findUnansweredDeliveredOutbound({
-      toId: resolvedId,
-      channel: channelLabel,
-      externalPartyId: delivery.externalTargetId || '',
-      content: outboundContent,
+      toId: resolvedId, channel: channelLabel, externalPartyId: delivery.externalTargetId || '', content: outboundContent,
+      messageFormat: format === 'voice' ? 'voice' : format === 'text' ? 'text' : '',
     })
     if (alreadyDelivered) {
-      return makeDeliverySuccess({
+      const reminder = warn('The identical message was already successfully delivered and the recipient has not replied. No repeat is needed.',
+        { ...alreadyDelivered, delivered: true, content: outboundContent, target_id: resolvedId })
+      if (reminder) return reminder
+    }
+  }
+  pruneOutboundClaims()
+  const claimKey = outboundClaimKey({ toId: resolvedId, channel: channelLabel,
+    externalTargetId: delivery.externalTargetId || '', content: outboundContent,
+    turnId: context.replyTurnId || context.turnId || '', format: format || (context.speechManifest ? 'voice' : 'legacy') })
+  const previousClaim = recentOutboundClaims.get(claimKey)
+  if (previousClaim?.status === 'pending') {
+    return makeDeliveryFailure({ targetId: resolvedId, channel: channelLabel,
+      error: 'outbound_in_flight', reason: 'The identical transport operation is still in progress; its outcome is not known. Wait for that result.' })
+  }
+  if (previousClaim?.result?.delivered === true) {
+    const reminder = warn('The identical message was already successfully delivered. This is not a delivery failure; no repeat is needed.', previousClaim.result)
+    if (reminder) return reminder
+  }
+  const claim = { at: Date.now(), status: 'pending' }
+  recentOutboundClaims.set(claimKey, claim)
+  try {
+    const result = await (async () => {
+      // Validate and remind before paying for synthesis or creating audio files.
+      if (context.prepareSpeech) {
+        let speech
+        try { speech = await context.prepareSpeech() } catch (error) {
+          if (context.signal?.aborted) throw error
+          return makeDeliveryFailure({ targetId: resolvedId, channel: channelLabel, error: 'speech_failed', reason: error.message })
+        }
+        if (!speech?.segments?.length) return makeDeliveryFailure({ targetId: resolvedId, channel: channelLabel, error: 'speech_failed', reason: String(speech) })
+        context.signal?.throwIfAborted()
+        context = { ...context, speechManifest: speech }
+      }
+      const timestamp = nowTimestamp()
+      console.log(`\n[消息发送] → ${resolvedId}${delivery.externalTargetId ? ` via ${delivery.externalTargetId}` : ''}${channelLabel ? ` [${channelLabel}]` : ''}`)
+      console.log(`  ${outboundContent}`)
+      if (media) console.log(`  media_path: ${media.path}`)
+      console.log(`  时间：${timestamp}`)
+
+      // 顺序：先写数据库（source of truth），再广播 SSE，最后外部投递。
+      // 外部投递失败时仍保留对话记录，下次 LLM 仍能看到自己发过这句话；前端也已经显示。
+      // P0-2：检测末尾是否留了"非澄清型 follow-up question"——这是后续轮次代词被钩偏的源头。
+      //   保守判定：以问号收尾（? / ？）且至少含一个动词+助词组合（要 / 需 / 想 / 帮 / 给 / 是否）
+      //   或英文 should/want/need/shall。澄清型疑问（"在哪个城市？"/"几点？"）也会被命中——
+      //   接受这点：标 open_question 不阻止模型输出，只在后续轮过期时降权，不伤当前回合。
+      const isOpenFollowup = detectOpenFollowupQuestion(cleanedContent)
+      const messageFormat = delivery.isLocal
+        ? (context.speechManifest || context.expressionVoice === true ? 'voice' : 'text')
+        : 'social'
+      const insertedId = insertConversation({
+        role: 'jarvis',
+        from_id: 'jarvis',
+        to_id: resolvedId,
+        content: outboundContent,
+        timestamp,
+        channel: channelLabel,
+        message_format: messageFormat,
+        external_party_id: delivery.externalTargetId || '',
+        open_question: isOpenFollowup ? 1 : 0,
+        delivery_status: 'pending',
+      })
+      if (isOpenFollowup && insertedId) {
+        // 写入时 open_question 已设；此处保留兜底（万一上面 column 没生效）
+        try { markConversationOpenQuestion(insertedId, true) } catch {}
+      }
+
+      const shouldSpeakLocally = Boolean(cleanedContent)
+        && !media
+        && delivery.isLocal
+        && context.expressionVoice === true
+
+      emitEvent('message', {
+        from: 'consciousness',
+        to: resolvedId,
+        content: outboundContent,
+        timestamp,
+        conversation_id: insertedId,
+        channel: channelLabel,
+        message_format: messageFormat,
+        external_party_id: delivery.externalTargetId || '',
+        target_client_id: context.replyClientId || '',
+        turn_id: context.replyTurnId || '',
+        ...(shouldSpeakLocally ? { speak: true } : {}),
+        ...(context.speechManifest && delivery.isLocal ? { speech: context.speechManifest } : {}),
+        ...(media ? { media_path: media.path, media_kind: media.kind, file_name: media.fileName } : {}),
+      })
+
+      let socialResult = null
+      if (!delivery.isLocal && delivery.externalTargetId) {
+        try {
+          socialResult = await dispatchSocialMessage(delivery.externalTargetId, makeSocialPayload(cleanedContent, media))
+        } catch (err) {
+          console.warn(`[消息发送] 外部投递异常 (${delivery.deliveryChannel}): ${err.message}`)
+          socialResult = { ok: false, error: err.message }
+        }
+      }
+
+      if (delivery.isLocal) {
+        updateConversationDeliveryStatus(insertedId, 'delivered')
+        return makeDeliverySuccess({ targetId: resolvedId, channel: channelLabel, conversationId: insertedId })
+      }
+      if (socialResult?.ok) {
+        updateConversationDeliveryStatus(insertedId, 'delivered')
+        return makeDeliverySuccess({
+          targetId: resolvedId,
+          channel: channelLabel,
+          conversationId: insertedId,
+          platform: socialResult.platform || '',
+        })
+      }
+      if (socialResult?.skipped) {
+        const reason = socialResult.reason || 'external channel is not configured'
+        recordOutboundFailure({
+          toId: resolvedId,
+          channel: channelLabel,
+          externalTargetId: delivery.externalTargetId || '',
+          content: outboundContent,
+          reason,
+        })
+        updateConversationDeliveryStatus(insertedId, 'failed')
+        return makeDeliveryFailure({
+          targetId: resolvedId,
+          channel: channelLabel,
+          error: 'external_delivery_unavailable',
+          reason: `External channel ${delivery.deliveryChannel || 'unknown'} did not deliver the message: ${reason}. A later identical attempt will receive this failure as a one-time reminder before retrying.`,
+        })
+      }
+      if (socialResult && socialResult.ok === false) {
+        const reason = socialResult.reason || socialResult.error || 'unknown'
+        // wechat-clawbot 缺 context_token 是该渠道最常见的失败：重启后内存 Map 清空、或用户从未入站。
+        // 单独点名，让 LLM 直接告诉用户"先发一条过来"，不要去编造其他解释。
+        const isMissingContextToken = /no context_token/i.test(reason)
+        const hint = isMissingContextToken
+          ? '（wechat-clawbot 必须先收到该用户的入站消息才能回发；告诉用户先从微信给你发一条任意内容即可。）'
+          : ''
+        recordOutboundFailure({
+          toId: resolvedId,
+          channel: channelLabel,
+          externalTargetId: delivery.externalTargetId || '',
+          content: outboundContent,
+          reason: `${reason}${hint}`,
+        })
+        updateConversationDeliveryStatus(insertedId, 'failed')
+        return makeDeliveryFailure({
+          targetId: resolvedId,
+          channel: channelLabel,
+          error: 'external_delivery_failed',
+          reason: `External channel ${delivery.deliveryChannel || 'unknown'} did not deliver the message: ${reason}${hint} A later identical attempt will receive this failure as a one-time reminder before retrying.`,
+        })
+      }
+      updateConversationDeliveryStatus(insertedId, 'failed')
+      return makeDeliveryFailure({
         targetId: resolvedId,
         channel: channelLabel,
-        conversationId: alreadyDelivered.id,
-        messageSent: false,
-        skipped: 'already_delivered_unanswered',
-        deliveredAt: alreadyDelivered.timestamp,
+        error: 'external_delivery_unknown',
+        reason: 'The external channel returned no authoritative success result, so delivery was not assumed.',
       })
-    }
-  }
-  // This is a short concurrency/idempotency lock, not a semantic cooldown.
-  // The model remains free to decide whether a message is valuable; this only
-  // prevents an explicit send and a retry/fallback race from delivering the
-  // exact same payload twice within a few seconds.
-  if (!claimOutbound({
-    toId: resolvedId,
-    channel: channelLabel,
-    externalTargetId: delivery.externalTargetId || '',
-    content: outboundContent,
-    turnId: context.replyTurnId || context.turnId || '',
-  })) {
-    return makeDeliveryFailure({
-      targetId: resolvedId,
-      channel: channelLabel,
-      skipped: 'duplicate_outbound_race',
-      error: 'duplicate_outbound_race',
-      reason: 'The identical outbound payload is already being sent or was just sent. Reassess the turn; do not retry the same payload.',
-    })
-  }
-
-  const timestamp = nowTimestamp()
-  console.log(`\n[消息发送] → ${resolvedId}${delivery.externalTargetId ? ` via ${delivery.externalTargetId}` : ''}${channelLabel ? ` [${channelLabel}]` : ''}`)
-  console.log(`  ${outboundContent}`)
-  if (media) console.log(`  media_path: ${media.path}`)
-  console.log(`  时间：${timestamp}`)
-
-  // 顺序：先写数据库（source of truth），再广播 SSE，最后外部投递。
-  // 外部投递失败时仍保留对话记录，下次 LLM 仍能看到自己发过这句话；前端也已经显示。
-  // P0-2：检测末尾是否留了"非澄清型 follow-up question"——这是后续轮次代词被钩偏的源头。
-  //   保守判定：以问号收尾（? / ？）且至少含一个动词+助词组合（要 / 需 / 想 / 帮 / 给 / 是否）
-  //   或英文 should/want/need/shall。澄清型疑问（"在哪个城市？"/"几点？"）也会被命中——
-  //   接受这点：标 open_question 不阻止模型输出，只在后续轮过期时降权，不伤当前回合。
-  const isOpenFollowup = detectOpenFollowupQuestion(cleanedContent)
-  const insertedId = insertConversation({
-    role: 'jarvis',
-    from_id: 'jarvis',
-    to_id: resolvedId,
-    content: outboundContent,
-    timestamp,
-    channel: channelLabel,
-    external_party_id: delivery.externalTargetId || '',
-    open_question: isOpenFollowup ? 1 : 0,
-    delivery_status: 'pending',
-  })
-  if (isOpenFollowup && insertedId) {
-    // 写入时 open_question 已设；此处保留兜底（万一上面 column 没生效）
-    try { markConversationOpenQuestion(insertedId, true) } catch {}
-  }
-
-  const shouldSpeakLocally = Boolean(cleanedContent)
-    && !media
-    && delivery.isLocal
-    && (context.voiceReply === true || isVoiceChannel(context.currentChannel))
-
-  emitEvent('message', {
-    from: 'consciousness',
-    to: resolvedId,
-    content: outboundContent,
-    timestamp,
-    conversation_id: insertedId,
-    channel: channelLabel,
-    external_party_id: delivery.externalTargetId || '',
-    target_client_id: context.replyClientId || '',
-    turn_id: context.replyTurnId || '',
-    ...(shouldSpeakLocally ? { speak: true } : {}),
-    ...(media ? { media_path: media.path, media_kind: media.kind, file_name: media.fileName } : {}),
-  })
-
-  let socialResult = null
-  if (!delivery.isLocal && delivery.externalTargetId) {
-    try {
-      socialResult = await dispatchSocialMessage(delivery.externalTargetId, makeSocialPayload(cleanedContent, media))
-    } catch (err) {
-      console.warn(`[消息发送] 外部投递异常 (${delivery.deliveryChannel}): ${err.message}`)
-      socialResult = { ok: false, error: err.message }
-    }
-  }
-
-  if (delivery.isLocal) {
-    updateConversationDeliveryStatus(insertedId, 'delivered')
-    return makeDeliverySuccess({ targetId: resolvedId, channel: channelLabel, conversationId: insertedId })
-  }
-  if (socialResult?.ok) {
-    updateConversationDeliveryStatus(insertedId, 'delivered')
-    return makeDeliverySuccess({
-      targetId: resolvedId,
-      channel: channelLabel,
-      conversationId: insertedId,
-      platform: socialResult.platform || '',
-    })
-  }
-  if (socialResult?.skipped) {
-    const reason = socialResult.reason || 'external channel is not configured'
-    recordOutboundFailure({
-      toId: resolvedId,
-      channel: channelLabel,
-      externalTargetId: delivery.externalTargetId || '',
-      content: outboundContent,
-      reason,
-    })
-    updateConversationDeliveryStatus(insertedId, 'failed')
-    return makeDeliveryFailure({
-      targetId: resolvedId,
-      channel: channelLabel,
-      error: 'external_delivery_unavailable',
-      reason: `External channel ${delivery.deliveryChannel || 'unknown'} did not deliver the message: ${reason}. The identical message is now paused so later heartbeats will not retry it automatically.`,
-    })
-  }
-  if (socialResult && socialResult.ok === false) {
-    const reason = socialResult.reason || socialResult.error || 'unknown'
-    // wechat-clawbot 缺 context_token 是该渠道最常见的失败：重启后内存 Map 清空、或用户从未入站。
-    // 单独点名，让 LLM 直接告诉用户"先发一条过来"，不要去编造其他解释。
-    const isMissingContextToken = /no context_token/i.test(reason)
-    const hint = isMissingContextToken
-      ? '（wechat-clawbot 必须先收到该用户的入站消息才能回发；告诉用户先从微信给你发一条任意内容即可。）'
-      : ''
-    recordOutboundFailure({
-      toId: resolvedId,
-      channel: channelLabel,
-      externalTargetId: delivery.externalTargetId || '',
-      content: outboundContent,
-      reason: `${reason}${hint}`,
-    })
-    updateConversationDeliveryStatus(insertedId, 'failed')
-    return makeDeliveryFailure({
-      targetId: resolvedId,
-      channel: channelLabel,
-      error: 'external_delivery_failed',
-      reason: `External channel ${delivery.deliveryChannel || 'unknown'} did not deliver the message: ${reason}${hint} The identical message is now paused so later heartbeats will not retry it automatically.`,
-    })
-  }
-  updateConversationDeliveryStatus(insertedId, 'failed')
-  return makeDeliveryFailure({
-    targetId: resolvedId,
-    channel: channelLabel,
-    error: 'external_delivery_unknown',
-    reason: 'The external channel returned no authoritative success result, so delivery was not assumed.',
-  })
-  if (shouldSpeakLocally) {
-    console.log(
-      `[voice-route] message turn=${context.replyTurnId || 'missing'}`
-      + ` target=${context.replyClientId || 'missing'} conversation=${insertedId || 0}`,
-    )
+    })()
+    claim.result = JSON.parse(result)
+    claim.status = 'complete'
+    claim.at = Date.now()
+    if (claim.result.delivered) recentOutboundFailures.delete(createOutboundAttemptKey({ toId: resolvedId, channel: channelLabel, externalTargetId: delivery.externalTargetId || '', content: outboundContent }))
+    return result
+  } catch (error) {
+    recentOutboundClaims.delete(claimKey)
+    throw error
   }
 }

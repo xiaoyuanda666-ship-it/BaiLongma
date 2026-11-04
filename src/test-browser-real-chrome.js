@@ -100,6 +100,16 @@ test('Electron and UI no longer instantiate webpage hosts; packaging omits brows
   assert.doesNotMatch(ui,/loadBrowserPreviewImage|showNativeBrowserWindow|browser-surface\/frame/)
   const pkg=JSON.parse(fs.readFileSync(new URL('package.json',root),'utf8'))
   assert.equal(pkg.dependencies['@playwright/mcp'],undefined)
+  assert.equal(pkg.devDependencies['@playwright/mcp'],undefined)
+  const lock = JSON.parse(fs.readFileSync(new URL('package-lock.json', root), 'utf8'))
+  for (const name of ['playwright', 'playwright-core', '@playwright/mcp']) {
+    assert.equal(pkg.dependencies[name], undefined)
+    assert.equal(pkg.devDependencies[name], undefined)
+    assert.equal(lock.packages['node_modules/' + name], undefined)
+  }
+  for (const retired of ['playwright-server.js', 'playwright-cli-entry.cjs', 'embedded-playwright-connection.js', 'embedded-playwright-sidecar.js']) {
+    assert.equal(fs.existsSync(new URL('src/mcp/' + retired, root)), false, retired + ' must remain removed')
+  }
   assert.equal(pkg.dependencies['chrome-devtools-mcp'],undefined)
   assert.equal(pkg.build.extraResources.some(r=>r.to==='playwright-browsers'),false)
 })

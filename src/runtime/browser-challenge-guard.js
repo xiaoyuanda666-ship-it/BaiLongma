@@ -1,4 +1,6 @@
 const BLOCKED_WEB_TOOLS = new Set([
+  'model_web_search',
+  'model_web_fetch',
   'web_search',
   'web_read',
   'fetch_url',

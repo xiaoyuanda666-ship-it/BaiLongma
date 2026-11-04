@@ -10,7 +10,7 @@ import { validateToolManifest } from './capabilities/marketplace/index.js'
 
 const builtinNames = Object.keys(TOOL_SCHEMAS)
 const functionNames = builtinNames.map(name => TOOL_SCHEMAS[name]?.function?.name)
-const REMOVED_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
+const REMOVED_WEB_TOOLS = ['model_web_search', 'model_web_fetch', 'web_read', 'fetch_url', 'browser_read']
 const REMOVED_BROWSER_TOOLS = ['browser_sessions', 'browser_open', 'browser_inspect', 'browser_act']
 
 assert.equal(new Set(builtinNames).size, builtinNames.length)

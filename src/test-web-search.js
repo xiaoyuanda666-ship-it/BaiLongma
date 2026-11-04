@@ -1,123 +1,81 @@
-// Pure routing regression for browser-only web search.
-//
-// Run: node src/test-web-search.js
-
 import assert from 'node:assert/strict'
-import {
-  BROWSER_CAPABILITY_TOOLS,
-  BROWSER_TOOLS,
-  capabilityContextBlocks,
-  capabilityToolsFor,
-  findCapabilitiesByQuery,
-  listCapabilities,
-} from './capabilities/capability-registry.js'
-import { selectTools } from './memory/tool-router.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { test, after } from 'node:test'
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'blm-web-routes-'))
+process.env.BAILONGMA_USER_DIR = temp
+process.env.BAILONGMA_RESOURCES_DIR = process.cwd()
+const { config } = await import('./config.js')
+const { TOOL_SCHEMAS } = await import('./capabilities/builtin-tools.js')
+const { getToolSchema } = await import('./capabilities/schemas.js')
+const { listMcpTools, getMcpToolSchema, executeMcpTool } = await import('./mcp/client-manager.js')
+const { executeTool } = await import('./capabilities/executor.js')
+const { selectTools } = await import('./memory/tool-router.js')
+const { capabilityContextBlocks } = await import('./capabilities/capability-registry.js')
+const { classifyActionContract, actionContractToolSucceeded } = await import('./runtime/action-contract.js')
+const { callLLM } = await import('./llm.js')
+const { closeDBForTest } = await import('./db.js')
+after(() => { closeDBForTest(); fs.rmSync(temp, { recursive: true, force: true }) })
 
-const LEGACY_WEB_TOOLS = ['web_search', 'web_read', 'fetch_url', 'browser_read']
-const REQUIRED_SEARCH_CHAIN = [
-  'browser_navigate',
-  'browser_snapshot',
-  'browser_find',
-  'browser_click',
-  'browser_type',
-]
-
-function capabilityContext(messageBody) {
-  return {
-    text: messageBody.toLowerCase(),
-    rawText: messageBody,
-    isTick: false,
+test('only provider web_search is exposed as a dedicated web function', async () => {
+  assert.deepEqual(Object.keys(TOOL_SCHEMAS).filter(name => /web|browser/.test(name)), ['web_search'])
+  for (const name of ['model_web_search', 'model_web_fetch', 'web_read', 'fetch_url', 'system_browser_open',
+    'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_scroll', 'browser_download_manage', 'start_browser_download_task']) {
+    assert.equal(getToolSchema(name), null)
+    assert.equal(getMcpToolSchema(name), null)
+    assert.equal(JSON.parse(await executeTool(name, {})).ok, false)
+    assert.equal(JSON.parse(await executeMcpTool(name, {})).ok, false)
   }
-}
-
-function assertBrowserOnly(tools, label) {
-  assert.ok(REQUIRED_SEARCH_CHAIN.every(name => tools.includes(name)),
-    `${label}: browser search chain is present (${tools.join(',')})`)
-  assert.ok(LEGACY_WEB_TOOLS.every(name => !tools.includes(name)),
-    `${label}: removed web tools stay absent (${tools.join(',')})`)
-}
-
-assert.equal(BROWSER_TOOLS.length, 20, 'browser-only web access exposes the fixed 20-tool allowlist')
-assert.ok(!listCapabilities().some(capability => capability.id === 'web'),
-  'legacy standalone web capability is removed')
-
-for (const messageBody of [
-  '搜一下 vLLM 最新版本',
-  'search the web for the current Chrome DevTools MCP documentation',
-  '总结网页正文 https://example.com/article',
-  '读取这个 JavaScript 动态网页正文',
-  '小白龙，帮我上网看看今天有什么 AI 新闻，挑三条重要的告诉我，链接也发我一下。',
-  '今天 AI 圈有什么新鲜事？',
-  '看看网上最近都在聊什么 AI 新闻',
-  '最近苹果有什么消息？',
-  '这个新闻怎么回事？',
-  'AI 最近有啥大事？',
-  '这两天科技圈发生啥了？',
-  '给我说说最近芯片行业有啥动静。',
-  '现在比特币多少钱？',
-  '黄金今天什么价？',
-  '苹果最新系统版本是多少？',
-  "what's new in AI today?",
-]) {
-  assertBrowserOnly(
-    capabilityToolsFor(capabilityContext(messageBody)),
-    `capability routing: ${messageBody}`,
-  )
-  const turnTools = selectTools({ messageBody, isTick: false, senderId: 'ID:test' })
-  assert.ok(BROWSER_CAPABILITY_TOOLS.every(name => turnTools.includes(name)),
-    `turn routing makes explicit web intent executable: ${messageBody}`)
-  assert.ok(LEGACY_WEB_TOOLS.every(name => !turnTools.includes(name)),
-    `turn routing keeps removed web tools absent: ${messageBody}`)
-}
-
-for (const messageBody of [
-  '我最近心情不太好，想聊聊。',
-  '今天我们讨论一下项目计划。',
-  '这个项目最近有啥更新？',
-  '说说最近项目进展。',
-]) {
-  const turnTools = selectTools({ messageBody, isTick: false, senderId: 'ID:test' })
-  assert.ok(BROWSER_TOOLS.every(name => !turnTools.includes(name)),
-    `ordinary non-web conversation does not trigger the browser: ${messageBody}`)
-}
-
-const discovered = findCapabilitiesByQuery('上网搜索').find(capability => capability.id === 'interactive-browser')
-assert.ok(discovered, 'find_tool discovery resolves web search to the interactive-browser capability')
-assert.equal(discovered.tools[0], 'browser_set_display_mode',
-  'discovery prioritizes the required model-selected display mode before page actions')
-assert.deepEqual([...discovered.tools].sort(), [...BROWSER_CAPABILITY_TOOLS].sort(),
-  'discovery returns the fixed dedicated-Chrome allowlist plus display-mode switching')
-
-const context = capabilityContextBlocks(capabilityContext('帮我上网搜索 Chrome DevTools MCP'))
-  .join('\n')
-assert.match(context, /browser_navigate/)
-assert.match(context, /https:\/\/www\.baidu\.com/)
-assert.match(context, /browser_snapshot/)
-assert.match(context, /browser_click/)
-assert.match(context, /browser_type/)
-assert.match(context, /Do not put keywords in a search-engine URL/)
-assert.doesNotMatch(context, /bing\.com\/search\?q=/)
-assert.match(context, /actions return a fresh accessibility snapshot/)
-assert.match(context, /instead of routinely calling browser_snapshot/)
-assert.match(context, /CAPTCHA\/challenge page/)
-assert.match(context, /hard stop for automated web access in the current user turn/)
-assert.match(context, /Do not navigate to another provider/)
-assert.match(context, /Continue only in a new user turn after the user confirms/)
-assert.match(context, /Chrome DevTools uid values[\s\S]*latest raw uid/)
-assert.match(context, /dedicated Chrome profile/)
-assert.match(context, /do not replace it with model memory for current\/latest\/recent facts/)
-assert.match(context, /Count and name only sources that actually loaded/)
-for (const name of LEGACY_WEB_TOOLS) {
-  assert.match(context, new RegExp(`${name}[^\\n]*unavailable`, 'i'),
-    `browser workflow explicitly marks ${name} unavailable`)
-}
-
-const sparse = selectTools({
-  messageBody: '闲聊两句',
-  isTick: false,
-  senderId: 'ID:test',
+  assert.equal(listMcpTools().some(tool => tool.name.startsWith('browser_')), false)
 })
-assert.ok(BROWSER_TOOLS.every(name => !sparse.includes(name)),
-  'browser tools are not injected into an unrelated sparse turn')
 
-console.log('test-web-search passed: search/read intents route exclusively through Chrome DevTools MCP')
+test('search, browser routing and dynamic discovery use the two new entry points', async () => {
+  Object.assign(config, { provider: 'deepseek', model: 'deepseek-v4-pro', apiKey: 'test-key', baseURL: 'https://api.deepseek.com' })
+  assert.ok(selectTools({ messageBody: '搜索最新资料' }).includes('web_search'))
+  const browser = selectTools({ messageBody: '用浏览器打开 https://example.com' })
+  assert.ok(browser.includes('run_command') && browser.includes('read_file'))
+  assert.ok(browser.every(name => !name.startsWith('browser_')))
+  const found = JSON.parse(await executeTool('find_tool', { query: 'bsk' }))
+  assert.ok(found.loaded.includes('run_command'))
+  assert.ok(found.capabilities.some(cap => cap.id === 'bsk' && cap.workflow.includes('SKILL.md')))
+  const context = capabilityContextBlocks({ rawText: '用浏览器打开网页', text: '用浏览器打开网页' }).join('\n')
+  assert.match(context, /bsk.*SKILL\.md/)
+  assert.doesNotMatch(context, /All web access must|https:\/\/www.baidu.com/)
+})
+
+test('bsk completion requires an actual completed CLI action, not setup or a failed process', () => {
+  const contract = classifyActionContract('打开 https://example.com')
+  assert.equal(contract.id, 'bsk')
+  assert.deepEqual(contract.requiredTools, ['run_command'])
+  const result = command => JSON.stringify({ ok: true, command, exit_code: 0 })
+  assert.equal(actionContractToolSucceeded(contract, 'run_command', result('bsk navigate https://example.com --session task')), true)
+  for (const command of ['bsk doctor', 'bsk --help', 'bsk session start', 'echo bsk navigate https://example.com', 'curl https://example.com']) {
+    assert.equal(actionContractToolSucceeded(contract, 'run_command', result(command)), false, command)
+  }
+  assert.equal(actionContractToolSucceeded(contract, 'run_command', JSON.stringify({ ok: true, command: 'bsk observe --session task', exit_code: 0, stdout: '{"ok":false,"error":"paused"}' })), false)
+  for (const exit_code of [null, 1]) assert.equal(actionContractToolSucceeded(contract, 'run_command', JSON.stringify({ ok: true, command: 'bsk navigate https://example.com', exit_code })), false)
+})
+
+test('agent can execute bsk through run_command and deliver its answer without requesting wrappers', async () => {
+  const executed = []
+  let round = 0
+  const contract = classifyActionContract('打开 https://example.com')
+  const result = await callLLM({ systemPrompt: 'Use the bsk CLI skill.', message: '打开 https://example.com',
+    tools: ['read_file', 'run_command'], mustReply: true, localReply: true,
+    toolContext: { currentTargetId: 'ID:test', actionContract: contract },
+    _streamOnceForTest: async ({ toolSchemas }) => {
+      assert.ok(toolSchemas.every(schema => !schema.function.name.startsWith('browser_')))
+      if (++round === 1) return { content: '', aborted: false, toolCalls: [{ id: 'cli', name: 'run_command', arguments: JSON.stringify({ command: 'bsk navigate https://example.com --session task' }) }] }
+      assert.equal(round, 2)
+      return { content: '页面已打开。', aborted: false, toolCalls: [] }
+    },
+    _executeToolForTest: async (name, args) => {
+      executed.push(name)
+      return name === 'run_command' ? JSON.stringify({ ok: true, command: args.command, exit_code: 0, stdout: '{"url":"https://example.com"}' })
+        : JSON.stringify({ ok: true, delivered: true })
+    },
+  })
+  assert.equal(result.delivered, true)
+  assert.deepEqual(executed, ['send_message', 'run_command', 'send_message'])
+})

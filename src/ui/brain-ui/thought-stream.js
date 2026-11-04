@@ -1,7 +1,7 @@
 import { t, translateUiText } from "./i18n/index.js";
 
 const TOOL_ZH = {
-  send_message: "发送消息",
+  send_message: "表达",
   express: "表达",
   read_file: "读取文件",
   write_file: "写入文件",
@@ -17,8 +17,7 @@ const TOOL_ZH = {
   download_file: "下载文件",
   kill_process: "终止进程",
   list_processes: "列出进程",
-  web_search: "搜索网页",
-  model_web_search: "联网搜索",
+  web_search: "联网搜索",
   model_web_fetch: "读取网页正文",
   analyze_image: "识别图片",
   web_read: "读取网页",
@@ -101,7 +100,6 @@ const TOOL_ICON = {
   kill_process: "🛑",
   list_processes: "📋",
   web_search: "🔎",
-  model_web_search: "🔎",
   model_web_fetch: "📄",
   analyze_image: "🖼️",
   web_read: "🌐",
@@ -226,6 +224,7 @@ export class ThoughtStream {
     this.thinkingLabel = options.thinkingLabel || t("thought.thinking");
     this.thinkingDoneLabel = options.thinkingDoneLabel || null;
     this.toolDetailLength = options.toolDetailLength || 160;
+    this.historyLimit = options.historyLimit || 0;
     this.startedAt = Date.now();
     this.curLine = null;
     this.thinkingEl = null;
@@ -247,6 +246,10 @@ export class ThoughtStream {
 
   trim() {
     if (!this.scroller) return;
+    if (this.historyLimit) {
+      while (this.el.children.length > this.historyLimit) this.el.firstChild?.remove();
+      return;
+    }
     while (this.el.children.length > 1 && this.scroller.scrollHeight > this.scroller.clientHeight + 4) {
       this.el.firstChild?.remove();
     }
@@ -525,7 +528,6 @@ export class ThoughtStream {
       case "kill_process":
         return a.pid ? `pid ${a.pid}` : "";
       case "web_search":
-      case "model_web_search":
         return this.compactText(a.query || parsed?.query || "", 60);
       case "web_read":
       case "model_web_fetch":
@@ -585,7 +587,7 @@ export class ThoughtStream {
       case "recall_memory":
         return this.compactText(a.summary || a.note || a.reason || "", 50);
       case "send_message":
-        return this.compactText(a.content || "", 60);
+        return `${a.format || a.channel || "text"} · ${this.compactText(a.content || "", 60)}`;
       case "speak":
         return this.compactText(a.text || "", 50);
       case "generate_lyrics":
@@ -719,8 +721,10 @@ export class ThoughtStream {
     name = normalizeToolName(name);
     const parsed = this.parseJsonResult(result);
 
+    if (parsed?.advisory === true) return `${t("thought.remindedNotExecuted")}\n${parsed.reason || ""}\n${JSON.stringify(parsed.evidence || {}, null, 2)}`;
+
     // Web tools 保留原有人类化格式器
-    if (["web_search", "model_web_search"].includes(parsed?.tool) || ["web_search", "model_web_search"].includes(name)) return this.formatWebSearchDetail(parsed || {});
+    if (["web_search", "web_search"].includes(parsed?.tool) || ["web_search", "web_search"].includes(name)) return this.formatWebSearchDetail(parsed || {});
     if (name === "model_web_fetch") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "web_read" || name === "web_read") return this.formatFetchUrlDetail(parsed || {});
     if (parsed?.tool === "fetch_url" || name === "fetch_url") return this.formatFetchUrlDetail(parsed || {});
@@ -798,12 +802,13 @@ export class ThoughtStream {
     const action = friendlyToolName(name, args);
     const icon = friendlyToolIcon(name);
     const resultStr = result == null ? "" : String(result);
-    const failure = ok === false || (ok !== true && isFailureResult(resultStr));
+    const reminded = this.parseJsonResult(resultStr)?.advisory === true;
+    const failure = !reminded && (ok === false || (ok !== true && isFailureResult(resultStr)));
     this.hadToolCall = true;
     this.toolFailed = this.toolFailed || failure;
-    const statusCls = failure ? "failed" : "success";
-    const statusIcon = failure ? "✗" : "✓";
-    const statusLabel = failure ? t("thought.failed") : t("thought.success");
+    const statusCls = reminded ? "ended" : failure ? "failed" : "success";
+    const statusIcon = reminded ? "ⓘ" : failure ? "✗" : "✓";
+    const statusLabel = reminded ? t("thought.reminded") : failure ? t("thought.failed") : t("thought.success");
 
     const toolEl = document.createElement("div");
     toolEl.className = `line-tool done tool-${statusCls}`;

@@ -1,3 +1,6 @@
+import { getSearchSettings, setSearchSettings } from '../../search/connections.js'
+import { execModelWeb } from '../../search/service.js'
+import { getSearchUsage } from '../../search/http.js'
 import { emitEvent, setStickyEvent } from '../../events.js'
 import { pushMessage } from '../../inbound-message.js'
 import { restartConnector } from '../../social/index.js'
@@ -188,6 +191,30 @@ export async function handleSettingsRoutes(req, res, url, { requireLocalOrToken,
     } catch (err) {
       jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message })
     }
+    return true
+  }
+
+  if (['/settings/search', '/settings/search/test'].includes(url.pathname) && ['GET', 'POST'].includes(req.method)) {
+    if (!checkLocalOrToken(req, res, url, requireLocalOrToken)) return true
+    try {
+      if (req.method === 'GET' && url.pathname === '/settings/search') {
+        jsonResponse(res, 200, { ok: true, search: getSearchSettings(), usage: getSearchUsage() })
+      } else if (req.method === 'POST' && url.pathname === '/settings/search') {
+        const search = setSearchSettings(await readJsonBody(req))
+        emitEvent('search_settings_updated', { connectionCount: search.connections.length })
+        jsonResponse(res, 200, { ok: true, search })
+      } else if (req.method === 'POST') {
+        const body = await readJsonBody(req)
+        if (!body.provider || body.provider === 'auto') throw new Error('请选择待测试的搜索连接')
+        const controller = new AbortController()
+        const cancel = () => controller.abort()
+        res.once('close', cancel)
+        try {
+          const result = JSON.parse(await execModelWeb('web_search', { query: 'Bailongma', provider: body.provider, count: 1, need_content: false }, { signal: controller.signal }))
+          jsonResponse(res, 200, { ok: result.ok, error: result.error, provider: result.provider, resultCount: result.results?.length || 0 })
+        } finally { res.off('close', cancel) }
+      } else jsonResponse(res, 405, { ok: false, error: 'method_not_allowed' })
+    } catch (err) { jsonResponse(res, err.statusCode === 413 ? 413 : 400, { ok: false, error: err.message }) }
     return true
   }
 

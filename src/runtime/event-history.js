@@ -7,6 +7,7 @@ export function createEventHistory({ insertBrainUiEvent }) {
     'scheduled_task_completed',
     'scheduled_task_retry',
     'scheduled_task_failed',
+    'cognition',
     'stream_start',
     'stream_end',
     'tool_preparing',

@@ -22,7 +22,7 @@ const fixture = (results, inspect = () => {}) => ({ fetchImpl: async (url, optio
   return { ok: true, json: async () => ({ results }) }
 } })
 const article = (name, extra = {}) => ({ title: name, url: `https://example.com/articles/${name}`, summary: `${name} summary`, content: `${name} original body`, ...extra })
-const contract = { id: 'web_research', minimumVerifiedSources: 3, requiredTools: ['model_web_search', 'model_web_fetch'] }
+const contract = { id: 'web_research', minimumVerifiedSources: 3, requiredTools: ['web_search', 'run_command'] }
 
 test('DeepSeek maps content, dates, metadata, filters and Unicode length to the documented wire API', async () => {
   const result = await searchModelWeb(connection, { query: 'AI', count: 50, date_from: '2026-10-31', date_to: '2026-10-31',
@@ -43,7 +43,7 @@ test('DeepSeek maps content, dates, metadata, filters and Unicode length to the 
   assert.equal(result.results[0].evidence_kind, 'page_content')
   assert.equal(result.results[1].date_status, 'unknown')
   assert.ok(result.warnings.some(warning => warning.includes('域名之外')))
-  assert.equal(collectVerifiedWebResearchSources([{ name: 'model_web_search', result: JSON.stringify({ ok: true, ...result }) }]).length, 1)
+  assert.equal(collectVerifiedWebResearchSources([{ name: 'web_search', result: JSON.stringify({ ok: true, ...result }) }]).length, 1)
   await searchModelWeb(connection, { query: '😀'.repeat(128) }, fixture([]))
   await assert.rejects(() => searchModelWeb(connection, { query: '😀'.repeat(129) }, fixture([])), /128/)
 })
@@ -61,8 +61,8 @@ test('today resolves in the selected timezone and invalid constraints fail befor
 test('snippets cannot become article evidence; content is deduplicated and bounded', async () => {
   const noBody = await searchModelWeb(connection, { query: 'AI', need_content: false }, fixture([article('alpha')]))
   assert.equal(noBody.results[0].evidence_kind, 'search_snippet')
-  assert.equal(noBody.results[0].verified, false)
-  assert.equal(collectVerifiedWebResearchSources([{ name: 'model_web_search', result: JSON.stringify({ ok: true, ...noBody }) }]).length, 0)
+  assert.equal(noBody.results[0].content_retrieved, false)
+  assert.equal(collectVerifiedWebResearchSources([{ name: 'web_search', result: JSON.stringify({ ok: true, ...noBody }) }]).length, 0)
   const bounded = await searchModelWeb(connection, { query: 'AI', count: 10 }, fixture([
     article('alpha', { content: 'a'.repeat(20000) }), article('alpha'),
     ...['beta', 'gamma', 'delta', 'epsilon'].map(name => article(name, { content: 'b'.repeat(20000) })),
@@ -70,7 +70,7 @@ test('snippets cannot become article evidence; content is deduplicated and bound
   ]))
   assert.equal(bounded.results.length, 5)
   assert.equal(bounded.results.reduce((sum, item) => sum + item.content.length, 0), 48000)
-  assert.equal(bounded.results.at(-1).verified, false)
+  assert.equal(bounded.results.at(-1).content_retrieved, false)
 })
 
 test('saved DeepSeek works with another chat provider, explicit selections never silently fall back', async () => {
@@ -78,8 +78,7 @@ test('saved DeepSeek works with another chat provider, explicit selections never
   Object.assign(config, { provider: 'openai', model: 'gpt-5.5', apiKey: 'openai-test', baseURL: 'https://api.openai.com/v1' })
   assert.equal(getModelWebConnection().provider, 'deepseek')
   assert.equal(getModelWebConnection({ provider: 'openai' }).provider, 'openai')
-  assert.equal(getModelWebConnection({ provider: 'openai', fetchPage: true }), null)
-  assert.equal(JSON.parse(await execModelWeb('model_web_search', { provider: 'unsupported', query: 'AI' })).error, 'not_configured')
+  assert.equal(JSON.parse(await execModelWeb('web_search', { provider: 'unsupported', query: 'AI' })).error, 'not_configured')
   assert.equal(JSON.stringify(config).includes('test-search-key'), false, 'search must not change the active chat credentials')
   fs.unlinkSync(path.join(paths.llmConfigDir, 'deepseek.json'))
 })
@@ -100,9 +99,9 @@ test('OpenAI preserves only real cited answers as evidence, separates uncited di
   }
   const result = await searchModelWeb(openai, { query: 'AI', domains: ['example.com'] }, { fetchImpl })
   assert.equal(result.results[0].evidence_kind, 'grounded_answer')
-  assert.equal(result.results[0].verified, false, 'a provider answer is never represented as fetched page text')
+  assert.equal(result.results[0].content_retrieved, false, 'a provider answer is never represented as fetched page text')
   assert.equal(result.results[1].evidence_kind, 'search_snippet')
-  const evidence = [{ name: 'model_web_search', result: JSON.stringify({ ok: true, ...result }) }]
+  const evidence = [{ name: 'web_search', result: JSON.stringify({ ok: true, ...result }) }]
   assert.deepEqual(collectVerifiedWebResearchSources(evidence).map(item => item.title), ['Cited'])
   const dated = await searchModelWeb(openai, { query: 'AI', domains: ['example.com'], date_from: '2026-10-31' }, { fetchImpl })
   assert.ok(dated.warnings.some(warning => warning.includes('日期')))
@@ -112,7 +111,7 @@ test('OpenAI preserves only real cited answers as evidence, separates uncited di
 test('three full texts satisfy research without redundant fetch; missing links are attached without erasing the summary', async () => {
   Object.assign(config, connection)
   const search = await searchModelWeb(connection, { query: 'AI' }, fixture(['alpha', 'beta', 'gamma'].map(name => article(name))))
-  const options = { successfulToolEvidence: [{ name: 'model_web_search', result: JSON.stringify({ ok: true, ...search }) }] }
+  const options = { successfulToolEvidence: [{ name: 'web_search', result: JSON.stringify({ ok: true, ...search }) }] }
   const prose = 'Alpha 发布新模型。Beta 开源数据集。Gamma 推出开发工具。'
   const reply = completeWebResearchCitations(contract, prose, options)
   assert.equal(actionContractCompletionIssue(contract, reply, options), '')
@@ -126,26 +125,26 @@ test('three full texts satisfy research without redundant fetch; missing links a
   let delivered = ''
   const executions = []
   await callLLM({ systemPrompt: 'Search, summarize and cite.', message: '帮我搜索 AI 新闻',
-    tools: ['model_web_search', 'model_web_fetch'], mustReply: true, localReply: true,
+    tools: ['web_search'], mustReply: true, localReply: true,
     toolContext: { currentTargetId: 'ID:test', actionContract: contract },
     _streamOnceForTest: async () => {
-      if (++rounds === 1) return { content: '', toolCalls: [{ id: 'search', name: 'model_web_search', arguments: '{"query":"AI"}' }], aborted: false }
+      if (++rounds === 1) return { content: '', toolCalls: [{ id: 'search', name: 'web_search', arguments: '{"query":"AI"}' }], aborted: false }
       assert.equal(rounds, 2, 'no redundant retrieval or regeneration required')
       return { content: prose, toolCalls: [], aborted: false }
     },
     _executeToolForTest: async (name, args) => {
       executions.push(name)
-      if (name === 'model_web_search') return JSON.stringify({ ok: true, ...search })
+      if (name === 'web_search') return JSON.stringify({ ok: true, ...search })
       if (name === 'send_message') { delivered = args.content; return JSON.stringify({ ok: true, delivered: true }) }
       assert.fail('unexpected fetch')
     },
   })
-  assert.deepEqual(executions, ['model_web_search', 'send_message'])
+  assert.deepEqual(executions, ['send_message', 'web_search', 'send_message'])
   assert.ok(delivered.startsWith(prose))
   assert.equal((delivered.match(/https:\/\//g) || []).length, 3)
 })
 
-test('independent API page fetches start concurrently in the real agent tool loop', async () => {
+test('independent native searches start concurrently in the real agent tool loop', async () => {
   Object.assign(config, connection)
   let rounds = 0
   let started = 0
@@ -153,13 +152,13 @@ test('independent API page fetches start concurrently in the real agent tool loo
   const barrier = new Promise(resolve => { release = resolve })
   const timeout = setTimeout(() => release(), 1500)
   try {
-    await callLLM({ systemPrompt: 'Read both pages.', message: '读取页面', tools: ['model_web_fetch'], mustReply: true, localReply: true,
+    await callLLM({ systemPrompt: 'Read both pages.', message: '读取页面', tools: ['web_search'], mustReply: true, localReply: true,
       toolContext: { currentTargetId: 'ID:test' },
       _streamOnceForTest: async () => ++rounds === 1 ? { content: '', aborted: false, toolCalls: [1, 2].map(n => ({
-        id: `fetch-${n}`, name: 'model_web_fetch', arguments: JSON.stringify({ url: `https://example.com/${n}` }),
+        id: `fetch-${n}`, name: 'web_search', arguments: JSON.stringify({ query: `topic ${n}` }),
       })) } : { content: '两页已读取。', aborted: false, toolCalls: [] },
       _executeToolForTest: async name => {
-        if (name === 'model_web_fetch') {
+        if (name === 'web_search') {
           if (++started === 2) release()
           await barrier
           assert.equal(started, 2, 'both requests must start before either finishes')
@@ -180,4 +179,57 @@ test('malformed publication dates stay unknown instead of rolling into the reque
     article('valid-timestamp', { date: '2026-03-02T00:00:00+00:00' }),
   ]))
   assert.deepEqual(result.results.map(item => item.date_status), ['unknown', 'unknown', 'unknown', 'in_range'])
+})
+
+
+test('date-scoped evidence cannot be promoted by fetching, browser fallback or an unfiltered search', () => {
+  const url = 'https://example.com/articles/undated'
+  const search = status => ({ name: 'web_search', result: JSON.stringify({ ok: true,
+    filters: status === 'unfiltered' ? {} : { date_from: '2026-10-31', date_to: '2026-10-31' },
+    results: [{ url, title: 'Article', evidence_kind: 'page_content', verified: true, content: 'Original body', date_status: status }],
+  }) })
+  const fetch = { name: 'run_command', result: JSON.stringify({ ok: true, command: 'bsk observe --session task --json', exit_code: 0, stdout: JSON.stringify({ url, text: 'Original body '.repeat(20) }) }) }
+  const browser = { name: 'browser_navigate', args: { url }, result: JSON.stringify({ ok: true,
+    browser_preview: { url, title: 'Article' }, content: [{ type: 'text', text: 'Original body '.repeat(30) }],
+  }) }
+  for (const fallback of [fetch, browser, search('unfiltered')]) {
+    for (const items of [[search('unknown'), fallback], [fallback, search('unknown')]]) {
+      assert.equal(collectVerifiedWebResearchSources(items).length, 0)
+    }
+  }
+  assert.equal(collectVerifiedWebResearchSources([fetch]).length, 1, 'ordinary page reading remains usable')
+  assert.equal(collectVerifiedWebResearchSources([search('unknown'), fetch, search('in_range')]).length, 1,
+    'later date verification allows the source')
+  assert.equal(collectVerifiedWebResearchSources([search('out_of_range'), fetch]).length, 0)
+  const emptyDated = { name: 'web_search', result: JSON.stringify({ ok: true,
+    filters: { date_from: '2026-10-31' }, results: [],
+  }) }
+  assert.equal(collectVerifiedWebResearchSources([emptyDated, fetch]).length, 0,
+    'new URLs also need date verification after a dated search')
+})
+
+test('Native search sends one waiting message before work and still deliver the final answer', async () => {
+  Object.assign(config, connection)
+  for (const name of ['web_search']) {
+    let rounds = 0
+    const executions = []
+    const acknowledgements = []
+    await callLLM({ systemPrompt: 'Read and answer.', message: '查询资料', tools: [name], mustReply: true, localReply: true,
+      toolContext: { currentTargetId: 'ID:test' },
+      _streamOnceForTest: async () => ++rounds <= 2
+        ? { content: '', aborted: false, toolCalls: [{ id: `lookup-${rounds}`, name,
+          arguments: JSON.stringify(name === 'web_search' ? { query: `topic ${rounds}` } : { url: `https://example.com/${rounds}` }) }] }
+        : { content: '查询完毕，以下是查到的资料。', aborted: false, toolCalls: [] },
+      _executeToolForTest: async (tool, args, context) => {
+        executions.push({ tool, source: context.source, content: args.content })
+        return JSON.stringify({ ok: true, delivered: tool === 'send_message', content: 'Page body' })
+      },
+      onToolCall: (tool, args) => { if (args.__ack) acknowledgements.push(args.content) },
+    })
+    assert.equal(executions[0].source, 'ack')
+    assert.equal(acknowledgements.length, 1)
+    assert.match(acknowledgements[0], /查|找|稍等|看/)
+    assert.deepEqual(executions.map(item => item.tool), ['send_message', name, name, 'send_message'])
+    assert.equal(executions.at(-1).content, '查询完毕，以下是查到的资料。')
+  }
 })

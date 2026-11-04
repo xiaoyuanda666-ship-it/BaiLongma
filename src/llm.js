@@ -1,3 +1,6 @@
+import { behaviorActionKey, behaviorReminder, createBehaviorReminderState, isBehaviorReminder, observeBehaviorReminders, recordBehaviorOutcome } from './runtime/behavior-reminders.js'
+import { expressionGuidance, expressionTargetKey } from './runtime/expression.js'
+import { CognitionUnavailableError, planCognitionRound } from './runtime/cognition-cycle.js'
 import { openModelStream } from './composition/model-services.js'
 import { config, MIMO_PROVIDER, ZHIPU_PROVIDER, getProviderModelFallbacks, shouldOmitSamplingForProviderModel, switchModel } from './config.js'
 import { executeTool } from './capabilities/executor.js'
@@ -76,7 +79,7 @@ function normalizeTemperatureForProvider(temperature, model, provider) {
   return Math.max(0, Math.min(1, Number(temperature.toFixed(2))))
 }
 
-function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = true, modelSettings = captureModelSettings(), model = modelSettings.model }) {
+function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, maxTokens, thinking = 'medium', jsonOutput = false, modelSettings = captureModelSettings(), model = modelSettings.model }) {
   const providerTemperature = normalizeTemperatureForProvider(temperature, model, modelSettings.provider)
   return getLLMProtocol(modelSettings.apiFormat).buildRequest({
     provider: modelSettings.provider,
@@ -87,6 +90,7 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
     topP,
     maxTokens,
     thinking,
+    jsonOutput,
     model,
     omitSampling: shouldOmitSamplingForProviderModel(modelSettings.provider, model),
     stream: true,
@@ -94,7 +98,7 @@ function buildLLMRequestParams({ messages, toolSchemas = [], temperature, topP, 
 }
 
 // 单次流式调用，返回 { content, toolCalls, aborted }
-async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = true, signal, onStream, modelSettings = captureModelSettings(), model = modelSettings.model, round = 0 }) {
+async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens, thinking = 'medium', jsonOutput = false, purpose = 'execution', signal, onStream, modelSettings = captureModelSettings(), model = modelSettings.model, round = 0 }) {
   const timing = getPerformanceTrace()
   const modelAttempt = timing?.nextAttempt() || 0
   const auxiliary = /^(prepare|context|injector|prefeed)\./.test(getPerformanceStage())
@@ -119,6 +123,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
       topP,
       maxTokens,
       thinking,
+      jsonOutput,
     }),
     {
       onRepair: count => console.warn(
@@ -131,7 +136,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
     // This is serialized characters, not an invented token estimate.
     messageChars: timing ? JSON.stringify(messages).length : 0,
     toolSchemaChars: timing ? JSON.stringify(toolSchemas || []).length : 0,
-    thinking,
+    thinking, purpose, jsonOutput,
   })
   // ── 空闲超时（连接卡死保护）──
   // provider 连接开着却长时间不吐任何增量 = 停摆。每收到一个 chunk 就重置计时；超时则中止本轮，
@@ -341,7 +346,7 @@ async function streamOnce({ messages, toolSchemas, temperature, topP, maxTokens,
   }
 
   return {
-    content: sanitizeAssistantReplyForDelivery(parsed.content),
+    content: purpose === 'cognition' ? parsed.content : sanitizeAssistantReplyForDelivery(parsed.content),
     model,
     reasoningContent: parsed.reasoningContent,
     // Never execute arguments from a truncated response. A partial text answer
@@ -583,20 +588,6 @@ function buildToolLogDetail(args = {}, result = '') {
   return argPreview || resultPreview
 }
 
-function makeDeferredOutboundResult(args = {}, latestOutbound = null) {
-  const target = String(args.target_id || '')
-  const sent = latestOutbound
-    ? `The immediately preceding message to ${latestOutbound.targetId} was delivered at ${latestOutbound.sentAt}: “${latestOutbound.content.slice(0, 240)}”`
-    : 'A preceding outbound message in this same model response was delivered.'
-  return JSON.stringify({
-    ok: false,
-    tool: 'send_message',
-    skipped: 'outbound_reconsideration_required',
-    target_id: target,
-    reason: `${sent} This additional message was planned before that delivery result existed, so it was not sent. Read the delivered-message fact and make a fresh, context-based decision in the next step; silence is the correct choice when nothing materially changed.`,
-  })
-}
-
 const TICK_EVIDENCE_EXCLUDED_TOOLS = new Set([
   'send_message', 'express', 'set_tick_interval', 'set_task', 'complete_task',
   'recall_memory', 'search_memory', 'probe_memory', 'find_tool',
@@ -604,7 +595,7 @@ const TICK_EVIDENCE_EXCLUDED_TOOLS = new Set([
 ])
 
 function toolAddsTickEvidence(name, result) {
-  return !TICK_EVIDENCE_EXCLUDED_TOOLS.has(name) && !isToolFailure(result)
+  return !isBehaviorReminder(result) && !TICK_EVIDENCE_EXCLUDED_TOOLS.has(name) && !isToolFailure(result)
 }
 
 function buildTickRoundContext(tickState, toolRound) {
@@ -623,20 +614,6 @@ function buildTickRoundContext(tickState, toolRound) {
     lines.push('Do not relabel a tool-loop round as the next heartbeat. Another message to the same recipient requires concrete new evidence after the earlier delivery; otherwise conclude silently.')
   }
   return lines.join('\n')
-}
-
-function makeSameTickNoEvidenceResult(args = {}, previousOutbound = null, tickState = null) {
-  const previous = previousOutbound
-    ? `A message to ${previousOutbound.targetId} was already delivered in tool-loop round ${previousOutbound.toolRound}: "${previousOutbound.content.slice(0, 240)}".`
-    : 'A message to this recipient was already delivered in the current TICK.'
-  return JSON.stringify({
-    ok: false,
-    tool: 'send_message',
-    skipped: 'same_tick_no_new_evidence',
-    target_id: String(args.target_id || ''),
-    tick_id: tickState?.id || '',
-    reason: `${previous} This is still the same outer TICK, not a later heartbeat. No qualifying new tool evidence has appeared since that delivery, so this message was not sent. End silently or first obtain and assess new evidence.`,
-  })
 }
 
 function buildPostSendNudge(outboundMessages = [], tickState = null) {
@@ -773,8 +750,6 @@ function isHighRiskTool(name) {
 }
 
 const PARALLEL_SAFE_TOOLS = new Set([
-  'model_web_search',
-  'model_web_fetch',
   'read_file',
   'list_dir',
   'web_search',
@@ -837,7 +812,7 @@ function createToolLoopState() {
 // send_message/express 是 agent 向用户"汇报 blocker"的唯一通道，必须绕开跨工具的全局熔断计数。
 // 否则当 exec_command/fetch_url 等连续失败触发熔断后，agent 想 send_message 解释失败也会被一并挡掉，
 // 出现"工具调不动 + 嘴也被堵住"的死锁（lessons-bailongma-silent-exit 的镜像问题）。
-// 同指纹反复失败仍由 sameFailureCounts / recentFingerprints 拦截，安全网完好。
+// 同指纹反复失败及循环迹象交给一次性行为提醒，资源预算仍独立生效。
 const REPORT_CHANNEL_TOOLS = new Set(['send_message', 'express'])
 
 // ── 耗时工具即时回应 ──────────────────────────────────────────────────────────
@@ -918,18 +893,9 @@ function getToolLoopStopReason(state, name, fingerprint, limits = TOOL_LOOP_LIMI
   return null
 }
 
-function makeToolLoopStoppedResult(name, reason) {
-  return JSON.stringify({
-    ok: false,
-    tool: name,
-    error: 'tool loop stopped',
-    reason,
-    hint: 'Stop retrying this action. Explain the blocker, ask for confirmation, or choose a materially different approach.',
-  }, null, 2)
-}
-
 function recordToolLoopOutcome(state, name, fingerprint, result) {
   state.totalCalls += 1
+  if (isBehaviorReminder(result)) return
   state.recentFingerprints.push(fingerprint)
 
   if (isToolFailure(result)) {
@@ -945,7 +911,7 @@ export function buildToolLoopStopNudge(reason, lastToolResult) {
   const lastSummary = lastToolResult
     ? `${lastToolResult.name}(${formatToolArgPreview(lastToolResult.args || {})}) -> ${String(lastToolResult.result || '').slice(0, 300)}`
     : 'No successful tool result is available.'
-  return `Tool loop safety stop: ${reason}.\nLast tool result:\n${lastSummary}\n\nStop repeating this action — and step back: the problem may be the plan, not just this one call. Do NOT retry the same approach. Choose one, in this order:\n1. Switch to a materially different approach — a different tool, a different angle, or different input.\n2. If you are unsure your assumption even holds, verify it with one read-only tool before acting again.\n3. If you set a task with set_task, re-read current_task and adjust the steps to match reality.\n4. If you are genuinely blocked, deliver your reply now (send_message on a social channel, or plain text on a local turn) and tell the user what you tried, what failed, and what you need — clearly, do not end silently.`
+  return `One-time behavior reminder: ${reason}.\nLast tool result:\n${lastSummary}\n\nThis attempt was not executed. Take a step back: consider a materially different approach, verify an assumption with a read-only tool, or re-read current_task. If the result already exists, no repeat is needed. If you still decide this action is necessary after receiving the reminder, request it again; behavioral guards will allow the next decision.`
 }
 
 // 不确定回退的软检查点（层 3）：步数跨过阈值仍未投递时，一 turn 注入一次。
@@ -1018,7 +984,7 @@ function isCloserPattern(content) {
 //   refresh agent 的上下文"，**不**期望模型回复用户。当 silentSignal=true 时，
 //   runtime 直接拦截 send_message 调用（不让它真投递），并在工具结果里告知
 //   "本轮是 silent 系统信号，不要 send_message"，让模型从这次拒绝里学到边界。
-export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = true, signal, onToolCall, onToolExecute, onStream, onRetry, onModelAccept, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
+export async function callLLM({ systemPrompt, message, messages: inputMessages = null, temperature = 0.5, topP = 0.9, tools = [], maxTokens, thinking = 'medium', signal, onToolCall, onToolExecute, onStream, onRetry, onModelAccept, onCognition, toolContext = {}, mustReply = false, silentSignal = false, localReply = false, toolLoopLimits = null, _streamOnceForTest = null, _executeToolForTest = null }) {
   // A tool chain must replay to the connection and protocol that produced it.
   // Settings changes apply to the next turn; credential revocation is still
   // checked by the model connection before every outgoing request.
@@ -1035,7 +1001,10 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   // 这条 deliverInstruction 决定各处催补 nudge 该让模型"写纯文本"还是"调 send_message"——
   // 本地走纯文本能省掉 send_message 那一整轮额外 LLM 调用（send_message 后还要再跑一轮才收尾），
   // 这正是语音响应慢的主因。
-  const deliverInstruction = localReply
+  if (toolContext.outputContract === 'explicit_send_only') localReply = false
+  const deliverInstruction = toolContext.outputContract === 'explicit_send_only'
+    ? 'decide whether expression is useful; if so call send_message with your chosen format (text, voice, or social), otherwise end silently. Plain assistant prose is private'
+    : localReply
     ? 'give the user your final reply now as plain text — in this local channel your message text reaches the user directly (and is spoken aloud on voice), you do NOT need to call send_message'
     : 'call send_message now to deliver your final reply to the user'
 
@@ -1068,6 +1037,13 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
       ]
+  // Route guidance must reach the acting model even when cognition is skipped
+  // or its checkpoint is invalid. Earlier conversation formats are not routing.
+  if (toolContext.outputContract === 'explicit_send_only') {
+    messages.splice(messages[0]?.role === 'system' ? 1 : 0, 0, {
+      role: 'system', content: expressionGuidance(toolContext),
+    })
+  }
   const initialBrowserDownloadContext = formatBrowserDownloadContext()
   let lastBrowserDownloadContext = messages.some(item => (
     typeof item?.content === 'string' && item.content.includes(initialBrowserDownloadContext)
@@ -1121,6 +1097,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   //   注意与 sentMessage 区分：sentMessage 是"最后一个动作是不是 send_message"（用于内部补刀 nudge），
   //   delivered 是"整轮有没有发出去过"（用于决定要不要兜底）。closer 被拦时主回复通常已把 delivered 置 true。
   let delivered = false
+  let expressionExpected = false
+  let expressionRepairAttempts = 0
   let finalNudgeUsed = false
   let plainTextReplyNudgeUsed = false
   let emptyReplyNudgeUsed = false
@@ -1154,13 +1132,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   // A new user turn resets the boundary so the user can solve it manually and
   // explicitly ask the agent to continue.
   let browserChallenge = null
-  // Turn-level send_message 历史：target_id → [{ length, isCloser }]。
-  // 用于 closer dedup 安全网：当 LLM 在已经发过实质消息后又试图补一条短客套尾巴
-  // ("有需要随时叫我"/"希望对你有帮助"/...) 时，运行时直接拦截这次 send_message 调用，
-  // 返回 ok:false 让 LLM 在下一轮看到"你刚才那次 send_message 是 closer，已被合并丢弃"，
-  // 强制它学会一次说完。误判风险通过 isCloserPattern 的保守判定（必须长度<=30 + 匹配明确尾巴
-  // 模式）+ "已发实质消息"前置条件（length>=15 且非 closer）控制——纯短回复"好的"/"已开"
-  // 不命中 pattern，不会被误拦。
+  // Successful sends supply evidence for a one-time closing-pleasantry reminder.
   const turnSendHistory = new Map()
   // Facts about messages that were actually delivered in this callLLM run. These
   // are injected after every tool round so the next model decision starts from
@@ -1168,12 +1140,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
   const outboundMessages = []
   // 本 turn 是否已替模型"应过一声"（耗时工具即时回应）——保证一个 turn 只发一次。
   let ackSent = false
-  // 本 turn 是否播放过音乐/视频——之后模型补的播放确认短收尾会被改成单个表情（"放好不用说"，
-  // 但发送本身允许，避免 UI 显示"失败"；语音模式下纯表情不会被念出来）。
+  // Successful playback supplies evidence; never silently rewrite the reply.
   let mediaPlayed = false
-  let mediaPlayedKind = null   // 'music' | 'video'，决定用哪个表情
-  let mediaEmojiSent = false   // 本 turn 已用表情代替过一次播放确认（一个 turn 只发一个表情）
   let modelAccepted = false
+  let cognitionUnavailable = false
+  const behaviorReminders = createBehaviorReminderState()
 
   try {
   for (let round = 0; round < loopLimits.maxRounds; round++) {
@@ -1195,6 +1166,62 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     if (tickState) {
       messages.push({ role: 'user', content: buildTickRoundContext(tickState, round) })
     }
+    // The runtime host opts in; internal memory/classifier calls keep their own contract.
+    let cognition = null
+    if (onCognition && toolSchemas.length > 0 && !cognitionUnavailable && expressionRepairAttempts === 0) {
+      try {
+        cognition = await planCognitionRound({
+          messages, toolSchemas, round, signal, emit: onCognition,
+          responseState: {
+            explicitExpression: toolContext.outputContract === 'explicit_send_only',
+            expressionGuidance: expressionGuidance(toolContext),
+            canAcknowledge: !!(mustReply && !silentSignal && !tickState && toolContext.currentTargetId && toolContext.outputContract !== 'explicit_send_only'),
+            alreadyResponded: ackSent || delivered || (localReply && !!allContent.trim()),
+          },
+          request: params => _streamOnceForTest
+            ? _streamOnceForTest(params)
+            : streamOnceWithModelFallback({ modelSettings, model: activeModel, temperature, topP, onRetry, ...params }),
+        })
+      } catch (error) {
+        throwIfAborted(signal)
+        if (!(error instanceof CognitionUnavailableError)) throw error
+        // Discard invalid summaries and preserve the normal reply/tool protocol.
+        cognitionUnavailable = true
+        console.warn(`[cognition] ${error.message}; ${JSON.stringify({ code: error.code, round, ...error.diagnostics })}; continuing without checkpoints this turn`)
+        onCognition({ phase: 'unavailable', round, reason: error.code })
+      }
+    }
+    if (toolContext.outputContract === 'explicit_send_only' && cognition?.response?.mode === 'direct' && !delivered && !silentSignal) {
+      expressionExpected = true
+    }
+    if (cognition?.response?.mode === 'acknowledge' && !ackSent && !delivered
+        && !(localReply && allContent.trim()) && mustReply && !silentSignal && !tickState
+        && toolContext.currentTargetId && toolContext.outputContract !== 'explicit_send_only') {
+      throwIfAborted(signal)
+      const ackArgs = { target_id: toolContext.currentTargetId, content: cognition.response.text }
+      try {
+        const ackResult = await runTool('send_message', ackArgs, { ...toolContext, signal, source: 'ack' })
+        const delivery = parseToolDeliveryState(ackResult)
+        ackSent = !isToolFailure(ackResult) && (delivery.hasDelivered ? delivery.delivered : true)
+        // Acknowledgement is not the final answer. Keep `delivered` false so the
+        // final-answer fallback still runs; the shared ackSent guard prevents duplicates.
+        if (onToolCall) onToolCall('send_message', { ...ackArgs, __ack: true }, ackResult)
+        messages.at(-1).content += ackSent
+          ? `\nThe runtime has already sent this acknowledgement to the user: ${JSON.stringify(ackArgs.content)}. Continue the work; do not repeat this acknowledgement. Still deliver the final result.`
+          : '\nThe acknowledgement was not delivered. Do not assume the user has received it.'
+      } catch (error) {
+        throwIfAborted(signal)
+        messages.at(-1).content += '\nThe acknowledgement delivery failed. Continue the task and ensure the final answer is delivered.'
+      }
+      throwIfAborted(signal)
+    }
+    // A checkpoint is advice. Even finish/none must be returned to the agent
+    // as a one-time reminder if it requests an action, not force an early exit.
+    const terminalCognition = cognition && ['finish', 'blocked'].includes(cognition.decision)
+    const roundToolSchemas = expressionExpected && expressionRepairAttempts > 0
+      ? toolSchemas.filter(schema => (schema.function?.name || schema.name) === 'send_message')
+      : toolSchemas
+    observeBehaviorReminders(behaviorReminders, round)
     // 本轮开始时 messages 的长度 = 本轮模型看到的上下文边界。messages 在一个 turn 内严格
     // append-only，所以前端用 final messages.slice(0, inputOffset) 即可精确还原"本轮看到了什么"。
     const roundInputOffset = messages.length
@@ -1205,7 +1232,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       roundResult = _streamOnceForTest
         ? await _streamOnceForTest({
             messages,
-            toolSchemas,
+            toolSchemas: roundToolSchemas,
             temperature,
             topP,
             maxTokens,
@@ -1219,7 +1246,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             modelSettings,
             model: activeModel,
             messages,
-            toolSchemas,
+            toolSchemas: roundToolSchemas,
             temperature,
             topP,
             maxTokens,
@@ -1364,7 +1391,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence, {
           successfulToolEvidence: actionContractEvidenceList,
         })
-        if (actionContract.id === 'browser_close' && fixedReply) {
+        if (allowPlainTextFallback && actionContract.id === 'browser_close' && fixedReply) {
           allContent = fixedReply
           break
         }
@@ -1383,7 +1410,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             messages.push({
               role: 'user',
               content: actionContract.id === 'web_research'
-                ? `The web research is not complete enough to answer yet: ${completionIssue} Use model_web_search with need_content=true, or read missing original pages with model_web_fetch/browser tools. Returned page_content or a provider-cited grounded_answer counts; snippets do not. Check publication dates for time-scoped requests. Give a useful news summary with citations; never replace the summary with a link list. Avoid duplicate events.${INTERNAL_NUDGE_SUFFIX}`
+                ? `The web research is not complete enough to answer yet: ${completionIssue} Use web_search with need_content=true, or read missing original pages with the bsk CLI skill. Returned page_content or a provider-cited grounded_answer counts; snippets do not. Check publication dates for time-scoped requests. Give a useful news summary with citations; never replace the summary with a link list. Avoid duplicate events.${INTERNAL_NUDGE_SUFFIX}`
                 : actionContract.id === 'browser_screenshot'
                   ? `The screenshot capture is not delivered yet: ${completionIssue} Call send_message now with the exact screenshot.image_path returned by browser_take_screenshot. Do not substitute a text acknowledgement or the live browser card.${INTERNAL_NUDGE_SUFFIX}`
                 : `The requested action succeeded, but your draft added an unsupported or incorrect claim: ${completionIssue} Reply from verified evidence only. Say that the URL was handed to the computer's system default browser; do not name Safari, Chrome, Edge, or any other application. If you explain the three forms, state that Bailongma's compact and large modes share the same live page/profile, while only the computer browser is separate.${INTERNAL_NUDGE_SUFFIX}`,
@@ -1397,6 +1424,20 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         }
       }
 
+      // A cognition decision to answer is an obligation to execute expression,
+      // not permission to publish private prose. Ask the model to perform its
+      // chosen action, without copying or auto-sending its draft.
+      if (expressionExpected && !delivered) {
+        if (expressionRepairAttempts >= 2) {
+          throw new Error('表达未完成：智能体决定回答，但未成功调用表达工具。请重试。')
+        }
+        appendRoundOutput()
+        allContent = ''
+        expressionRepairAttempts++
+        messages.push({ role: 'user', content: `Your cognition checkpoint chose response.mode=direct, but no expression was delivered. Complete that decision by calling send_message for target_id=${JSON.stringify(toolContext.currentTargetId || '')}, choosing format=text for local chat, voice for computer speakers, or social with its channel. Use user-facing content based on verified knowledge/results. Private prose is not delivery; do not output or copy private reasoning. Do not repeat the plan. Execute the expression tool now. ${expressionGuidance(toolContext)}` })
+        continue
+      }
+
       // 用户消息回复但只产出了 plain text，完全没调任何工具（包括 send_message）。
       //
       // 与 finalNudge 的区别：finalNudge 处理"调过工具但最后没补 send_message"（sawToolCall=true），
@@ -1407,7 +1448,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 正确的工具范式，同时保留 fallback 作最后一道兜底。
       // localReply 守卫：本地渠道下纯文本就是回复（兜底会真正投递），不能再催它补 send_message——
       // 那会逼出一整轮多余的 LLM 调用，正是要消除的延迟来源。只有社交渠道才需要这条 nudge。
-      if (!localReply && mustReply && !sawToolCall && !sentMessage && allContent.trim() && !plainTextReplyNudgeUsed) {
+      if (allowPlainTextFallback && !localReply && mustReply && !sawToolCall && !sentMessage && allContent.trim() && !plainTextReplyNudgeUsed) {
         const draft = allContent.trim()
         salvageableReply = draft   // 清空 allContent 前留一份，供下一轮失败时兜底投递
         appendRoundOutput()
@@ -1431,7 +1472,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       if (localReply && mustReply && sawToolCall && !sentMessage && allContent.trim()) {
         break
       }
-      if (mustReply && sawToolCall && !sentMessage && !finalNudgeUsed && !mediaPlayed) {
+      if (allowPlainTextFallback && mustReply && sawToolCall && !sentMessage && !finalNudgeUsed && !mediaPlayed) {
         // 关键修复：把上一轮的 assistant text 推入 messages，让模型在下一轮知道"自己刚才说过 X"。
         // 否则模型被 nudge 后会重新生成一段近似内容，叠加进 allContent 导致 fallback 投递出双段重复。
         // 同时清空 allContent，避免本轮的旁白和下一轮的回复被拼起来当一条消息发出。
@@ -1444,7 +1485,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         finalNudgeUsed = true
         continue
       }
-      if (mustReply && !sentMessage && !allContent.trim() && !emptyReplyNudgeUsed) {
+      if (allowPlainTextFallback && mustReply && !sentMessage && !allContent.trim() && !emptyReplyNudgeUsed) {
         messages.push({
           role: 'user',
           content: `You ended this user-message turn without producing any reply. You must now ${deliverInstruction}, with a brief, useful response. If no tools are needed, answer directly. Do not end silently.${INTERNAL_NUDGE_SUFFIX}`,
@@ -1462,7 +1503,6 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     // 执行所有工具调用，收集结果。
     // 同一轮中连续的只读/查询类工具互不依赖，可以并发跑；有副作用的工具仍保持顺序。
     const toolResults = []
-    let toolLoopStopReason = null
     const prepareToolCall = (tc) => {
       throwIfAborted(signal)
       let args
@@ -1484,187 +1524,76 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       }
       let result
       let outboundSent = false
-      let closerSuppressed = false
       let silentSignalSuppressed = false
-      let mediaCloserSuppressed = false
       let strictSuppressed = false
       let browserChallengeSuppressed = false
-      let actionContractSendSuppressed = false
-      let actionScopeSuppressed = false
       const actionSequenceIssue = actionContractToolCallIssue(actionContract, tc.name, normalizedArgs, {
         attemptedToolNames: actionContractAttemptedTools,
         successfulToolNames: actionContractSuccessfulTools,
         successfulToolEvidence: actionContractEvidenceList,
       })
-      if (stopReason) {
-        result = makeToolLoopStoppedResult(tc.name, stopReason)
-        console.log(`[工具熔断] ${tc.name}: ${stopReason}`)
-        // 熔断信号已经回传给模型，重置跨工具的全局连续失败计数，让 agent 有机会切换到完全不同的工具
-        // （比如换 read_file 查日志、search_memory 找历史经验）。同指纹反复失败仍由 sameFailureCounts
-        // 拦截，跨工具死循环仍由 recentFingerprints 的 unique threshold 拦截——安全网未失效。
-        toolLoopState.consecutiveFailures = 0
-      } else if (actionSequenceIssue) {
-        actionScopeSuppressed = true
-        result = JSON.stringify({
-          ok: false,
-          tool: tc.name,
-          skipped: 'action_contract_sequence',
-          reason: actionSequenceIssue,
-        })
-        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
-        console.log(`[action contract] blocked invalid sequence step ${tc.name} for ${actionContract?.id || 'unknown'}`)
-      } else if (actionContract?.restrictTools === true
-          && !new Set([...(actionContract.requiredTools || []), 'send_message']).has(tc.name)) {
-        actionScopeSuppressed = true
-        result = JSON.stringify({
-          ok: false,
-          tool: tc.name,
-          skipped: 'action_contract_scope',
-          reason: `This request is narrowly scoped to ${actionContract.label}. Use only ${actionContract.requiredTools.join(', ')} and the final delivery channel; do not switch tools or data sources.`,
-        })
-        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
-        console.log(`[action contract] blocked out-of-scope tool ${tc.name} for ${actionContract.id}`)
+      const behaviorContext = { ...toolContext, behaviorReminders, behaviorRound: round,
+        behaviorActionKey: behaviorActionKey(tc.name, normalizedArgs) }
+      // Actual authority and challenge boundaries are not behavioral advice.
+      if (toolLoopState.totalCalls >= loopLimits.maxTotalCalls) {
+        result = JSON.stringify({ ok: false, executed: false, error: 'tool_budget_exhausted', reason: 'The configured per-turn tool budget has been exhausted.' })
       } else if (isToolForbiddenInStrictEvaluation(strictEvaluation, tc.name)) {
         strictSuppressed = true
         result = makeStrictForbiddenToolResult(tc.name, strictEvaluation)
-        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
-        console.log(`[strict evaluation] 拦截 forbidden tool ${tc.name}`)
       } else if (browserChallenge && isBrowserAccessBlockedAfterChallenge(tc.name)) {
         browserChallengeSuppressed = true
         result = makeBrowserChallengeStoppedResult(tc.name, browserChallenge)
-        recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
-        // This is a deliberate policy stop, not an executor outage. Keep the
-        // general failure fuse from suppressing an allowed display-mode switch
-        // or the final report; exact repeated calls still hit sameFailureCounts.
-        toolLoopState.consecutiveFailures = 0
-        console.log(`[browser challenge] 拦截后续网页工具 ${tc.name}`)
+      } else if (silentSignal && REPORT_CHANNEL_TOOLS.has(tc.name)) {
+        silentSignalSuppressed = true
+        result = JSON.stringify({ ok: false, executed: false, tool: tc.name,
+          error: 'silent_system_signal', reason: 'This internal signal does not authorize outward communication.' })
       } else {
-        const priorTickOutbound = tc.name === 'send_message'
-          ? tickState?.outboundByTarget.get(normalizedArgs.target_id)
-          : null
-        if (priorTickOutbound && priorTickOutbound.evidenceVersion === tickState.evidenceVersion) {
-          result = makeSameTickNoEvidenceResult(normalizedArgs, priorTickOutbound, tickState)
-          recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
-          console.log(`[same TICK outbound] blocked repeat to ${normalizedArgs.target_id} without new evidence`)
-        } else {
-        // Silent system signal 拦截：本轮是 silent APP_SIGNAL（如 confirm_security_change /
-        //   cancel_security_change / app:saveState 等），系统只是在悄悄 refresh agent 上下文，
-        //   不期望模型回复用户。模型如果违反这个约束调 send_message → 直接拒绝，让它从工具
-        //   结果里学到"silent 信号 = 不需要 send_message"。
-        //   优先于 closer dedup —— silent 拦截范围更广，连实质性消息也拦。
-        if (silentSignal && tc.name === 'send_message') {
-          silentSignalSuppressed = true
+        const reasons = []
+        const prior = behaviorReminders.outcomes.get(behaviorContext.behaviorActionKey)
+        if (stopReason) reasons.push(stopReason)
+        if (actionSequenceIssue) reasons.push(actionSequenceIssue)
+        if (actionContract?.restrictTools === true
+            && !new Set([...(actionContract.requiredTools || []), 'send_message']).has(tc.name)) {
+          reasons.push(`The inferred task scope is ${actionContract.label}; this tool is outside that plan.`)
         }
-
-        // Closer dedup 安全网：本 turn 内对同一 target 已发过实质消息（length>=15 且非 closer）
-        // 后，再发"客套尾巴"短消息（命中 CLOSER_PATTERNS）直接拦截，不真正投递。LLM 在下一轮
-        // 看到 ok:false + reason 学到不能这么干，且不累加 consecutiveFailures（这是 by design
-        // 拒绝，不算失败）。判定保守 —— "好的"/"已开"/"下午3点" 都不匹配 CLOSER_PATTERNS。
-        if (!silentSignalSuppressed && tc.name === 'send_message') {
-          const target = normalizedArgs.target_id
-          const content = String(normalizedArgs.content || '')
-          if (target && isCloserPattern(content)) {
-            const history = turnSendHistory.get(target) || []
-            if (history.some(h => !h.isCloser && h.length >= 15)) {
-              closerSuppressed = true
-            }
+        if (terminalCognition && (tc.name !== 'send_message' || cognition.response?.mode === 'none')) {
+          reasons.push(`The checkpoint chose ${cognition.decision}/${cognition.response?.mode}: ${cognition.summary}`)
+        }
+        if (tc.name === 'send_message') {
+          if (prior?.result?.delivered === true) reasons.push('This identical message was already successfully delivered. No repeat is needed unless you have a separate reason.')
+          const priorTick = tickState?.outboundByTarget.get(expressionTargetKey(normalizedArgs))
+          if (priorTick && priorTick.evidenceVersion === tickState.evidenceVersion) {
+            reasons.push('A message was already delivered in this same heartbeat; no new tool evidence has appeared.')
           }
-        }
-
-        // 播放收尾：本 turn 已经播放过音乐/视频（开场也已替它 ack 过），模型若再补一句播放确认
-        // 短消息（"好了"/"在放了"/"播放中"…）——不直接拦成"失败"，而是把内容换成一个表情照常发出：
-        // 既不啰嗦、UI 显示成功，语音模式下纯表情也不会被 TTS 念出来。一个 turn 只发一个表情，
-        // 多余的才真正拦掉。判定保守见 isMediaCloser。
-        if (!silentSignalSuppressed && !closerSuppressed && tc.name === 'send_message'
-            && mediaPlayed && isMediaCloser(String(normalizedArgs.content || ''))) {
-          if (mediaEmojiSent) {
-            mediaCloserSuppressed = true
-          } else {
-            normalizedArgs.content = mediaPlayedKind === 'video' ? '🎬' : '🎵'
-            mediaEmojiSent = true
+          const history = turnSendHistory.get(normalizedArgs.target_id) || []
+          if (isCloserPattern(String(normalizedArgs.content || '')) && history.some(h => !h.isCloser && h.length >= 15)) {
+            reasons.push('The main answer has already been delivered; this appears to be a separate closing pleasantry.')
           }
-        }
-
-        // An explicit browser close needs only a quiet visual acknowledgement.
-        // Normalize even an over-explanatory provider draft before it reaches
-        // local, voice, or external channels.
-        if (!silentSignalSuppressed && tc.name === 'send_message'
-            && actionContract?.runtimeOwnedReply === true && actionContractSatisfied) {
-          const fixedReply = verifiedActionContractReply(actionContract, actionContractEvidence)
-          if (fixedReply) normalizedArgs.content = fixedReply
-        }
-
-        if (!silentSignalSuppressed && tc.name === 'send_message'
-            && actionContract?.id === 'browser_screenshot' && actionContractSatisfied
-            && browserScreenshotDeliveryMatches(actionContractEvidenceList, normalizedArgs)) {
-          // The screenshot itself is the complete answer. A provider caption can
-          // accidentally repeat facts from the previous browser turn, so keep
-          // media delivery deterministic and context-free.
-          normalizedArgs.content = ''
-        }
-
-        // On external channels send_message is itself a side effect, and used
-        // to let a premature “done” message terminate the whole agent loop.
-        // Suppress it until the requested action has evidence; after a failed
-        // attempt, allow only an honest failure report.
-        const actionContractBlocksSend = tc.name === 'send_message'
-          && actionContract
-          && !actionContractSatisfied
-          && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content, actionContract))
-        if (tc.name === 'send_message' && actionContractSatisfied) {
-          normalizedArgs.content = completeWebResearchCitations(actionContract, normalizedArgs.content, {
-            successfulToolEvidence: actionContractEvidenceList,
-          })
-        }
-        const actionContractCompletionProblem = tc.name === 'send_message' && actionContractSatisfied
-          ? actionContractCompletionIssue(actionContract, normalizedArgs.content, {
-              successfulToolNames: actionContractSuccessfulTools,
-              successfulToolEvidence: actionContractEvidenceList,
-              messageArgs: normalizedArgs,
+          if (mediaPlayed && isMediaCloser(String(normalizedArgs.content || ''))) {
+            reasons.push('Playback is already visible; this appears to be an unnecessary playback confirmation.')
+          }
+          if (outboundMessages.some(item => item.toolRound === round && item.expressionKey === expressionTargetKey(normalizedArgs))) {
+            reasons.push('Another message in this batch was delivered after this call was planned. Reconsider with that result first.')
+          }
+          if (actionContract && !actionContractSatisfied
+              && (!actionContractAttempted || containsUnsupportedCompletionClaim(normalizedArgs.content, actionContract))) {
+            reasons.push(`The planned action (${actionContract.label}) has no successful matching tool result; do not claim completion without evidence.`)
+          }
+          if (actionContractSatisfied) {
+            const issue = actionContractCompletionIssue(actionContract, normalizedArgs.content, {
+              successfulToolNames: actionContractSuccessfulTools, successfulToolEvidence: actionContractEvidenceList, messageArgs: normalizedArgs,
             })
-          : ''
-        if (actionContractCompletionProblem) {
-          actionContractSendSuppressed = true
-          result = JSON.stringify({
-            ok: false,
-            tool: 'send_message',
-            skipped: 'action_contract_reply_invalid',
-            reason: `${actionContractCompletionProblem} Reply only from verified tool evidence and satisfy the requested delivery contract before sending.`,
-          })
-          console.log(`[action contract] suppressed unsupported completion reply for ${actionContract.id}`)
-        } else if (actionContractBlocksSend) {
-          actionContractSendSuppressed = true
-          result = JSON.stringify({
-            ok: false,
-            tool: 'send_message',
-            skipped: 'action_contract_unmet',
-            reason: `The requested action (${actionContract.label}) has no successful matching tool result. Do the action first; do not send a completion claim as a substitute.`,
-          })
-          console.log(`[action contract] suppressed premature send_message for ${actionContract.id}`)
-        } else if (silentSignalSuppressed) {
-          result = JSON.stringify({
-            ok: false,
-            tool: 'send_message',
-            skipped: 'silent_system_signal',
-            reason: 'This turn was triggered by a silent system signal (e.g. a confirm/cancel from a UI card, or an internal context refresh) — the user is NOT waiting for a reply. The runtime suppressed this send_message. Do not call send_message in silent signal turns; use this turn only to update internal state (memory, focus, task). The user already sees the result through the UI / next time you reply.',
-          })
-          console.log(`[silent signal] 拦截 send_message → ${normalizedArgs.target_id}: ${String(normalizedArgs.content || '').slice(0, 30)}`)
-        } else if (closerSuppressed) {
-          result = JSON.stringify({
-            ok: false,
-            tool: 'send_message',
-            skipped: 'closer_dedup',
-            reason: 'You already sent the main reply to this user in this turn. This second message is a closing pleasantry (e.g. "有需要随时叫我", "希望对你有帮助") with no new information — the runtime suppressed it. Do not split a closer into a second send_message; merge it into the main reply or omit entirely, and end the round.',
-          })
-          console.log(`[closer dedup] 拦截 send_message → ${normalizedArgs.target_id}: ${String(normalizedArgs.content || '').slice(0, 30)}`)
-        } else if (mediaCloserSuppressed) {
-          result = JSON.stringify({
-            ok: false,
-            tool: 'send_message',
-            skipped: 'media_play_closer',
-            reason: 'You already acknowledged the playback with a single emoji this turn (and the system told the user when you started looking for it). This further play-confirmation is redundant — the player is visibly running. The runtime suppressed it. For music/video playback: one emoji at most after a successful play, then just end the round.',
-          })
-          console.log(`[media closer] 拦截 send_message → ${normalizedArgs.target_id}: ${String(normalizedArgs.content || '').slice(0, 30)}`)
+            if (issue) reasons.push(issue)
+          }
+        }
+        const reminder = reasons.length ? behaviorReminder(behaviorContext, {
+          tool: tc.name, args: normalizedArgs, reason: reasons.join(' '),
+          evidence: { previous_action: prior || null,
+            delivered_messages: outboundMessages.filter(item => item.targetId === normalizedArgs.target_id),
+            checkpoint: cognition, successful_actions: actionContractEvidenceList },
+        }) : null
+        if (reminder) {
+          result = reminder
         } else {
           // 耗时工具即时回应：用户消息触发了一个会让人干等的工具（下载/搜索/生成/跑命令）时，
           // 本 turn 第一次就先替模型"应一声"。系统直接投递，不依赖模型在工具链中途主动开口
@@ -1677,6 +1606,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           // 撞出两条一模一样的消息。所以本地渠道下"已流出可见正文"等价于 delivered，同样跳过 ack。
           const localAlreadySpoke = localReply && !!allContent.trim()
           if (!ackSent && !delivered && !localAlreadySpoke && mustReply && !silentSignal
+              && toolContext.outputContract !== 'explicit_send_only'
               && toolContext?.currentTargetId && isSlowAckTool(tc.name, normalizedArgs, { actionContract })) {
             ackSent = true
             try {
@@ -1695,14 +1625,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           }
           // 真正开始执行前通知 UI —— 让用户知道当前停留在哪一步的工具上
           onToolExecute?.(tc.name, normalizedArgs)
-          result = await measurePerformance(`tool.${tc.name}`, () => runTool(tc.name, normalizedArgs, { ...toolContext, signal }))
+          result = await measurePerformance(`tool.${tc.name}`, () => runTool(tc.name, normalizedArgs, { ...behaviorContext, signal }))
           const detectedChallenge = detectBrowserChallenge(tc.name, result)
           if (detectedChallenge) {
             browserChallenge ||= detectedChallenge
             result = markBrowserChallengeResult(result, browserChallenge)
             console.log(`[browser challenge] 检测到网页挑战，当前用户轮停止自动网页操作（${browserChallenge.reason}）`)
           }
-          if (actionContract?.requiredTools?.includes(tc.name)) {
+          if (!isBehaviorReminder(result) && actionContract?.requiredTools?.includes(tc.name)) {
             actionContractAttempted = true
             actionContractAttemptedTools.push(tc.name)
             if (actionContractToolSucceeded(actionContract, tc.name, result, normalizedArgs, {
@@ -1717,7 +1647,6 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             }
           }
           const toolDelivery = parseToolDeliveryState(result)
-          recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
           if (tickState && toolAddsTickEvidence(tc.name, result)) {
             tickState.evidenceVersion += 1
           }
@@ -1745,8 +1674,6 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           outboundSent = tc.name === 'send_message'
             && !strictSuppressed
             && !silentSignalSuppressed
-            && !closerSuppressed
-            && !mediaCloserSuppressed
             && sendMessageActuallySent
           if (outboundSent) {
             const outbound = {
@@ -1754,10 +1681,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
               content: String(normalizedArgs.content || ''),
               sentAt: new Date().toISOString(),
               toolRound: round,
+              expressionKey: expressionTargetKey(normalizedArgs),
               evidenceVersion: tickState?.evidenceVersion ?? 0,
             }
             outboundMessages.push(outbound)
-            if (tickState && outbound.targetId) tickState.outboundByTarget.set(outbound.targetId, outbound)
+            if (tickState && outbound.targetId) tickState.outboundByTarget.set(expressionTargetKey(normalizedArgs), outbound)
           }
           if (toolDelivery.delivered && !strictSuppressed) delivered = true
           if (toolDelivery.terminalDelivery && !strictSuppressed
@@ -1789,8 +1717,9 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
             toolDiscoveryState.pending = false
           }
         }
-        }
       }
+      recordToolLoopOutcome(toolLoopState, tc.name, fingerprint, result)
+      recordBehaviorOutcome(behaviorReminders, tc.name, normalizedArgs, result)
       throwIfAborted(signal)
       // sentMessage 语义：最近一次工具动作是否就是 send_message。
       // 任何非 send_message 工具都把它清掉——意味着模型在 send_message 之后又做了新工作，
@@ -1799,11 +1728,11 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 被 closer dedup 拦截的 send_message 也算 sentMessage=true（最后一个动作意图是
       // 发消息，主回复已经发过——下一轮注入 "默认结束本轮" nudge 是合适的）。
       const toolDeliveryForTurn = parseToolDeliveryState(result)
-      if (tc.name === 'send_message' && !strictSuppressed && !actionContractSendSuppressed) {
+      if (tc.name === 'send_message' && !strictSuppressed) {
         sentMessage = true
         // 仅对真实发出的（未被 dedup 拦截的）send_message 记录到 turn 历史，避免被拦截的
         // closer / silent signal / media-closer 反过来污染后续判断（已经被拦截的就当没发生）。
-        if (!closerSuppressed && !silentSignalSuppressed && !mediaCloserSuppressed
+        if (!silentSignalSuppressed
             && !isToolFailure(result)
             && (!toolDeliveryForTurn.hasMessageSent || toolDeliveryForTurn.messageSent)) {
           const target = normalizedArgs.target_id
@@ -1818,15 +1747,14 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         sentMessage = false
       }
       // 标记本 turn 播放过音乐/视频——之后模型补的播放确认短收尾会被静音（见上面 mediaCloser 判定）。
-      if (tc.name === 'media_mode') {
+      if (tc.name === 'media_mode' && !isBehaviorReminder(result) && !isToolFailure(result)) {
         const m = String(normalizedArgs.mode || '')
         const a = String(normalizedArgs.action || 'show')
         if ((m === 'music' || m === 'video') && (a === 'show' || a === 'play')) {
           mediaPlayed = true
-          mediaPlayedKind = m
         }
       }
-      if (!strictSuppressed && !actionScopeSuppressed && !browserChallengeSuppressed && shouldPersistActionLog(tc.name)) {
+      if (!strictSuppressed && !browserChallengeSuppressed && shouldPersistActionLog(tc.name)) {
         insertActionLog({
           timestamp: new Date().toISOString(),
           tool: tc.name,
@@ -1835,21 +1763,13 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         })
       }
       console.log(`[工具结果] ${tc.name}: ${result.slice(0, 100)}`)
-      if (onToolCall && !actionScopeSuppressed) onToolCall(tc.name, normalizedArgs, result)
+      if (onToolCall) onToolCall(tc.name, normalizedArgs, result)
       lastToolResult = { name: tc.name, args: normalizedArgs, result }
-      return { id: tc.id, name: tc.name, args: normalizedArgs, result, stopReason, outboundSent }
+      return { id: tc.id, name: tc.name, args: normalizedArgs, result, outboundSent }
     }
 
-    const deferredOutboundTargets = new Set()
     for (let callIndex = 0; callIndex < effectiveToolCalls.length;) {
       const firstPrepared = prepareToolCall(effectiveToolCalls[callIndex])
-      if (firstPrepared.tc.name === 'send_message' && deferredOutboundTargets.has(firstPrepared.normalizedArgs.target_id)) {
-        const result = makeDeferredOutboundResult(firstPrepared.normalizedArgs, outboundMessages.at(-1))
-        toolResults.push({ id: firstPrepared.tc.id, name: firstPrepared.tc.name, result })
-        if (onToolCall) onToolCall(firstPrepared.tc.name, firstPrepared.normalizedArgs, result)
-        callIndex += 1
-        continue
-      }
       const canParallelize = isParallelSafeTool(firstPrepared.tc.name, firstPrepared.normalizedArgs)
       const remainingBudget = loopLimits.maxTotalCalls - toolLoopState.totalCalls
 
@@ -1875,33 +1795,20 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
               result: lastBatchResult.result,
             }
           }
-          toolLoopStopReason = batchResults.find(item => item.stopReason)?.stopReason || null
           callIndex += preparedBatch.length
         } else {
           const result = await runPreparedToolCall(firstPrepared)
           toolResults.push({ id: result.id, name: result.name, result: result.result })
-          if (result.outboundSent) deferredOutboundTargets.add(result.args.target_id)
-          toolLoopStopReason = result.stopReason
+
           callIndex += 1
         }
       } else {
         const result = await runPreparedToolCall(firstPrepared)
         toolResults.push({ id: result.id, name: result.name, result: result.result })
-        if (result.outboundSent) deferredOutboundTargets.add(result.args.target_id)
-        toolLoopStopReason = result.stopReason
+
         callIndex += 1
       }
 
-      if (toolLoopStopReason) {
-        for (const skipped of effectiveToolCalls.slice(callIndex)) {
-          toolResults.push({
-            id: skipped.id,
-            name: skipped.name,
-            result: makeToolLoopStoppedResult(skipped.name, `skipped because previous tool call stopped the loop: ${toolLoopStopReason}`),
-          })
-        }
-        break
-      }
     }
     throwIfAborted(signal)
     if (effectiveToolCalls.some(tc => tc.name === 'find_tool')) {
@@ -1920,7 +1827,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     }
 
     // Replay model output and pair every tool result using the selected protocol.
-    const terminalInternalRound = isTerminalInternalToolRound(effectiveToolCalls, { mustReply })
+    const terminalInternalRound = !toolResults.some(item => isBehaviorReminder(item.result))
+      && isTerminalInternalToolRound(effectiveToolCalls, { mustReply })
     appendRoundOutput()
     messages.push(...protocol.toToolResultEntries(toolResults))
     {
@@ -1929,11 +1837,8 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
       // 旧逻辑只看 hasSendMessage（本轮任意位置出现过 send_message），
       // 会让 [send_message("我查一下..."), exec_command, exec_command] 这种"先说一句再去查"的链条
       // 在 exec_command 出结果后被错误地告知"可以结束了"，导致模型静默退场、用户拿不到最终答复。
-      if (toolLoopStopReason) {
-        messages.push({
-          role: 'user',
-          content: buildToolLoopStopNudge(toolLoopStopReason, lastToolResult),
-        })
+      if (toolResults.some(item => isBehaviorReminder(item.result))) {
+        // The structured reminder is the feedback; wait for a fresh decision.
       } else if (sentMessage) {
         // 历史措辞 "If you still need to send additional separate messages" 被中文 LLM 解读成
         // "鼓励多发"，叠加它们训练里的客套尾巴反射（"有需要随时叫我"/"希望对你有帮助"），
@@ -1981,7 +1886,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
           successfulToolEvidence: actionContractEvidenceList,
         })
       : ''
-    if (mustReply && actionContract?.runtimeOwnedReply === true
+    if (allowPlainTextFallback && actionContract?.runtimeOwnedReply === true
         && actionContractSatisfied && fixedActionReply && !delivered) {
       allContent = fixedActionReply
       break
@@ -2063,13 +1968,6 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
         fallbackContent = '截图没有生成可发送的图片文件。'
       }
     }
-    // 播放收尾一致性：视频流程里模型常不调 send_message 而是留 body 走兜底（音乐则习惯调
-    // send_message 被 isMediaCloser 替换）。这里对兜底 body 做同样处理——本 turn 播放过媒体、
-    // 且 body 正是一句播放确认时换成单个表情，确保"播放中"之类文字不会原样发出/被语音念。
-    if (fallbackContent && fallbackTarget && mediaPlayed && !mediaEmojiSent && isMediaCloser(fallbackContent)) {
-      fallbackContent = mediaPlayedKind === 'video' ? '🎬' : '🎵'
-      mediaEmojiSent = true
-    }
     if (fallbackContent && fallbackTarget) {
       // 中断恢复路径：原 signal 已 abort，另起一条带超时的干净 signal 兜底投递。
       let fbSignal = signal
@@ -2109,6 +2007,7 @@ export async function callLLM({ systemPrompt, message, messages: inputMessages =
     }
   }
 
+  if (expressionExpected && !delivered && !aborted) throw new Error('表达未完成：已决定回复，但表达没有成功送达。')
   markPerformance('model.turn.finished', { delivered, aborted })
   measurePerformance('trace.persist', () => trace.end({ messages, delivered, aborted }))
   return { content: allContent, toolResult: lastToolResult, aborted, delivered }

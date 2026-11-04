@@ -123,7 +123,7 @@ function readFallbackMasterKey({ create = true } = {}) {
   return key
 }
 
-function encryptSecret(value) {
+export function encryptSecret(value) {
   const text = String(value || '')
   const safeStorage = getSafeStorage()
   if (safeStorage && approveSafeStorageAccess('saved-secrets')) {
@@ -145,7 +145,7 @@ function encryptSecret(value) {
   }
 }
 
-function decryptSecret(record) {
+export function decryptSecret(record) {
   if (!record || typeof record !== 'object') return ''
   try {
     if (record.scheme === SAFE_STORAGE_SCHEME) {

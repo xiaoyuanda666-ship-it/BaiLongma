@@ -108,12 +108,14 @@ try {
   assert.match(blocked, /自主心跳无权联系/)
 
   const content = `runtime_delivery_probe_${Date.now()} 中文出站保持一致`
+  const speechManifest = { version: 1, id: 'speech-test', text: content, segments: [{ index: 0, text: content, path: 'audio/test.mp3', alignment: 'estimated', cues: [] }] }
   const result = await executeTool('send_message', {
     target_id: 'ID:000001',
     content,
     channel: 'TUI',
   }, {
     source: 'test-runtime-delivery',
+    speechManifest,
     autonomous: true,
     allowedTargetIds: ['ID:000001'],
   })
@@ -133,7 +135,7 @@ try {
   assert(evt.data.conversation_id > 0, 'SSE message includes the inserted conversation id')
 
   const row = dbModule.getDB().prepare(`
-    SELECT id, role, from_id, to_id, content, channel, external_party_id, open_question
+    SELECT id, role, from_id, to_id, content, channel, external_party_id, open_question, message_format
     FROM conversations
     WHERE id = ?
   `).get(evt.data.conversation_id)
@@ -144,6 +146,10 @@ try {
   assert.equal(row.to_id, 'ID:000001')
   assert.equal(row.content, content)
   assert.equal(row.channel, 'TUI')
+  assert.equal(row.message_format, 'voice')
+  assert.equal(evt.data.message_format, 'voice')
+  const history = await (await fetch(`${baseUrl}/conversations?limit=10`)).json()
+  assert.equal(history.find(item => item.id === row.id).message_format, 'voice')
   assert.equal(row.external_party_id, '')
   assert.equal(row.open_question, 0)
   assert.equal(
@@ -152,6 +158,8 @@ try {
     'local send is persisted as authoritative delivery evidence',
   )
 
+  assert.deepEqual(evt.data.speech, speechManifest, 'speech event carries normalized playback alongside the persisted text')
+  assert.notEqual(evt.data.speak, true, 'speech manifest must not trigger duplicate legacy TTS')
   const duplicateResult = await executeTool('send_message', {
     target_id: 'ID:000001',
     content,
@@ -163,9 +171,11 @@ try {
   })
   const duplicate = JSON.parse(duplicateResult)
   assert.equal(duplicate.ok, true)
-  assert.equal(duplicate.delivered, true)
+  assert.equal(duplicate.delivered, false)
+  assert.equal(duplicate.advisory, true)
+  assert.equal(duplicate.evidence.delivered, true)
   assert.equal(duplicate.message_sent, false)
-  assert.equal(duplicate.skipped, 'already_delivered_unanswered')
+  assert.equal(duplicate.skipped, 'behavior_reminder')
   const duplicateRows = dbModule.getDB().prepare(`
     SELECT COUNT(*) AS count FROM conversations
     WHERE role = 'jarvis' AND to_id = ? AND content = ?

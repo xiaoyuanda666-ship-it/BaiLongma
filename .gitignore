@@ -157,3 +157,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Local search connection preferences (credentials live in encrypted secret store)
+/search-services.json
+/search-services.json.tmp

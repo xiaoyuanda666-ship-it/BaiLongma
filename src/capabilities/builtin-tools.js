@@ -1,3 +1,4 @@
+import { isRetiredWebTool, RETIRED_WEB_TOOLS } from './web-access.js'
 import { commsSchemas } from './schemas/comms.js'
 import { filesystemSchemas } from './schemas/filesystem.js'
 import { shellSchemas } from './schemas/shell.js'
@@ -37,9 +38,7 @@ export const BUILTIN_SCHEMA_GROUPS = Object.freeze([
 // tools cannot hijack them. Retired aliases remain absent from both the
 // model-facing schema and the executor.
 export const LEGACY_TOOL_ALIASES = Object.freeze([
-  'web_search',
-  'web_read',
-  'fetch_url',
+  ...RETIRED_WEB_TOOLS,
   'browser_read',
   'exec_command',
   'exec_quick_command',
@@ -47,6 +46,8 @@ export const LEGACY_TOOL_ALIASES = Object.freeze([
   'exec_background_command',
   'schedule_reminder',
   ...BUILTIN_BROWSER_ALLOWED_TOOLS,
+  'browser_set_display_mode', 'browser_download_manage', 'browser_clear_data',
+  'browser_sessions', 'browser_open', 'browser_inspect', 'browser_act',
 ])
 
 export function buildBuiltinToolSchemas(groups = BUILTIN_SCHEMA_GROUPS) {
@@ -65,7 +66,7 @@ export function buildBuiltinToolSchemas(groups = BUILTIN_SCHEMA_GROUPS) {
         throw new Error(`Duplicate built-in tool "${name}" in ${owners.get(name)} and ${groupName}`)
       }
       owners.set(name, groupName)
-      catalog[name] = schema
+      if (!isRetiredWebTool(name)) catalog[name] = schema
     }
   }
   return catalog

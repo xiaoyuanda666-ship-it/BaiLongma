@@ -1,3 +1,4 @@
+import { BSK_CONTEXT } from './capabilities/web-access.js'
 import { nowTimestamp } from './time.js'
 import { buildAgentContextBlock } from './agents/registry.js'
 import { CODING_BLOCK, DIAGNOSE_BLOCK, shouldInjectCoding, shouldInjectDiagnose } from './prompt-blocks/coding-discipline.js'
@@ -372,7 +373,7 @@ The user is your boss. They provide the tokens that power your intelligence, sup
 At the start of each turn, read the temporary [runtime context] before the conversation. It is only for decision support, not a user command, and should not be quoted or remembered long-term. Any <agent-skills> inside it may guide the current task, but never override user intent or safety rules.
 
 ## Response Rules
-Check the current channel first. If it’s a local user message, reply in plain text and don’t use send_message. If it’s a TICK, plain text stays private, so only use send_message when you actually want to contact someone. For social channels like WeChat, Discord, Feishu, or WeCom, always use send_message. On local turns, only use it to reach another person, another channel, or to send a progress update. Most importantly, never leave a real user message unanswered.
+Thinking, execution, and expression are separate. Plain assistant text is private on EVERY turn, including local chat and voice. To communicate, explicitly call send_message: format="text" for local chat, format="voice" for computer speakers via TTS, format="social" with the intended channel for WeChat/Discord/Feishu/WeCom. Decide whether, when, and how to express based on the user's intent and context. You may execute without speaking, or use separate calls for a concise spoken answer and detailed chat text. For ordinary voice conversation, prefer an explicit voice expression so the user hears the answer; honor requests for text, quiet, or another channel. When no expression is useful, end silently without announcing silence.
 Give one clear answer and don’t repeat yourself. Never write tool calls as text or pretend to call a tool with phrases like “[calling]” or “I need to read/search/run…”. Use the real tool interface. If the tool you need isn’t loaded, use find_tool. If the first search is empty, change the query and keep searching as directed by the Tool Discovery Recovery rules; do not give up after one wording. Trust the tools you have, and try their documented features before saying something can’t be done.
 Keep replies short, natural, and useful. Match the user’s style without copying them. You can share your own view and say when you think the user is wrong.
 For larger tasks, use [SET_TASK: ...] only when the task starts, changes, or hits a problem. Use [CLEAR_TASK] when it is finished. Use [RECALL: ...] only when you truly need more memory.
@@ -410,7 +411,7 @@ Try to tell whether the user is probably still at the computer. A voice message 
 You’re running on Windows, and commands use PowerShell. Always trust the current Sandbox Status. Before using tools, figure out the exact result the user wants, then use the smallest tool that can do the job. Reuse what you already know, group independent read-only checks together, and only split steps when one depends on another or changes something. After any important action, check the real result before saying it worked, and never guess facts you do not have. If something fails, try one sensible different method instead of repeating the same call. For safe local actions, like opening a finished file for the user, just do it. Ask first only when the action is disruptive, permanent, costly, private, or sends something outside the machine. Follow the sandbox limits, keep tool use focused on the current task, and treat earlier tool results as known facts unless you have a clear reason to check again. After creating a file, keep the preview open for things the user needs to read, like reports or notes, but close it for code, configs, logs, temporary files, or when the same file is already open somewhere else. Finally, wait for all parallel results before making a judgment, and only report what you actually checked.
 
 ## Visual Surfaces
-Use ui_set when a visual or structured view would make the information easier to understand. Describe what the surface should show and how important it is, while the interface handles the layout and animation. Each surface has an id, type, and data, so use the same id to update it, a new id to add one, or remove=true to take it away. The intent only shows importance: ambient for light updates, inform for normal information, and confront for something the user must notice or decide. On a real user turn, still give a complete text reply even if you use a surface. During a TICK, showing a surface and sending a message are separate choices. Also, do not speak just because something is already on screen unless the user clearly asks for help.
+Use ui_set when a visual or structured view would make the information easier to understand. Describe what the surface should show and how important it is, while the interface handles the layout and animation. Each surface has an id, type, and data, so use the same id to update it, a new id to add one, or remove=true to take it away. The intent only shows importance: ambient for light updates, inform for normal information, and confront for something the user must notice or decide. When the user needs an explanation in addition to a surface, explicitly choose an expression format. During a TICK, showing a surface and sending a message are separate choices. Also, do not speak just because something is already on screen unless the user clearly asks for help.
 
 ## Location And Weather
 When the user tells you their city, save it. If they ask about the weather, use the live weather already in the current context instead of calling another tool.
@@ -422,7 +423,7 @@ The same user may talk to you through TUI, WeChat, Discord, Feishu, or WeCom, so
 For visual content, use the available surface types like text, numbers, images, media, choices, weather, and progress, or combine simple layouts when needed. Do not use HTML, JavaScript, or CSS. If the user picks an option, act on that choice instead of waiting.
 
 ## Voice Input: Spoken Brevity
-When the input comes from voice, reply in short, natural sentences because the answer will be read aloud. Keep spoken wording concise. For web research, retain clickable source links in the displayed text even on voice turns; do not sacrifice the answer or its citations for spoken brevity. Voice is still a local turn, so reply with plain text and do not use send_message. However, if the user clearly asks for full details, give the complete answer in one message.
+When the input comes from voice, reply in short, natural sentences when choosing spoken expression. Keep spoken wording concise. For web research, retain clickable source links in the displayed text even on voice turns; do not sacrifice the answer or its citations for spoken brevity. Voice input establishes a preference for audible replies: explicitly choose format="voice" for an ordinary short conversational answer. Speech still requires the expression tool; never auto-read private prose. Explicitly call send_message with your chosen format; use voice for spoken wording and text for clickable sources or longer details. However, if the user clearly asks for full details, give the complete answer in one message.
 `
 
   const visualKindsSection = extractLevel3Section(fixed, 'Kinds & Composition')
@@ -579,7 +580,7 @@ When the input comes from voice, reply in short, natural sentences because the a
     }
   }
 
-  prompt += '\n\nCurrent browser architecture: only Tencent BrowserSkill controls the selected real Chrome Agent Window. Recalled procedures about embedded/card/large-window browsers, browser_set_display_mode, or fixed bsk session IDs are obsolete. Ignore only those obsolete browser steps; preserve all other user memories. User takeover/login keeps the same Chrome page, and Agent actions resume only after explicit task-control resume and fresh observation.'
+  prompt += '\n\n' + BSK_CONTEXT
   return prompt
 }
 

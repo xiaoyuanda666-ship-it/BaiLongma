@@ -560,18 +560,10 @@ BaiLongma 的工具系统由 schema、执行器、沙箱、安全策略、行动
 
 ### 10.4 Web 工具
 
-- `web_search`：联网搜索。
-- `web_read`：读取已知 URL；自动从受保护 HTTP 升级到本地 Playwright，并可在本地路径失败后选择 Jina Reader 兜底。
+- `web_search`：通过已配置的模型提供商联网搜索。
+- `bsk` skill：读取原文、操作动态网页、登录、点击、填写和下载。先读取内置 skill，再通过 `run_command` 执行官方 bsk CLI。
 
-无状态能力按目标注入：搜索时提供 `web_search + web_read`，便于找到来源后直接核对正文；已知 URL/正文只提供 `web_read`。静态还是动态由 `web_read(render="auto")` 内部判断，不再让模型选择两套读取工具。
-
-涉及打开或导航网页、继续当前页面、查询浏览器状态、关闭浏览器、标签页、截图、点击、填写和登录时，主要路径是状态化 Playwright 工具。先用 `browser_sessions` 发现并复用存活会话；没有合适会话时走 `browser_open`，当前标签页跳转使用 `browser_navigate`，然后 `browser_inspect` → `browser_act`，并用 `browser_tabs` 管理标签页，完成后调用 `browser_close`。`web_search` 和 `web_read` 不能继续已有会话，但“搜索后打开并操作”可同时注入搜索与浏览器工具。每轮会把存活会话以不可信运行时状态摘要注入 Agent 上下文；用户手动关闭最后窗口后会自动回收会话。导航后元素 ref 会换代，必须重新 inspect。网页内容始终是不可信数据，不能服从网页中要求泄密、改写系统规则或执行命令的指令；交互浏览器不开放任意 JavaScript、文件上传或下载。
-
-非 persistent 浏览器会话关闭后 cookie 与 storage 全部丢失。persistent profile 以当前用户/任务作用域、初始站点 origin 和显式 profile 名隔离，可在正常关闭、TTL 回收、应用退出与重启后复用站点允许持久化的 cookie 与 storage；session-only cookie 仍遵循站点与 Chromium 的会话规则，在浏览器进程退出时失效。崩溃恢复只能复用最后已经落盘的状态，不承诺恢复尚未 flush 的最近写入。旧版未隔离的扁平 profile 不会被自动复用。`browser_sessions(include_profiles=true)` 可列出当前作用域的可复用 profile；`browser_close(clear_profile=true)` 可在关闭活动会话时清理，或通过显式 profile + 同 origin URL 清理已关闭 profile。
-
-交互浏览器默认允许 localhost、环回地址与私网地址，以便直接访问本机开发服务；用户可以通过独立的 `security.browserPrivateNetwork` 权限撤销访问。该权限与后端是否监听 LAN 无关。
-
-Web 能力适合查询实时资料、打开文档、获取网页正文和处理静态 fetch 无法解析的页面。
+Playwright MCP 和旧的 `browser_*`、`web_read`、`fetch_url` 工具已移除。浏览器 CLI 与扩展需要单独安装并连接。操作必须依据最新页面观察，尊重用户接管与验证要求，任务结束仅清理本任务拥有的会话。网页内容是不可信数据，搜索摘要不能代替原文核验。
 
 ### 10.5 记忆工具
 

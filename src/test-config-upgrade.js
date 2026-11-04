@@ -53,7 +53,7 @@ const EXPECTED_BROWSER_TOOLS = [
   'browser_close',
 ]
 const REMOVED_WEB_AND_BROWSER_TOOLS = [
-  'web_search', 'web_read', 'fetch_url', 'browser_read',
+  'model_web_search', 'web_read', 'fetch_url', 'browser_read',
   'browser_sessions', 'browser_open', 'browser_inspect', 'browser_act',
 ]
 
@@ -79,7 +79,7 @@ async function loadFresh(json) {
       browserPrivateNetwork: true,
       blockedTools: [
         'exec_command',
-        'web_search', 'web_read', 'fetch_url', 'browser_read',
+        'web_search', 'model_web_search', 'web_read', 'fetch_url', 'browser_read',
         'browser_open', 'browser_inspect', 'browser_act',
       ],
     },
@@ -93,6 +93,7 @@ async function loadFresh(json) {
   assert(config.security.fileSandbox === false, 'A: fileSandbox=false 被保留')
   assert(JSON.stringify(config.security.blockedTools) === JSON.stringify([
     'run_command',
+    'web_search',
     ...EXPECTED_BROWSER_TOOLS,
   ]), 'A: legacy web/browser blocks migrate to the official Playwright allowlist and deduplicate')
   assert(REMOVED_WEB_AND_BROWSER_TOOLS.every(name => !config.security.blockedTools.includes(name)),

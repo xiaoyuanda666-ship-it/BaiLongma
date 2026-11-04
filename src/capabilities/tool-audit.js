@@ -31,7 +31,6 @@ export function summarizeToolExecution(name, args = {}) {
     case 'browser_read':
       return `${name}(${String(args.url || args.link || args.href || '?').slice(0, 120)})`
     case 'web_search':
-    case 'model_web_search':
       return `web_search(${String(args.query || args.q || args.keyword || '?').slice(0, 120)})`
     case 'browser_navigate':
       return `browser_navigate(${String(args.url || '?').slice(0, 120)})`
@@ -138,7 +137,7 @@ export function inferToolStatus(result) {
   if (!text) return 'ok'
   try {
     const parsed = JSON.parse(text)
-    return parsed?.ok === false ? 'error' : 'ok'
+    return parsed?.advisory === true ? 'reminded' : parsed?.ok === false ? 'error' : 'ok'
   } catch {}
   return /^(错误|请求失败|执行失败|命令超时|命令执行失败|閿欒|璇锋眰澶辫触|鎵ц澶辫触|鍛戒护瓒呮椂|鍛戒护鎵ц澶辫触)/.test(text) ? 'error' : 'ok'
 }

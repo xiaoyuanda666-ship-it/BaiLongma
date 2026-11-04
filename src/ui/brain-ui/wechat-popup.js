@@ -2,6 +2,8 @@ import { API } from './api-client.js';
 
 let overlay = null;
 let pollTimer = null;
+let popupSession = 0;
+let connecting = false;
 
 const STATUS_LABELS = {
   idle:        { text: '○ 未连接',   color: 'var(--dim)' },
@@ -85,6 +87,9 @@ function setStatus(status, extra = {}) {
   connectBtn.style.display = isConnected ? 'none' : 'inline-flex';
   logoutBtn.style.display  = isConnected ? 'inline-flex' : 'none';
   connectBtn.disabled = status === 'qr_pending' || status === 'qr_ready';
+  connectBtn.textContent = status === 'qr_pending' ? '正在加载二维码…'
+    : status === 'qr_ready' ? '等待扫码…'
+    : status === 'error' ? '重试连接' : '连接微信';
 
   if (isConnected) {
     hintEl.textContent = '微信已绑定，可以通过个人微信向白龙马发送消息。';
@@ -114,44 +119,85 @@ function stopPoll() {
 }
 
 // 返回 true 表示应继续轮询，false 表示已终止（connected / error）
-async function pollQR() {
+async function pollQR(session = popupSession) {
   try {
-    const data = await fetch(`${API}/social/wechat-clawbot/qr`).then(r => r.json());
+    const response = await fetch(`${API}/social/wechat-clawbot/qr`);
+    if (!response.ok) throw new Error('无法获取微信连接状态，请重试。');
+    const data = await response.json();
+    if (session !== popupSession || overlay.hasAttribute('hidden')) return false;
     if (data.status === 'connected') {
+      popupSession++;
       stopPoll();
       setStatus('connected');
       showFeedback('微信绑定成功！');
       return false;
-    } else if (data.status === 'error') {
+    } else if (data.status === 'error' || data.status === 'idle' || data.status === 'session_expired') {
+      popupSession++;
       stopPoll();
-      setStatus('error', { error: data.error });
+      setStatus('error', { error: data.error || '扫码已结束或二维码已过期，请重试。' });
       return false;
     } else if (data.status === 'qr_ready' && data.qr_url) {
       setStatus('qr_ready', { qr_url: data.qr_url });
     } else {
       setStatus(data.status || 'qr_pending');
     }
-  } catch {
-    // silent
+  } catch (err) {
+    if (session !== popupSession || overlay.hasAttribute('hidden')) return false;
+    stopPoll();
+    setStatus('error', { error: err.message });
+    return false;
   }
   return true;
 }
 
-async function triggerConnect() {
-  const { connectBtn } = getEls();
+async function triggerConnect({ checkStatus = true } = {}) {
+  if (connecting) {
+    const session = popupSession;
+    stopPoll();
+    pollTimer = setInterval(() => pollQR(session), 1500);
+    return;
+  }
+  connecting = true;
+  const session = popupSession;
+  stopPoll();
   setStatus('qr_pending');
-  if (connectBtn) connectBtn.disabled = true;
   try {
-    await fetch(`${API}/settings/social`, {
+    // 重试前再次查询，避免状态查询失败后误重启已连接的账号。
+    if (checkStatus) {
+      const current = await fetch(`${API}/social/wechat-clawbot/qr`);
+      if (!current.ok) throw new Error('无法获取微信连接状态，请重试。');
+      const state = await current.json();
+      if (session !== popupSession || overlay.hasAttribute('hidden')) return;
+      if (state.status === 'connected') {
+        setStatus('connected');
+        return;
+      }
+      if (state.status === 'qr_pending' || (state.status === 'qr_ready' && state.qr_url)) {
+        setStatus(state.status, { qr_url: state.qr_url });
+        pollTimer = setInterval(() => pollQR(session), 1500);
+        return;
+      }
+    }
+    const response = await fetch(`${API}/settings/social`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ _clawbot_connect: '1' }),
     });
-  } catch {}
-  stopPoll();
-  // 先立即轮询一次，等返回后再决定是否启动 interval
-  const shouldContinue = await pollQR();
-  if (shouldContinue) pollTimer = setInterval(pollQR, 1500);
+    if (!response.ok) throw new Error('无法发起微信连接，请重试。');
+    const data = await response.json();
+    if (data.ok === false) throw new Error(data.error || '无法发起微信连接，请重试。');
+    if (session !== popupSession || overlay.hasAttribute('hidden')) return;
+    const shouldContinue = await pollQR(session);
+    if (shouldContinue && session === popupSession && !overlay.hasAttribute('hidden')) {
+      pollTimer = setInterval(() => pollQR(session), 1500);
+    }
+  } catch (err) {
+    if (session === popupSession && !overlay.hasAttribute('hidden')) {
+      setStatus('error', { error: err.message });
+    }
+  } finally {
+    connecting = false;
+  }
 }
 
 async function triggerLogout() {
@@ -159,7 +205,8 @@ async function triggerLogout() {
   const { qrWrap } = getEls();
   if (qrWrap) qrWrap.style.display = 'none';
   try {
-    await fetch(`${API}/social/wechat-clawbot/logout`, { method: 'POST' });
+    const response = await fetch(`${API}/social/wechat-clawbot/logout`, { method: 'POST' });
+    if (!response.ok) throw new Error('断开连接失败');
     setStatus('idle');
     showFeedback('已断开微信连接');
   } catch {
@@ -181,14 +228,18 @@ export function initWechatPopup() {
     const d = e.detail;
     if (d?.platform !== 'wechat-clawbot') return;
     if (d.status === 'connected') {
+      popupSession++;
       stopPoll();
       setStatus('connected');
       if (!overlay.hasAttribute('hidden')) showFeedback('微信绑定成功！');
     } else if (d.status === 'qr_ready' && d.qr_url) {
       setStatus('qr_ready', { qr_url: d.qr_url });
-    } else if (d.status === 'session_expired') {
-      setStatus('session_expired');
+    } else if (d.status === 'session_expired' || d.status === 'idle') {
+      popupSession++;
+      stopPoll();
+      setStatus(d.status);
     } else if (d.status === 'error') {
+      popupSession++;
       stopPoll();
       setStatus('error', { error: d.error });
     }
@@ -196,32 +247,36 @@ export function initWechatPopup() {
 }
 
 export async function showWechatPopup() {
-  if (!overlay) return;
+  if (!overlay || !overlay.hasAttribute('hidden')) return;
   overlay.removeAttribute('hidden');
+  const session = ++popupSession;
+  setStatus('qr_pending');
 
-  // 先查询当前状态，按实际状态渲染
+  // 已连接或正在扫码时复用当前流程，未连接时自动生成二维码。
   try {
-    const data = await fetch(`${API}/social/wechat-clawbot/qr`).then(r => r.json());
+    const response = await fetch(`${API}/social/wechat-clawbot/qr`);
+    if (!response.ok) throw new Error('无法获取微信连接状态，请重试。');
+    const data = await response.json();
+    if (session !== popupSession || overlay.hasAttribute('hidden')) return;
     if (data.status === 'connected') {
       setStatus('connected');
-    } else if (data.status === 'qr_ready' && data.qr_url) {
-      setStatus('qr_ready', { qr_url: data.qr_url });
+    } else if ((data.status === 'qr_ready' && data.qr_url) || data.status === 'qr_pending') {
+      setStatus(data.status, { qr_url: data.qr_url });
       stopPoll();
-      pollTimer = setInterval(pollQR, 1500);
-    } else if (data.status === 'qr_pending') {
-      setStatus('qr_pending');
-      stopPoll();
-      pollTimer = setInterval(pollQR, 1500);
+      pollTimer = setInterval(() => pollQR(session), 1500);
     } else {
-      setStatus('idle');
+      await triggerConnect({ checkStatus: false });
     }
-  } catch {
-    setStatus('idle');
+  } catch (err) {
+    if (session === popupSession && !overlay.hasAttribute('hidden')) {
+      setStatus('error', { error: err.message });
+    }
   }
 }
 
 export function hideWechatPopup() {
   if (!overlay) return;
   overlay.setAttribute('hidden', '');
+  popupSession++;
   stopPoll();
 }

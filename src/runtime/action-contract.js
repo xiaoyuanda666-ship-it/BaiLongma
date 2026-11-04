@@ -399,50 +399,56 @@ function resultHasArticleEvidence(parsed, rawResult = '') {
 export function collectVerifiedWebResearchSources(evidenceList = []) {
   const sources = []
   const seen = new Set()
-  for (const evidence of Array.isArray(evidenceList) ? evidenceList : []) {
-    if (evidence?.name === 'model_web_search') {
+  const evidenceItems = Array.isArray(evidenceList) ? evidenceList : []
+  // Reading a body does not verify its publication date. Preserve date-scoped
+  // search checks across fetches, browser fallback, and reordered evidence.
+  let dateScoped = false
+  const publicationStatus = new Map()
+  for (const evidence of evidenceItems) {
+    if (evidence?.name !== 'web_search') continue
+    const search = safeJson(evidence.result)
+    if (search?.ok !== true || !Array.isArray(search.results)) continue
+    if (search.filters?.date_from || search.filters?.date_to) dateScoped = true
+    for (const item of search.results) {
+      if (!['unknown', 'in_range', 'out_of_range'].includes(item.date_status)) continue
+      dateScoped = true
+      const url = normalizedEvidenceUrl(item.url)
+      if (url) publicationStatus.set(url, item.date_status)
+    }
+  }
+  const dateEligible = url => !dateScoped || publicationStatus.get(url) === 'in_range'
+  for (const evidence of evidenceItems) {
+    if (evidence?.name === 'web_search') {
       const search = safeJson(evidence.result)
       if (search?.ok !== true || !Array.isArray(search.results)) continue
       for (const item of search.results) {
-        const hasBody = item.evidence_kind === 'page_content' && item.verified === true
+        const hasBody = item.evidence_kind === 'page_content' && (item.content_retrieved === true || item.verified === true)
           && typeof item.content === 'string' && item.content.trim()
         const hasCitedAnswer = item.evidence_kind === 'grounded_answer'
           && typeof search.summary === 'string' && search.summary.trim()
         // Unknown publication dates remain discovery leads for date-scoped tasks.
         if ((!hasBody && !hasCitedAnswer) || item.date_status === 'unknown') continue
         const url = normalizedEvidenceUrl(item.url)
-        if (!url || seen.has(url) || !likelyArticleUrl(url)) continue
+        if (!url || !dateEligible(url) || seen.has(url) || !likelyArticleUrl(url)) continue
         if (item.title && sources.some(source => titlesLikelyDuplicate(source.title, item.title))) continue
         seen.add(url)
         sources.push({ url, title: item.title || url, aliases: [url], evidence_kind: item.evidence_kind })
       }
       continue
     }
-    if (evidence?.name === 'model_web_fetch') {
-      const page = safeJson(evidence.result)
-      const url = normalizedEvidenceUrl(page?.url)
-      if (page?.ok === true && page.verified === true && typeof page.content === 'string'
-          && page.content.trim() && url && !seen.has(url)) {
-        if (page.title && sources.some(source => titlesLikelyDuplicate(source.title, page.title))) continue
-        seen.add(url)
-        sources.push({ url, title: page.title || url, aliases: [url] })
-      }
+    if (evidence?.name === 'run_command') {
+      const run = safeJson(evidence.result)
+      if (!successfulBskCommand(run, evidence.args)) continue
+      const output = safeJson(run.stdout)
+      const page = output?.data || output?.result || output
+      const url = normalizedEvidenceUrl(page?.url || page?.page?.url || '')
+      const body = page?.text || page?.content || page?.snapshot || ''
+      if (!url || !dateEligible(url) || !likelyArticleUrl(url) || seen.has(url)
+          || typeof body !== 'string' || body.trim().length < 120) continue
+      seen.add(url)
+      sources.push({ url, title: page.title || page.page?.title || url, aliases: [url], evidence_kind: 'page_content' })
       continue
     }
-    if (!['browser_navigate', 'browser_click'].includes(evidence?.name)) continue
-    const parsed = safeJson(evidence?.result)
-    const url = resultUrl(parsed, evidence)
-    if (!likelyArticleUrl(url) || !resultHasArticleEvidence(parsed, evidence?.result)) continue
-    const key = normalizedEvidenceUrl(url)
-    if (!key || seen.has(key)) continue
-    const title = resultTitle(parsed)
-    if (title && sources.some(source => titlesLikelyDuplicate(source.title, title))) continue
-    seen.add(key)
-    const aliases = [...new Set([
-      key,
-      normalizedEvidenceUrl(evidence?.args?.url || ''),
-    ].filter(Boolean))]
-    sources.push({ url: key, title: title || key, aliases })
   }
   return sources
 }
@@ -480,7 +486,7 @@ function webResearchCompletionIssue(contract, text = '', options = {}) {
   const required = Math.max(1, Number(contract?.minimumVerifiedSources) || 3)
   const sources = collectVerifiedWebResearchSources(options?.successfulToolEvidence || [])
   if (sources.length < required) {
-    return `Only ${sources.length} of ${required} requested sources have usable evidence (actual page content or a provider-cited answer). A search-results page or snippet is discovery only; unknown dates need checking. Continue searching or reading original sources before answering.`
+    return `Only ${sources.length} of ${required} requested sources have usable evidence (actual page content or a provider-cited answer). A search-results page or snippet is discovery only. For date-scoped searches, fetching a body does not verify its date: obtain an in-range dated search result for the source, or report that the requested dates could not be verified. Continue searching for missing sources; do not silently broaden dates.`
   }
   const verified = new Set(sources.flatMap(source => source.aliases || [source.url]))
   const links = urlsInReply(text)
@@ -777,7 +783,7 @@ const CONTRACTS = [
   {
     id: 'web_research',
     label: '联网检索并核验原文来源',
-    tools: ['model_web_search', 'model_web_fetch', 'browser_navigate', 'browser_click'],
+    tools: ['web_search', 'run_command'],
     match: text => WEB_RESEARCH_REQUEST_RE.test(text),
     resolve: text => ({ minimumVerifiedSources: inferWebResearchSourceCount(text) }),
   },
@@ -786,7 +792,7 @@ const CONTRACTS = [
     label: '联网查询',
     // A fresh provider lookup or navigation is required; a stale browser
     // snapshot alone is not evidence of a new search.
-    tools: ['model_web_search', 'model_web_fetch', 'browser_navigate'],
+    tools: ['web_search', 'run_command'],
     match: text => WEB_FRESH_FACT_REQUEST_RE.test(text)
       || /(?:帮我|请|给我).{0,12}(?:上网|联网|搜索|查一下|查一查|检索|找一下|浏览).{0,40}|(?:搜索|查询|查找).{0,30}(?:网页|网站|新闻|资料|链接|网址)|\b(?:search|browse|look\s+up|fetch)\b/i.test(text),
   },
@@ -816,7 +822,26 @@ const CONTRACTS = [
   },
 ]
 
-export function classifyActionContract(message = '', { conversationWindow = [], runtimeContext = '' } = {}) {
+// Keep non-browser contracts intact while replacing removed browser authority.
+export function classifyActionContract(message = '', options = {}) {
+  const contract = classifyLegacyActionContract(message, options)
+  if (contract && (contract.id.startsWith('browser_') || contract.id === 'system_browser_open')) {
+    return { id: 'bsk', label: '使用 bsk 浏览器技能执行请求', requiredTools: ['run_command'] }
+  }
+  return contract
+}
+
+function successfulBskCommand(parsed, args = {}) {
+  const command = String(parsed?.command || args.command || '')
+  const output = safeJson(parsed?.stdout)
+  if (output?.ok === false || output?.error || output?.data?.ok === false || output?.result?.ok === false) return false
+  // This is evidence classification, not a shell security boundary. Only a
+  // completed browser action counts, never help, doctor, session setup or echo.
+  return parsed?.ok !== false && !parsed?.error && parsed?.exit_code === 0
+    && /^(?:&\s+)?(?:bsk(?:\.exe)?|["'][^"']*[\\/]bsk(?:\.exe)?["']|[^\s"']*[\\/]bsk(?:\.exe)?)\s+(?:navigate(?:-back|-forward)?|observe|snapshot|get-html|click|fill|select|press|hover|wheel|scroll-to|screenshot|tab|session\s+stop)\b/i.test(command.trim())
+}
+
+function classifyLegacyActionContract(message = '', { conversationWindow = [], runtimeContext = '' } = {}) {
   const text = String(message || '').trim()
   if (!text || META_QUESTION_RE.test(text)) return null
   // “怎么/如何做” requests an explanation, not the side effect itself.
@@ -938,10 +963,11 @@ export function actionContractToolCallIssue(contract, toolName, args = {}, optio
 export function actionContractToolSucceeded(contract, toolName, result, args = {}, options = {}) {
   if (!contract?.requiredTools?.includes(toolName)) return false
   const text = String(result || '').trim()
-  if (!text) return true
+  if (!text) return contract.id !== 'bsk' && toolName !== 'run_command'
   try {
     const parsed = JSON.parse(text)
     if (parsed?.ok === false || parsed?.error) return false
+    if (contract.id === 'bsk' || (toolName === 'run_command' && ['web', 'web_research'].includes(contract.id))) return successfulBskCommand(parsed, args)
     if (contract.id === 'browser_open_url' && contract.expectedUrl) {
       const actual = resultUrl(parsed, { args })
       const requested = normalizedEvidenceUrl(args?.url || '')
@@ -971,6 +997,7 @@ export function actionContractToolSucceeded(contract, toolName, result, args = {
     }
     return true
   } catch {
+    if (contract.id === 'bsk' || (toolName === 'run_command' && ['web', 'web_research'].includes(contract.id))) return false
     return !/^(?:错误|请求失败|执行失败|命令超时|命令执行失败|error|failed|execution failed|command timed out)/i.test(text)
   }
 }

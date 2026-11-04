@@ -1,4 +1,5 @@
-﻿import { renderBrainUiApp } from "./app-shell.js";
+import { createSpeechPlayback } from "./speech-playback.js";
+import { renderBrainUiApp } from "./app-shell.js";
 import { API, getUiClientId, isUiClientTarget } from "./api-client.js";
 import { bootstrapScene } from "../scene-shell/bootstrap.js";
 import { initChat, friendlyChannelLabel } from "./chat.js";
@@ -188,6 +189,23 @@ const SUPPRESS_UPDATES_KEY = "bailongma_suppress_update_notifications";
 let agentName = DEFAULT_AGENT_NAME;
 let currentUiZoom = DEFAULT_UI_ZOOM;
 let chat = null;
+const speechPlayback = createSpeechPlayback({
+  baseUrl: API,
+  prepareAudio: audio => applyOutputSink(audio).catch(() => {}),
+  suspend: () => window.bailongmaVoice?.suspendForTTS?.(),
+  resume: () => window.bailongmaVoice?.resumeAfterMedia?.(),
+});
+function showSpeechMessage(data) {
+  const targeted = isUiClientTarget(data);
+  const bubble = chat.addMsg('jarvis', targeted ? '🔊' : data.content, { messageId: data.conversation_id, alert: false, channel: data.channel, messageFormat: 'voice', timestamp: data.timestamp });
+  if (!bubble) return;
+  if (targeted) {
+    speechPlayback.play(data, {
+      render: text => chat.updateMessageElement(bubble, text),
+    }).catch(() => { chat.updateMessageElement(bubble, data.content); });
+  }
+  chat.openChat(true);
+}
 // 由 initSettings() 内部赋值，供 chat.js 的斜杠命令打开设置面板
 let openSettingsRef = null;
 
@@ -1119,6 +1137,7 @@ const L2 = new ThoughtStream("si-l2", "warm", {
   thinkingLabel: t("thought.thinking"),
   thinkingDoneLabel: t("thought.thinkingDone"),
   toolDetailLength: 220,
+  historyLimit: 120,
 });
 
 // ── L2 意识观测：心跳图、行动日志、实时认知状态 ────────────────
@@ -1508,6 +1527,38 @@ function restoreUserStreamHistory(events) {
   }
 }
 
+function renderCognition(data, timestamp = null) {
+  revealCognitionStream();
+  const phase = ["replan", "blocked", "finish"].includes(data.decision) ? data.decision : data.phase;
+  const label = t(`cognition.${phase}`);
+  L2.stopThinking();
+  L2.clearStatus();
+  setCognitionState(label, "thinking");
+  if (data.phase === "unavailable") {
+    const detailKey = {
+      timeout: "cognition.unavailableTimeout",
+      empty_output: "cognition.unavailableEmpty",
+      invalid_json: "cognition.unavailableFormat",
+      invalid_decision: "cognition.unavailableFormat",
+      invalid_response: "cognition.unavailableFormat",
+      incomplete: "cognition.unavailableIncomplete",
+    }[data.reason] || "cognition.unavailableDetail";
+    L2.newLine(label, {
+      time: timestamp ? heartbeatClock(Date.parse(timestamp) || Date.now()) : undefined,
+      content: t(detailKey),
+    });
+    return;
+  }
+  if (!data.summary) {
+    L2.setStatus(label, "busy");
+    return;
+  }
+  L2.newLine(`${label} · ${Number(data.round) + 1}`, {
+    time: timestamp ? heartbeatClock(Date.parse(timestamp) || Date.now()) : undefined,
+    content: [data.response ? `${t("cognition.response")}: ${t(`cognition.response.${data.response.mode}`)} — ${data.response.reason}` : null, data.summary, `${t("cognition.expected")}: ${data.expected}`, `${t("cognition.observation")}: ${data.observation}`].filter(Boolean).join("\n"),
+  });
+}
+
 function restoreCognitionHistory(events) {
   const history = Array.isArray(events) ? events.slice(-120) : [];
   if (history.length === 0 || !L2.el) return;
@@ -1522,10 +1573,14 @@ function restoreCognitionHistory(events) {
     const type = event?.type;
     const data = event?.data || {};
     switch (type) {
+      case "cognition":
+        renderCognition(data, event.ts);
+        break;
+      case "message_received":
       case "tick":
         roundActive = true;
         L2.beginRound();
-        L2.newLine("heartbeat tick", { time: heartbeatClock(Date.parse(event.ts) || Date.now()) });
+        L2.newLine(type === "tick" ? "heartbeat tick" : t("cognition.userTask"), { time: heartbeatClock(Date.parse(event.ts) || Date.now()) });
         L2.startThinkingSession();
         lastSettledState = "thinking";
         break;
@@ -1626,7 +1681,7 @@ async function loadBrainUiHistory() {
     renderActionLog();
     updateHeartbeatFacts();
     restoreUserStreamHistory(l1Events);
-    restoreCognitionHistory(l2Events);
+    restoreCognitionHistory(payload.events);
   } catch (err) {
     // 旧后端或临时不可用时继续使用 localStorage 快照；实时 SSE 仍然照常连接。
     console.warn("[brain-ui] heartbeat history unavailable:", err?.message || err);
@@ -2048,6 +2103,10 @@ function handle({ type, data = {}, ts = null }) {
       liveReplyActive = false;
       liveRawText = "";
       liveTurnSpeak = false;
+      revealCognitionStream();
+      L2.beginRound();
+      L2.newLine(t("cognition.userTask"));
+      setCognitionState(t("cognition.planning"), "thinking");
       L1.beginRound();
       const parsed = parseUserMessageInput(data.input);
       L1.newLine("user message received", {
@@ -2092,6 +2151,9 @@ function handle({ type, data = {}, ts = null }) {
       break;
     case "scheduled_task_failed":
       setL3State(t("runtime.l3Failed"), "failed");
+      break;
+    case "cognition":
+      renderCognition(data, ts);
       break;
     case "stream_start":
       clientRequestPerformance.correlate(data);
@@ -2167,8 +2229,9 @@ function handle({ type, data = {}, ts = null }) {
       beginToolHeartbeat(data.name);
       const stream = streamForRuntimeEvent(data);
       const action = data.name ? stream.toolAction(data.name, data.args) : t("runtime.activityGeneral");
-      if (backgroundRuntime) revealCognitionStream();
-      if (backgroundRuntime || currentPath !== "l1") setCognitionState(t("runtime.workingAction", { action }), "tool");
+      revealCognitionStream();
+      if (currentPath === "l1" && !backgroundRuntime) L2.setStatus(action, "busy");
+      setCognitionState(t("runtime.workingAction", { action }), "tool");
       stream.setTimedStatus(t("runtime.workingActionStatus", { action }), "busy", {
         staleAfterMs: 45000,
         staleText: t("runtime.longRunningAction", { action }),
@@ -2179,12 +2242,13 @@ function handle({ type, data = {}, ts = null }) {
       finishToolHeartbeat(data.name);
       const backgroundRuntime = isBackgroundRuntimeEvent(data);
       const stream = streamForRuntimeEvent(data);
-      if (backgroundRuntime || currentPath !== "l1") {
+      {
         const action = stream.toolAction(data.name, data.args);
         setCognitionState(t(data.ok === false ? "runtime.incompleteAction" : "runtime.completedAction", { action }), "tool");
       }
       addActionLogEntry(data.name, data.args, data.result, data.ok, Date.parse(ts) || Date.now());
       stream.tool(data.name, data.args, data.result, data.ok);
+      if (currentPath === "l1" && !backgroundRuntime) L2.tool(data.name, data.args, data.result, data.ok);
       recordAiActivity(data.name);
       break;
     }
@@ -2201,6 +2265,7 @@ function handle({ type, data = {}, ts = null }) {
       // Round complete — stop all animations
       resetToolHeartbeats();
       currentStream().end();
+      if (currentPath === "l1") { L2.end(); setCognitionState(t("runtime.roundComplete"), "done"); }
       setVoiceThinking(false);
       if (currentPath === "l2") {
         finishHeartbeatRound("complete");
@@ -2218,6 +2283,7 @@ function handle({ type, data = {}, ts = null }) {
     case "processing_preempted":
       resetToolHeartbeats();
       currentStream().end();
+      if (currentPath === "l1") { L2.end(); setCognitionState(t("runtime.interrupted"), "idle"); }
       setVoiceThinking(false);
       hideBrowserPreview();
       if (currentPath === "l2") {
@@ -2249,6 +2315,7 @@ function handle({ type, data = {}, ts = null }) {
       hideBrowserPreview();
       currentStream().startThinkingSession();
       currentStream().setStatus(t("runtime.llmRetryExhausted"), "failed");
+      if (currentPath === "l1") { L2.end(); L2.setStatus(t("runtime.llmRetryExhausted"), "failed"); setCognitionState(t("runtime.incomplete"), "idle"); }
       if (currentPath === "l2") {
         finishHeartbeatRound("interrupted", "心跳处理未完成 · 重试已用尽");
         setCognitionState(t("runtime.incomplete"), "idle");
@@ -2265,6 +2332,7 @@ function handle({ type, data = {}, ts = null }) {
         hideBrowserPreview();
         currentStream().stopThinking();
         currentStream().setStatus(data.error || t("runtime.processingFailed"), "failed");
+        if (currentPath === "l1") { L2.end(); L2.setStatus(data.error || t("runtime.processingFailed"), "failed"); setCognitionState(t("runtime.exception"), "idle"); }
         if (currentPath === "l2") {
           finishHeartbeatRound("interrupted", "心跳处理遇到异常");
           setCognitionState(t("runtime.exception"), "idle");
@@ -2274,6 +2342,7 @@ function handle({ type, data = {}, ts = null }) {
     case "protocol_violation":
       resetToolHeartbeats();
       currentStream().end();
+      if (currentPath === "l1") { L2.end(); setCognitionState(t("runtime.incomplete"), "idle"); }
       setVoiceThinking(false);
       hideBrowserPreview();
       if (currentPath === "l2") {
@@ -2325,15 +2394,19 @@ function handle({ type, data = {}, ts = null }) {
     case "message":
       if (data.from === "consciousness") {
         lastJarvisContent = data.content;
-        const viaLabel = friendlyChannelLabel(data.channel);
-        const content = viaLabel ? `_→ ${viaLabel}_  \n${data.content}` : data.content;
+        if (data.speech?.version === 1) {
+          showSpeechMessage(data);
+          break;
+        }
+        const content = data.content;
+        const modalityOptions = { channel: data.channel, messageFormat: data.message_format || (data.speak ? "voice" : ""), timestamp: data.timestamp };
         const messageId = data.conversation_id || data.conversationId || "";
         clientRequestPerformance.textReceived(data);
         // 若本轮正文已流式进了实时气泡：用权威全文定稿同一个气泡，避免新建重复气泡
         if (chat.hasLiveJarvisMsg()) {
-          chat.finalizeLiveJarvisMsg(content, { messageId, performance: data });
+          chat.finalizeLiveJarvisMsg(content, { messageId, performance: data, ...modalityOptions });
         } else {
-          const bubble = addMsg("jarvis", content, { messageId });
+          const bubble = addMsg("jarvis", content, { messageId, ...modalityOptions });
           clientRequestPerformance.textRendered(data, bubble?.querySelector(".msg-body"));
         }
         const speechText = toPlainSpeech(data.content);
@@ -2366,7 +2439,7 @@ function handle({ type, data = {}, ts = null }) {
       // 外部渠道判定：channel 非空且非本地，或 from_id 仍带外部前缀（兼容连接器直接 emit 的事件）
       const ch = String(data.channel || "").toUpperCase();
       const isExternal =
-        (ch && ch !== "TUI" && ch !== "API" && ch !== "SYSTEM" && ch !== "REMINDER" && ch !== "APP_SIGNAL" && ch !== "VOICE" && ch !== "语音识别" && ch !== "RESOURCE")
+        (ch && ch !== "TUI" && ch !== "API" && ch !== "SYSTEM" && ch !== "REMINDER" && ch !== "APP_SIGNAL" && ch !== "VOICE" && ch !== "语音识别" && ch !== "语音对话" && ch !== "FOCUSBANNER" && ch !== "RESOURCE")
         || (data.from_id && /^(wechat|discord|feishu|wecom):/i.test(data.from_id));
       if (isExternal) {
         const label = friendlyChannelLabel(data.channel) || data.from_id || "External";
@@ -2399,9 +2472,10 @@ function handle({ type, data = {}, ts = null }) {
           data.conversation_id || data.conversationId,
         );
         if (!reconciled) {
-          const voiceMessage = ch === "VOICE" || ch === "语音识别";
           addMsg("user", data.content, {
-            label: voiceMessage ? "You · 语音对话" : "You",
+            channel: data.channel,
+            messageFormat: data.message_format,
+            timestamp: data.timestamp,
             alert: false,
             pending: false,
             messageId: data.conversation_id || data.conversationId || "",
@@ -2613,6 +2687,7 @@ function applyTTSInterruption(spokenUpTo) {
 
 // Called by voice-panel interruption detection: stop current TTS and record cut point
 window.stopTTS = () => {
+  if (speechPlayback.active) { speechPlayback.stop(); return; }
   if (ttsStreamingMode && sttsActive) { stopStreamingTTS(); return; }
   // 即使音频元素尚未创建，请求也可能正在等待 TTS 响应；先废止该轮，防止稍后突然开播。
   ttsPlaybackEpoch += 1;

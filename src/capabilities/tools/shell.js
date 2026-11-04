@@ -1,3 +1,4 @@
+import { shellEnvironment } from './shell-environment.js'
 import path from 'path'
 import fs from 'fs'
 import { randomUUID } from 'crypto'
@@ -70,6 +71,7 @@ const DOWNLOAD_PROGRESS_MILESTONES = [5, 10, 25, 50, 75, 90, 100]
  * 防止数据 chunk 切在多字节字符中间产生 U+FFFD。
  */
 function spawnShellCommand(command, opts = {}) {
+  opts = { ...opts, env: shellEnvironment(opts.env || process.env) }
   if (IS_WIN) {
     // 用换行拼接而非 `; `：命令末尾若带 # 注释或续行符时更安全。
     //

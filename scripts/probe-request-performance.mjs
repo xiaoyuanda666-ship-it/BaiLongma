@@ -6,7 +6,6 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { performance } from 'node:perf_hooks'
-import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
 
 const args = process.argv.slice(2)
@@ -18,8 +17,8 @@ const source = path.resolve(option('--source-dir'))
 const output = path.resolve(option('--output'))
 const live = args.includes('--live-model')
 const runs = Math.max(1, Math.min(20, Number(option('--runs')) || 3))
-const useBrowser = args.includes('--browser')
-const useHttp = args.includes('--http') || useBrowser
+if (args.includes('--browser')) throw new Error('Browser performance probing has been removed; use --http for HTTP/SSE timing.')
+const useHttp = args.includes('--http')
 const varied = args.includes('--varied')
 const controlEnabled = !args.includes('--no-control')
 const warmEmbedding = args.includes('--warm-embedding')
@@ -36,10 +35,9 @@ let closeDB
 let server
 let stopEvents
 let eventsPump
-let browserDriver
 const report = {
   measuredAt: new Date().toISOString(), liveModel: live, runs, maxOutputTokens,
-  useHttp, useBrowser, varied, controlEnabled, warmEmbedding, probeReasoningNone,
+  useHttp, varied, controlEnabled, warmEmbedding, probeReasoningNone,
   networkRestricted: true, deliverySuppressed: true,
   note: 'Full-context aborted status after a completed model stream is intentional: delivery to real users/tools is suppressed. App startup and busy-queue contention are excluded. --http measures loopback POST through real message/event routes to the first sanitized plain-reply SSE text, not browser paint. Blocked external preparation may understate real latency.',
   samples: [], blockedNetworkRequests: 0, blockedForegroundNetworkRequests: 0, blockedDetachedNetworkRequests: 0,
@@ -137,15 +135,11 @@ try {
   if (useHttp) {
     const { handleMessageRoutes } = await import('../src/api/routes/message.js')
     const { handleEventRoutes } = await import('../src/api/routes/events.js')
-    const browserModule = useBrowser ? await import('./request-performance-browser.mjs') : null
     server = http.createServer(async (req, res) => {
       try {
         const url = new URL(req.url, 'http://127.0.0.1')
         if (await handleMessageRoutes(req, res, url)) return
         if (await handleEventRoutes(req, res, url)) return
-        if (browserModule && await browserModule.handlePerformanceBrowserAsset(req, res, {
-          root: fileURLToPath(new URL('../', import.meta.url)),
-        })) return
         res.writeHead(404).end()
       } catch { res.writeHead(500).end() }
     })
@@ -154,10 +148,7 @@ try {
       server.listen(0, '127.0.0.1', resolve)
     })
     baseUrl = `http://127.0.0.1:${server.address().port}`
-    if (useBrowser) {
-      browserDriver = await browserModule.createPerformanceBrowser()
-      await browserDriver.start(baseUrl)
-    } else {
+    {
       stopEvents = new AbortController()
       const response = await originalFetch(`${baseUrl}/events?client_id=diagnostic-client`, { signal: stopEvents.signal })
       eventsPump = (async () => {
@@ -200,10 +191,7 @@ try {
     const message = messages[i % messages.length]
     let trace
     let clientSample
-    let browserSent
-    if (useBrowser) {
-      browserSent = await browserDriver.send(message)
-    } else if (useHttp) {
+    if (useHttp) {
       const clientMessageId = `diagnostic-message-${i + 1}`
       clientSample = { startedAt: performance.now(), metrics: {} }
       sseSamples.set(clientMessageId, clientSample)
@@ -224,10 +212,6 @@ try {
     trace = entry.performanceTrace
     await runTurn(entry.raw, 'diagnostic', entry)
     activeSample.trace = trace.snapshot()
-    if (browserSent) {
-      activeSample.client = await browserDriver.snapshot(browserSent.clientMessageId)
-      if (activeSample.client?.requestId !== trace.id) throw new Error('Browser trace correlation mismatch')
-    }
     if (clientSample) {
       // Let the socket consume already-broadcast packets. Missing text remains
       // null (tool-only/reasoning-only output is not a successful first word).
@@ -260,14 +244,12 @@ try {
   report.databaseRows = Object.fromEntries(['memories', 'conversations', 'memory_embeddings', 'knowledge_chunks']
     .flatMap(table => { try { return [[table, getDB().prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n]] } catch { return [] } }))
   report.suppressedLogCount = suppressedLogCount
-  if (browserDriver) report.browser = await browserDriver.diagnostics()
 } catch (error) {
   // Avoid serializing provider errors/headers that may contain private values.
   report.error = { name: error.name, status: Number(error.status) || null }
   process.exitCode = 1
 } finally {
   try {
-    try { await browserDriver?.close() } catch { report.cleanupError = true; process.exitCode = 1 }
     stopEvents?.abort()
     try { await eventsPump } catch { report.cleanupError = true; process.exitCode = 1 }
     if (server) {

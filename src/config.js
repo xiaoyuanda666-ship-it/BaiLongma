@@ -66,7 +66,7 @@ const LEGACY_BLOCKED_TOOL_MIGRATIONS = Object.freeze({
   // still blocks the same public browser_* authority after the migration.
   playwright_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
   chrome_devtools_browser: BAILONGMA_CHROME_BROWSER_TOOLS,
-  web_search: BAILONGMA_CHROME_BROWSER_TOOLS,
+  model_web_search: ['web_search'],
   web_read: BAILONGMA_CHROME_BROWSER_TOOLS,
   fetch_url: BAILONGMA_CHROME_BROWSER_TOOLS,
   browser_read: BAILONGMA_CHROME_BROWSER_TOOLS,
@@ -1156,9 +1156,8 @@ export const config = {
   baseURL: null,
   needsActivation: true,
   temperature: 0.5,
-  // reasoning 强度开关：true=high，false=provider 支持的最低强度
-  // （DeepSeek 为 low，OpenAI 为 none）。默认低强度——只有用户显式开启才使用 high。
-  // 不是 runtime 按难度替模型决定开关 reasoning（那条路 index.js 已注释外掉）。
+  // 高强度开关：true=high，false=medium（默认）。
+  // 内部摘要等请求仍可显式传 thinking:false 关闭思考。
   thinking: false,
   contextWindow: {
     chatMessageLimit: DEFAULT_CONTEXT_MESSAGE_LIMIT,
@@ -2089,7 +2088,7 @@ export function setVoiceConfig(updates) {
 // TTS config
 const TTS_CONFIG_KEYS = [
   'ttsProvider', 'ttsVoiceId',
-  'minimaxKey',
+  'minimaxKey', 'xiaomiKey',
   'doubaoKey', 'doubaoResourceId', 'doubaoSpeechRate',
   'openaiTtsKey', 'openaiTtsBaseURL',
   'elevenLabsKey',
@@ -2102,6 +2101,7 @@ export function getTTSConfig() {
   return {
     ttsProvider:     stored.ttsProvider  || DEFAULT_TTS_PROVIDER,
     ttsVoiceId:      stored.ttsVoiceId   || DEFAULT_DOUBAO_VOICE_ID,
+    xiaomiKey:      { configured: !!(stored.xiaomiKey || process.env.XIAOMI_TTS_API_KEY) },
     minimaxKey:      { configured: !!(stored.minimaxKey || process.env.MINIMAX_API_KEY || getMinimaxKey()) },
     doubaoKey:       { configured: !!(stored.doubaoKey), value: stored.doubaoKey || '' },
     doubaoResourceId: stored.doubaoResourceId || '',
@@ -2119,6 +2119,7 @@ export function getTTSCredentials() {
   let stored = {}
   try { stored = JSON.parse(fs.readFileSync(paths.configFile, 'utf-8'))?.tts || {} } catch {}
   return {
+    xiaomiKey:      stored.xiaomiKey || process.env.XIAOMI_TTS_API_KEY || '',
     provider:       stored.ttsProvider  || DEFAULT_TTS_PROVIDER,
     voiceId:        stored.ttsVoiceId   || DEFAULT_DOUBAO_VOICE_ID,
     doubaoKey:      stored.doubaoKey    || process.env.DOUBAO_TTS_API_KEY || '',
