@@ -1,8 +1,13 @@
 const $ = selector => document.querySelector(selector)
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))
-const labels = { scan: '产物扫描', preflight: '完整本地检查', 'dry-run': '本地 Dry Run' }
+const labels = { scan: '产物扫描', preflight: '完整本地检查', 'dry-run': '本地 Dry Run', publish: '服务器发布与验收' }
 let token = ''
 let polling = false
+let version = ''
+function updatePublish(busy = polling) {
+  $('#publish').disabled = busy || !version || !$('#confirmed').checked || $('#confirm-version').value !== version
+}
+for (const input of [$('#confirmed'), $('#confirm-version')]) input.addEventListener('input', () => updatePublish())
 async function api(method='GET', body) {
   const response = await fetch('/api/japlos-v2', { method, headers: method === 'POST' ? {'Content-Type':'application/json','X-Release-Session-Token':token} : {}, body: body ? JSON.stringify(body) : undefined })
   const result = await response.json()
@@ -12,11 +17,15 @@ async function api(method='GET', body) {
 function render(job) {
   const busy = job?.state === 'running'
   for (const element of document.querySelectorAll('button,input')) element.disabled = busy
+  updatePublish(busy)
+  $('#publish-log').textContent = (job?.logs || []).join('\n')
   $('#state').textContent = busy ? `${labels[job.action]}进行中…` : job?.state === 'failed' ? '检查出错' : '本地已连接'
   if (job?.error) { $('#checks').textContent = job.error; $('#summary').textContent = '检查失败'; return }
   if (busy) { $('#checks').textContent = `${labels[job.action]}进行中，请稍候…`; $('#summary').textContent = '检查中'; return }
   const result = job?.result
   if (!result) return
+  version = result.version
+  updatePublish(busy)
   $('#version').textContent = `VERSION · ${result.version}`
   $('#root').textContent = result.root
   $('#summary').className = `badge ${result.passed?'ok':'bad'}`
@@ -27,7 +36,7 @@ function render(job) {
 }
 async function follow(job) {
   render(job)
-  if (job?.state !== 'running') { polling = false; return }
+  if (job?.state !== 'running') { polling = false; updatePublish(); return }
   polling = true
   setTimeout(async () => {
     try { await follow(await api()) } catch(error) { fail(error) }
@@ -36,6 +45,7 @@ async function follow(job) {
 function fail(error) {
   polling = false
   for (const element of document.querySelectorAll('button,input')) element.disabled = false
+  updatePublish()
   $('#state').textContent = '操作失败'
   $('#checks').textContent = error.message
 }
@@ -44,9 +54,10 @@ async function start(action) {
   try {
     const archs = [...document.querySelectorAll('#architectures input:checked')].map(input => input.value)
     if (!archs.length) throw new Error('请至少选择一个架构')
+    const confirmation = { version: $('#confirm-version').value, confirmed: $('#confirmed').checked }
     polling = true
     render({state:'running',action})
-    await follow(await api('POST', {action, archs}))
+    await follow(await api('POST', {action, archs, ...confirmation}))
   } catch(error) { fail(error) }
 }
 for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', () => start(button.dataset.action))

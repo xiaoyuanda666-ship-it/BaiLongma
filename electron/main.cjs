@@ -30,6 +30,7 @@ const { createSafeStorageNotice } = require('./safe-storage-notice.cjs')
 const { configureBundledNodeRuntime } = require('./playwright-runtime.cjs')
 const { createTrustedWindowSenderGuard } = require('./trusted-window-senders.cjs')
 const { hasPackagedUpdaterConfig } = require('./updater-config.cjs')
+const { installRendererRecovery } = require('./renderer-recovery.cjs')
 
 // The ESM backend is imported into this Electron main process. Expose the
 // main-process-only permission API without requiring ESM modules to import the
@@ -397,6 +398,9 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err?.stack || err?.message || String(err))
 })
 console.log(`[main] Bailongma ${app.getVersion()} starting, logs → ${LOG_FILE}`)
+app.on('child-process-gone', (_event, details) => {
+  console.error('[main] child-process-gone', details)
+})
 
 // ── GPU 适配器偏好（Windows 多显卡：核显 + 独显笔记本） ──
 // Windows 的逐应用显卡偏好存在 HKCU\...\DirectX\UserGpuPreferences
@@ -663,6 +667,26 @@ async function createWindow({
   // 授予麦克风权限（语音输入需要）
   if (assignAsMain) mainWindow = window
   if (typeof beforeLoad === 'function') beforeLoad(window)
+  installRendererRecovery(window, {
+    isQuitting: () => Boolean(app.isQuiting),
+    reload: () => backendPort ? loadMainApp(window) : loadStartupPage(window),
+    onExhausted: () => {
+      const zh = getNativeUiLanguage() === 'zh-CN'
+      dialog.showMessageBox(window, {
+        type: 'error',
+        title: 'Bailongma',
+        message: zh ? '界面连续恢复失败' : 'The interface could not recover',
+        detail: zh ? '后台仍在运行。可以重试加载界面，诊断信息已写入日志。' : 'The backend is still running. You can retry loading the interface. Diagnostics were saved to the log.',
+        buttons: zh ? ['重新加载', '稍后'] : ['Reload', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+      }).then(({ response }) => {
+        if (response === 0 && !app.isQuiting && !window.isDestroyed()) {
+          return backendPort ? loadMainApp(window) : loadStartupPage(window)
+        }
+      }).catch(error => console.error('[renderer] manual recovery failed', error))
+    },
+  })
 
   window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'media') return callback(true)

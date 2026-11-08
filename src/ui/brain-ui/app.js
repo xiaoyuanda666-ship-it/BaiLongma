@@ -1085,6 +1085,9 @@ function addNewNodes(memories) {
       vx: 0, vy: 0,
     };
     nodeData.push(node);
+    // Match the initial /memories?limit=120 window, including when periodic
+    // refreshes fail. Older memories remain available in the backend.
+    if (nodeData.length > 120) nodeData.splice(0, nodeData.length - 120);
     nodeMap.set(node._nid, node);
     newNids.push(node._nid);
   });
