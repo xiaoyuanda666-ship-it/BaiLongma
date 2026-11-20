@@ -102,6 +102,11 @@ Music mode rules:
         type: 'object',
         properties: {
           prompt: { type: 'string', description: 'Image description. More detail is better.' },
+          model: {
+            type: 'string',
+            enum: ['image-01', 'MiniMax-H3-Image', 'MiniMax-H3-Image-Highspeed'],
+            description: 'Optional image model. Defaults to image-01.',
+          },
           aspect_ratio: { type: 'string', description: 'Aspect ratio, optional values: 1:1 default, 16:9, 4:3, 3:4, 9:16.' },
           n: { type: 'number', description: 'Number of images to generate, 1-4, default 1.' },
         },
