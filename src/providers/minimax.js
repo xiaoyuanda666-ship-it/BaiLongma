@@ -1,3 +1,4 @@
+import { request } from 'undici'
 import { BaseProvider } from './base.js'
 import { recordDailyUsage, getDailyUsage } from '../quota.js'
 
@@ -96,8 +97,12 @@ export class MinimaxProvider extends BaseProvider {
   }
 
   // ── Image Generation ──
-  async #image({ prompt, aspect_ratio = '1:1', n = 1 }) {
+  async #image({ prompt, aspect_ratio = '1:1', n = 1, model = 'image-01' }) {
     if (!prompt) throw new Error('image: 缺少 prompt 参数')
+    if (model === 'MiniMax-H3-Image' || model === 'MiniMax-H3-Image-Highspeed') {
+      return this.#h3Image({ model, prompt, aspect_ratio, n })
+    }
+    if (model !== 'image-01') throw new Error('Unsupported MiniMax image model')
     const data = await this.request('/image_generation', {
       model: 'image-01',
       prompt,
@@ -108,5 +113,38 @@ export class MinimaxProvider extends BaseProvider {
     if (!data?.data?.image_urls?.length) throw new Error('image: 响应中无图片 URL')
     recordDailyUsage('image', n)
     return { urls: data.data.image_urls }
+  }
+
+  async #h3Image(params) {
+    const region = process.env.MINIMAX_IMAGE_REGION || 'cn'
+    if (region !== 'cn' && region !== 'global') {
+      throw new Error('MINIMAX_IMAGE_REGION must be cn or global')
+    }
+    const host = region === 'global' ? 'api.minimax.io' : 'api.minimax.cn'
+    const timeout = 600_000
+    const { statusCode, body } = await request(`https://${host}/v1/images/generations`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...params, response_format: 'url' }),
+      headersTimeout: timeout,
+      bodyTimeout: timeout,
+      signal: AbortSignal.timeout(timeout),
+      idempotent: false,
+      maxRedirections: 0,
+    })
+    const response = await body.json().catch(() => null)
+    if (statusCode !== 200) {
+      throw new Error(`Image generation failed (HTTP ${statusCode}): ${response?.error?.message || 'No error detail'}`)
+    }
+
+    const urls = []
+    const errors = []
+    for (const image of Array.isArray(response?.data) ? response.data : []) {
+      if (image?.error || !image?.url) errors.push(image?.error?.message || 'Missing image URL')
+      else urls.push(image.url)
+    }
+    if (!urls.length) throw new Error(errors.join('; ') || 'Image generation returned no URLs')
+    recordDailyUsage('image', urls.length)
+    return { urls, errors }
   }
 }

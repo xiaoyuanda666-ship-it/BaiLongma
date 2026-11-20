@@ -45,16 +45,19 @@ export async function execGenerateMusic({ prompt, lyrics, instrumental }) {
 }
 
 // generate_image：生成图片
-export async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1 }) {
+export async function execGenerateImage({ prompt, aspect_ratio = '1:1', n = 1, model }) {
   if (!prompt) return '错误：未提供图片描述'
   if (isDailyLimitReached('image')) return '错误：今日图片生成配额已用完（50 次/天）'
   const validRatios = new Set(['1:1', '16:9', '4:3', '3:4', '9:16'])
   const ratio = validRatios.has(aspect_ratio) ? aspect_ratio : '1:1'
   const count = Math.min(Math.max(Math.floor(n) || 1, 1), 4)
 
-  const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count })
+  const result = await callCapability('image', { prompt, aspect_ratio: ratio, n: count, model })
 
   emitEvent('image_created', { urls: result.urls, prompt: prompt.slice(0, 60) })
   console.log(`[image] 已生成 ${result.urls.length} 张图片`)
+  if (result.errors?.length) {
+    return `Generated images:\n${result.urls.join('\n')}\nFailed images: ${result.errors.join('; ')}`
+  }
   return `图片已生成（${result.urls.length} 张）：\n${result.urls.join('\n')}`
 }

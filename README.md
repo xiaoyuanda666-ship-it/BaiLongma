@@ -100,6 +100,8 @@ LLM_PROVIDER=minimax
 MINIMAX_API_KEY=your_key
 ```
 
+The `generate_image` tool accepts `MiniMax-H3-Image` and `MiniMax-H3-Image-Highspeed` as optional `model` values. For H3, set `MINIMAX_IMAGE_REGION=global` for a global API key or `cn` (the default) for a mainland China API key.
+
 常用配置可以在 Brain UI 的设置页中完成：
 
 - 模型 Provider、API 格式、模型、温度和 API Key。修改 API 格式会先验证连接；当前工具调用链保持原连接，新设置从下一次对话回合生效。

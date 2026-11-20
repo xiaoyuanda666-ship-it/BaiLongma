@@ -69,7 +69,7 @@
     "test:llm-settings-flow": "node ./src/test-llm-settings-flow.js",
     "test:llm-responses": "node ./src/test-llm-responses.js && node ./src/test-llm-responses-loop.js",
     "test:llm-protocols": "node ./scripts/test-llm-protocols.mjs",
-    "test:media-modules": "node ./src/test-media-modules.js",
+    "test:media-modules": "node ./src/test-media-modules.js && node ./src/test-minimax-images.js",
     "test:chat-resources": "electron ./src/test-chat-resources.js",
     "test:db-schema-module": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:ELECTRON_RUN_AS_NODE='1'; .\\node_modules\\.bin\\electron.cmd .\\src\\test-db-schema-module.js\"",
     "test:activation-intro": "node ./src/test-activation-intro-gate.js",
